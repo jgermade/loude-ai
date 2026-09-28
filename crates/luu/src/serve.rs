@@ -204,11 +204,11 @@ struct App {
     postures: std::collections::BTreeMap<String, crate::provider::Posture>,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
-    /// The icon theme `[ui] icon-theme` named, read once when the server
-    /// started, or an empty one when nothing named it or it did not load.
-    /// Read once for the reason the postures are: what a page is shown should
-    /// not change under it mid-session.
-    icons: Arc<crate::icons::Theme>,
+    /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
+    /// names it or it did not load. Loaded at startup and swapped whole when
+    /// Settings writes a new one — see [`put_icon_theme`]. The page follows
+    /// through the manifest's `revision`, which is in every icon's URL.
+    icons: std::sync::RwLock<Arc<crate::icons::Theme>>,
     /// Pinned sampling, forwarded to every call the same way `budget` is.
     /// `None` leaves it to the server's own default.
     temperature: Option<f32>,
@@ -509,6 +509,25 @@ pub struct StdioOptions {
 }
 
 impl App {
+    /// The icon theme as it stands. A clone of the `Arc`, so no lock is held
+    /// past this line.
+    fn icons(&self) -> Arc<crate::icons::Theme> {
+        self.icons
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Puts a new theme in place, one revision on from the one it replaces.
+    fn swap_icons(&self, mut theme: crate::icons::Theme) {
+        let mut icons = self
+            .icons
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        theme.manifest.revision = icons.manifest.revision + 1;
+        *icons = Arc::new(theme);
+    }
+
     async fn create(options: StdioOptions) -> Result<Arc<Self>> {
         let StdioOptions {
             backend,
@@ -715,7 +734,7 @@ impl App {
             agency_for,
             postures,
             postures_path,
-            icons,
+            icons: std::sync::RwLock::new(icons),
             temperature,
             seed,
             constraint,
@@ -1057,6 +1076,17 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/providers/{name}/models", get(get_provider_models))
         .route("/api/resend", get(get_resend).put(put_resend))
         .route("/api/authority", get(get_authority).put(put_authority))
+        // The icon theme, chosen from Settings: what is set, what this machine
+        // has, and a folder picked in the browser imported into the state
+        // directory. The import is the one body on this API that is not
+        // small, so it alone gets a larger limit.
+        .route("/api/icon-theme", get(get_icon_theme).put(put_icon_theme))
+        .route(
+            "/api/icon-theme/import",
+            post(import_icon_theme).layer(axum::extract::DefaultBodyLimit::max(
+                crate::icons::IMPORT_MAX_BYTES + 1024 * 1024,
+            )),
+        )
         .route("/api/postures", get(get_postures))
         .route("/api/postures.json", get(get_postures))
         .route("/api/sessions", get(list_sessions).post(create_session))
@@ -3017,7 +3047,224 @@ async fn get_workspace_git_diff(
 }
 
 async fn get_icons_manifest(State(state): State<AppRouterState>) -> Response {
-    Json(state.app.icons.manifest.clone()).into_response()
+    Json(state.app.icons().manifest.clone()).into_response()
+}
+
+/// `[ui] icon-theme` as Settings shows it: what the file says, whether that
+/// loaded, where imports go, and every theme this machine has. See
+/// `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`.
+#[derive(serde::Serialize)]
+struct IconThemeView {
+    /// The `config.toml` a save writes.
+    path: Option<String>,
+    editable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refused: Option<String>,
+    /// What `[ui] icon-theme` says, as written.
+    named: Option<String>,
+    /// The theme on screen, by name, if one is.
+    loaded: Option<String>,
+    /// Why what the file names is not what is on screen, when it is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    /// Where an import is written.
+    folder: Option<String>,
+    found: Vec<crate::icons::Found>,
+}
+
+/// `<state dir>/icon-themes`, beside `config.toml`.
+fn icon_theme_folder() -> Option<std::path::PathBuf> {
+    Some(
+        crate::provider::Config::path_for_writing()?
+            .parent()?
+            .join("icon-themes"),
+    )
+}
+
+fn icon_theme_view(state: &AppRouterState) -> IconThemeView {
+    let (named, path) = match crate::provider::Config::load() {
+        Ok((config, path)) => (config.ui().and_then(|ui| ui.icon_theme.clone()), path),
+        Err(_) => (None, None),
+    };
+    let icons = state.app.icons();
+    // Only asked when the file names something the screen is not showing:
+    // the answer is the loader's own message, which is the useful one.
+    let error = match (&named, icons.manifest.loaded) {
+        (Some(named), false) => crate::icons::load(&crate::provider::expand_home(named)).err(),
+        _ => None,
+    };
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let folder = icon_theme_folder();
+    IconThemeView {
+        path: path
+            .or_else(crate::provider::Config::path_for_writing)
+            .map(|path| path.display().to_string()),
+        editable: state.providers_editable,
+        refused: (!state.providers_editable).then(|| {
+            "this server is bound off loopback, and an icon theme is a path on this machine \
+             and a folder written into it. Edit config.toml on the machine itself."
+                .to_string()
+        }),
+        named: named.map(|named| named.display().to_string()),
+        loaded: icons.manifest.loaded.then(|| {
+            icons
+                .manifest
+                .name
+                .clone()
+                .unwrap_or_else(|| "icon theme".into())
+        }),
+        error,
+        found: crate::icons::discover(folder.as_deref(), home.as_deref()),
+        folder: folder.map(|folder| folder.display().to_string()),
+    }
+}
+
+async fn get_icon_theme(State(state): State<AppRouterState>) -> Response {
+    Json(icon_theme_view(&state)).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct IconThemeAsk {
+    icon_theme: Option<String>,
+}
+
+/// Writes `[ui] icon-theme` and swaps the theme on screen, **only if it
+/// loads**.
+///
+/// A path the page accepted and the server then ignored would be a setting
+/// that looks saved, so a theme that does not load is refused with the
+/// loader's message and nothing is written. `null` clears it and the tree
+/// goes back to its own two shapes.
+async fn put_icon_theme(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<IconThemeAsk>,
+) -> Response {
+    let named = asked
+        .icon_theme
+        .map(|named| named.trim().to_string())
+        .filter(|named| !named.is_empty());
+    match apply_icon_theme(&state, named.map(std::path::PathBuf::from)) {
+        Ok(()) => Json(icon_theme_view(&state)).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// The write both routes end in: load, write `[ui]`, swap.
+fn apply_icon_theme(
+    state: &AppRouterState,
+    named: Option<std::path::PathBuf>,
+) -> Result<(), Box<Response>> {
+    if !state.providers_editable {
+        return Err(Box::new(
+            (
+                StatusCode::FORBIDDEN,
+                "the icon theme is read-only on a server bound off loopback",
+            )
+                .into_response(),
+        ));
+    }
+    let Some(path) = crate::provider::Config::path_for_writing() else {
+        return Err(Box::new(
+            (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml. \
+             Run luu once on a terminal, or set LUU_HOME.",
+        )
+            .into_response(),
+        ));
+    };
+    let theme = match &named {
+        None => crate::icons::Theme::default(),
+        Some(named) => crate::icons::load(&crate::provider::expand_home(named))
+            .map_err(|error| Box::new((StatusCode::UNPROCESSABLE_ENTITY, error).into_response()))?,
+    };
+    // Built from the file on disk, for the reason every writer here is: the
+    // page writes one table and must not delete the rest.
+    let current = crate::provider::Config::load()
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    // The rest of `[ui]` as it was: this route owns one key of it.
+    let mut ui = current.ui().cloned().unwrap_or_default();
+    ui.icon_theme = named;
+    current.with_ui(ui).write(&path).map_err(|error| {
+        Box::new((StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response())
+    })?;
+    state.app.swap_icons(theme);
+    Ok(())
+}
+
+/// A folder picked in the browser, written under `<state dir>/icon-themes/`
+/// and then chosen.
+///
+/// Multipart, one `file` part per file, each part's filename being the path
+/// the browser's directory picker gave it (`webkitRelativePath`). Every path is
+/// re-checked by [`crate::icons::import`], which also refuses a folder that
+/// does not load, before it replaces anything.
+async fn import_icon_theme(
+    State(state): State<AppRouterState>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    if !state.providers_editable {
+        return (
+            StatusCode::FORBIDDEN,
+            "the icon theme is read-only on a server bound off loopback",
+        )
+            .into_response();
+    }
+    let Some(folder) = icon_theme_folder() else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to import into",
+        )
+            .into_response();
+    };
+    let mut files = Vec::new();
+    let mut total = 0usize;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        };
+        let Some(name) = field.file_name().map(str::to_string) else {
+            continue;
+        };
+        let bytes = match field.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        };
+        total += bytes.len();
+        if total > crate::icons::IMPORT_MAX_BYTES || files.len() >= crate::icons::IMPORT_MAX_FILES {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "the folder is too big to be an icon theme",
+            )
+                .into_response();
+        }
+        files.push((name, bytes.to_vec()));
+    }
+    let imported =
+        match tokio::task::spawn_blocking(move || crate::icons::import(&folder, files)).await {
+            Ok(Ok(imported)) => imported,
+            Ok(Err(error)) => return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response(),
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        };
+    // Written as `~/…` when it can be, so the file reads the same on another
+    // machine with the same layout.
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let named = match home
+        .as_deref()
+        .and_then(|home| imported.strip_prefix(home).ok())
+    {
+        Some(rest) => std::path::Path::new("~").join(rest),
+        None => imported,
+    };
+    match apply_icon_theme(&state, Some(named)) {
+        Ok(()) => Json(icon_theme_view(&state)).into_response(),
+        Err(response) => *response,
+    }
 }
 
 /// One icon's bytes.
@@ -3026,7 +3273,8 @@ async fn get_icons_manifest(State(state): State<AppRouterState>) -> Response {
 /// in it is a 404 and never a filesystem access. That is the whole of the path
 /// safety here, and it is why there is no path to validate.
 async fn get_icon(State(state): State<AppRouterState>, Path(id): Path<String>) -> Response {
-    let Some(path) = state.app.icons.path(&id) else {
+    let icons = state.app.icons();
+    let Some(path) = icons.path(&id) else {
         return (StatusCode::NOT_FOUND, "no such icon").into_response();
     };
     let content_type = crate::icons::content_type(path);
@@ -3034,8 +3282,9 @@ async fn get_icon(State(state): State<AppRouterState>, Path(id): Path<String>) -
         Ok(bytes) => (
             [
                 (header::CONTENT_TYPE, content_type),
-                // The theme does not change while the server runs — it is read
-                // once at startup — so the browser may keep these.
+                // The page asks with the theme's `revision` in the URL, so a
+                // swapped theme is a different URL and the browser may keep
+                // these.
                 (header::CACHE_CONTROL, "public, max-age=3600"),
             ],
             bytes,
@@ -4712,7 +4961,7 @@ mod tests {
             agency_for: None,
             postures: Default::default(),
             postures_path: None,
-            icons: Arc::new(crate::icons::Theme::default()),
+            icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             temperature: None,
             seed: None,
             constraint: None,

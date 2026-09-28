@@ -545,6 +545,16 @@ impl Config {
         }
     }
 
+    /// The file as the icon-theme editor hands it back: `[ui]`, and everything
+    /// else this config already had, for [`Config::with_resend`]'s reason. An
+    /// empty table is written as no table.
+    pub fn with_ui(&self, ui: Ui) -> Self {
+        Self {
+            ui: (ui != Ui::default()).then_some(ui),
+            ..self.clone()
+        }
+    }
+
     /// The file as the resend editor hands it back: one table, and everything
     /// else this config already had.
     ///

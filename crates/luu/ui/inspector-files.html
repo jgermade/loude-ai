@@ -80,7 +80,7 @@
       <img
         :if="row.icon"
         class="icon"
-        :src="`./api/icons/${row.icon}`"
+        :src="`./api/icons/${row.icon}?r=${workspace.icons.revision || 0}`"
         :attrs="{ alt: '', loading: 'lazy' }">
       <svg :if="!row.icon" class="ic glyph"><use :attrs="{ href: row.dir ? '#i-folder' : '#i-file' }"/></svg>
       <span class="name">{{ row.name }}</span>

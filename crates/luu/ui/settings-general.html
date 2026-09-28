@@ -6,8 +6,48 @@
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   const { prefs, setTheme, setEditor, setCode, setLayout, monacoAvailable } =
     await import("./prefs.js")
-  const { workspace, openPicker } = await import("./workspace.js")
+  const { workspace, openPicker, loadIconTheme, saveIconTheme, importIconTheme } =
+    await import("./workspace.js")
   const Segmented = await import("./components/segmented.html")
+  const SaveButton = await import("./components/save-button.html")
+
+  // The icon theme: the server's view of it, what is typed into the path, and
+  // the last refusal, in the loader's own words.
+  let iconView = null
+  let iconError = ""
+  let iconBusy = false
+  let typedPath = ""
+  try {
+    iconView = await loadIconTheme()
+    typedPath = iconView.named || ""
+  } catch (error) {
+    iconError = `${error.message || error}`
+  }
+
+  const took = result => {
+    if (result.ok) {
+      iconView = result.view
+      typedPath = iconView.named || ""
+      iconError = ""
+    } else {
+      iconError = result.error
+    }
+    return result.ok
+  }
+  const useTheme = async path => {
+    iconBusy = true
+    took(await saveIconTheme(path))
+    iconBusy = false
+  }
+  const usePath = async () => took(await saveIconTheme(typedPath.trim() || null))
+  const importPicked = async event => {
+    const files = event.target.files
+    if (!files?.length) return
+    iconBusy = true
+    took(await importIconTheme(files))
+    iconBusy = false
+    event.target.value = ""
+  }
 
   const THEMES = [
     { value: "auto", label: "Auto" },
@@ -28,6 +68,7 @@
   // the page is open.
   let monacoHere = null
   monacoAvailable().then(found => { monacoHere = found })
+  $: pathChanges = iconView && typedPath.trim() !== (iconView.named || "") ? 1 : 0
   $: editors = [
     { value: "own", label: "This page" },
     { value: "monaco", label: "Monaco", disabled: monacoHere === false },
@@ -92,24 +133,83 @@
 </dl>
 
 <h3>Files</h3>
+<!-- The icon theme, chosen here rather than only named in `config.toml`. It
+     is written to that file and applied live, which is the one thing in this
+     section that is not in `localStorage`: the server is what serves the icons,
+     so it is the server that has to know. See
+     `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`. -->
 <dl class="settings">
   <dt>Icons</dt>
-  <dd :if="workspace.icons.loaded">
-    <span class="path">{{ workspace.icons.name || "a theme this machine names" }}</span>
+  <dd>
+    <span :if="iconView?.loaded" class="path">{{ iconView.loaded }}</span>
+    <span :if="!iconView?.loaded">the tree's own two shapes</span>
+    <span :if="iconView?.named" class="dim path">· {{ iconView.named }}</span>
   </dd>
-  <dd :if="!workspace.icons.loaded">the tree's own two shapes</dd>
-  <!-- The whole of item 15 of `ROADMAP/2026-09-17`, and it is here because the
-       first person to meet an unconfigured tree read a working fallback as a
-       broken panel. Nothing else on the page says the key exists: `AGENTS.md`,
-       the design doc and `crate::icons` all do, and none of them is where
-       somebody looking at grey shapes is looking. See
-       `RECORD/2026-09-17.the-gate-panel-narrows.completed.md`. -->
+  <!-- Item 15 of `ROADMAP/2026-09-17`, kept through the redesign: the first
+       person to meet an unconfigured tree read a working fallback as a broken
+       panel, so this names the key that replaces it, and now also where to
+       set it without touching the file. -->
   <dd class="note">
-    <code>[ui] icon-theme</code> in <code>config.toml</code> points at any VSCode
-    icon theme on this machine — an installed extension's directory, or its theme
-    JSON. Nothing is vendored, so with none named the tree draws its own two
-    shapes, which is a fallback rather than a failure. The server reads the theme
-    once, at startup.
+    It is <code>[ui] icon-theme</code> in <code>config.toml</code>: any VS Code
+    icon theme on this machine. Nothing is vendored, so with none named the
+    tree draws its own two shapes, which is a fallback rather than a failure.
+    Choose one below, type a path, or import a folder; it applies at once.
+  </dd>
+  <dd :if="iconView?.error" class="caveat">It did not load: {{ iconView.error }}</dd>
+  <dd :if="iconView?.refused" class="refused">{{ iconView.refused }}</dd>
+  <dd :if="iconError" class="error">{{ iconError }}</dd>
+
+  <dt>On this machine</dt>
+  <dd>
+    <ul class="themes">
+      <li :each="theme in iconView?.found || []" :key="theme.path">
+        <span class="name">{{ theme.name }}</span>
+        <span class="tag">{{ theme.source }}</span>
+        <span class="dim path grow">{{ theme.path }}</span>
+        <span :if="theme.path === iconView?.named" class="dim">in use</span>
+        <button :if="theme.path !== iconView?.named" type="button" class="link"
+                :disabled="!iconView?.editable || iconBusy" @click="useTheme(theme.path)">use</button>
+      </li>
+      <li>
+        <span class="name">None</span>
+        <span class="dim grow">the tree draws its own file and folder</span>
+        <span :if="!iconView?.named" class="dim">in use</span>
+        <button :if="iconView?.named" type="button" class="link"
+                :disabled="!iconView?.editable || iconBusy" @click="useTheme(null)">use</button>
+      </li>
+    </ul>
+  </dd>
+  <dd :if="iconView && !iconView.found.length" class="note">
+    No icon theme found: none imported, and no VS Code, VSCodium, Cursor or
+    Windsurf extension that declares one.
+  </dd>
+
+  <dt>Path</dt>
+  <dd class="row">
+    <input class="grow" :value="typedPath" :disabled="!iconView?.editable"
+           placeholder="~/.vscode/extensions/…, or a theme JSON"
+           @input="typedPath = $event.target.value">
+    <SaveButton label="Use" :action="usePath" :changes="pathChanges"
+                :disabled="!iconView?.editable" />
+  </dd>
+
+  <dt>Import</dt>
+  <dd class="row">
+    <!-- A label around the input, so the picker opens from a click with no
+         script; the input itself stays hidden. -->
+    <label class="pick" :class.off="!iconView?.editable || iconBusy">
+      {{ iconBusy ? "Importing…" : "Pick a folder…" }}
+      <input type="file" webkitdirectory hidden
+             :disabled="!iconView?.editable || iconBusy" @change="importPicked($event)">
+    </label>
+  </dd>
+  <dd class="note">
+    An installed extension's folder, or a theme JSON with its icons beside it.
+    It is copied into <span class="path">{{ iconView?.folder || "the state directory" }}</span>
+    and chosen, so it no longer depends on where it came from, nor on the
+    editor updating it. A path to an extension keeps working after an update
+    too: a missing <code>publisher.name-1.2.3</code> is read as the newest
+    version beside it.
   </dd>
 </dl>
 
@@ -137,4 +237,29 @@
     overflow-wrap: anywhere;
   }
   .note b, .caveat b { color: var(--fg); font-weight: 600; }
+  .themes { list-style: none; margin: 0; padding: 0; }
+  .themes li {
+    display: flex;
+    align-items: baseline;
+    gap: .5rem;
+    padding: .2rem 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .themes li:last-child { border-bottom: 0; }
+  .themes .name { font-weight: 500; }
+  .grow { flex: 1; min-width: 0; }
+  .row { display: flex; align-items: center; gap: .5rem; }
+  .pick {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 500;
+    padding: .25rem .7rem;
+    cursor: pointer;
+  }
+  .pick:hover { border-color: var(--accent); }
+  .pick.off { opacity: .5; cursor: default; pointer-events: none; }
 </style>

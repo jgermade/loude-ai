@@ -200,6 +200,44 @@ export async function loadIcons() {
   }
 }
 
+/// `[ui] icon-theme` as Settings shows it: what is set, whether it loaded, and
+/// every theme this machine has. See
+/// `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`.
+export async function loadIconTheme() {
+  return ask("./api/icon-theme")
+}
+
+/// Sets the theme to a path (or clears it with `null`), and redraws the tree's
+/// icons once the server has swapped it. Resolves to `{ ok, view }` or
+/// `{ ok: false, error }`: a path that does not load is refused with the
+/// loader's own message, which is the one worth showing.
+export async function saveIconTheme(path) {
+  return answered(await fetch("./api/icon-theme", {
+    method: "PUT",
+    headers: { ...apiHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ icon_theme: path }),
+  }))
+}
+
+/// Imports the folder a directory picker chose, then selects it. `files` is
+/// the input's `FileList`; each one goes up under the path the picker gave it.
+export async function importIconTheme(files) {
+  const form = new FormData()
+  for (const file of files) form.append("file", file, file.webkitRelativePath || file.name)
+  return answered(await fetch("./api/icon-theme/import", {
+    method: "POST",
+    headers: apiHeaders(),
+    body: form,
+  }))
+}
+
+async function answered(response) {
+  if (!response.ok) return { ok: false, error: (await response.text()) || `HTTP ${response.status}` }
+  const view = await response.json()
+  await loadIcons()
+  return { ok: true, view }
+}
+
 async function ask(url) {
   const answer = await fetch(url, { headers: apiHeaders() })
   if (!answer.ok) throw new Error((await answer.text()) || `HTTP ${answer.status}`)

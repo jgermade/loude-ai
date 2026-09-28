@@ -1,7 +1,7 @@
 // @ts-check
 import { expect, test } from "@playwright/test"
 import { spawn } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -268,5 +268,61 @@ test("an authority note is written from the page and reaches the live session", 
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
+  expect(errors).toEqual([])
+})
+
+/**
+ * Settings → General → Files: an icon theme imported with the browser's folder
+ * picker, written under `$LUU_HOME/icon-themes/`, chosen, and drawn by the tree
+ * without a restart. See
+ * `RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`.
+ */
+test("an icon theme is imported from a picked folder and drawn at once", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  // A theme as small as one can be: an extension folder with one icon.
+  const picked = join(mkdtempSync(join(tmpdir(), "luu-theme-")), "tiny-icons")
+  mkdirSync(join(picked, "icons"), { recursive: true })
+  writeFileSync(join(picked, "icons", "rust.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+  writeFileSync(
+    join(picked, "theme.json"),
+    JSON.stringify({
+      iconDefinitions: { _rust: { iconPath: "./icons/rust.svg" } },
+      fileExtensions: { rs: "_rust", toml: "_rust", md: "_rust" },
+      file: "_rust",
+    }),
+  )
+  writeFileSync(
+    join(picked, "package.json"),
+    JSON.stringify({
+      name: "tiny-icons",
+      contributes: { iconThemes: [{ id: "tiny", label: "Tiny Icons", path: "./theme.json" }] },
+    }),
+  )
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector button:has-text("Files")')
+  await expect(page.locator(".inspector img")).toHaveCount(0)
+
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.locator(".modal input[type=file]").setInputFiles(picked)
+
+  const row = page.locator(".modal .themes li", { hasText: "Tiny Icons" })
+  await expect(row).toContainText("in use")
+  const onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain("icon-themes/tiny-icons")
+  expect(onDisk).toContain("[provider.here]")
+
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  // Drawn by the tree at once, under the theme's new revision.
+  await expect(page.locator(".inspector img").first()).toHaveAttribute("src", /\?r=1$/)
+
+  rmSync(dirname(picked), { recursive: true, force: true })
   expect(errors).toEqual([])
 })

@@ -1087,8 +1087,14 @@ rather than per request, which is what took a small Rust file from 15 ms to 0.6.
 this machine already has, named by `[ui] icon-theme` in `config.toml` — an extension directory
 or a theme JSON — and nothing is vendored: the page draws its own file and folder until
 somebody names one, the same way the sandbox waits to be told where `~/.cargo` is. The theme is
-read once into an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
-reaches the filesystem. Syntax highlighting is `tree-sitter-highlight` on the server, thirteen
+read into an id → path table and `/api/icons/{id}` serves only ids in it, so no client-supplied path ever
+reaches the filesystem. **Settings → General → Files chooses it** from the themes this machine has
+(imports, and VS Code, VSCodium, Cursor and Windsurf extensions), from a typed path, or from a folder
+picked in the browser and imported into `<state dir>/icon-themes/`. A choice is written to
+`config.toml` only if it loads, and is swapped in live. The manifest's `revision`, in every icon
+URL, keeps the browser's cache honest. A versioned extension path that an update removed resolves
+to the newest version beside it. See
+[`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, thirteen
 grammars, sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
 UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does
 not. Injections are on, so a fenced block in Markdown is highlighted as its language and HTML's
