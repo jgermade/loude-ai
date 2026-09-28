@@ -52,13 +52,31 @@ const NAMES: &[&str] = &[
     "tag",
     "type",
     "variable",
+    // Markdown's. Its grammar names prose rather than code, so none of the
+    // fourteen above reach it: a README came back as punctuation and nothing
+    // else.
+    "text.title",
+    "text.literal",
+    "text.uri",
+    "text.reference",
+    "text.emphasis",
+    "text.strong",
 ];
 
 /// What the page gets as a CSS class, per index into [`NAMES`]. One to one
 /// today; a separate table because the two are separate decisions — a capture
 /// name is tree-sitter's, a class name is this page's.
 fn class_of(index: usize) -> Option<&'static str> {
-    NAMES.get(index).copied()
+    // A class is one word, so a dotted capture gets a name of its own. A label
+    // and a destination are both a link to somebody reading the file.
+    Some(match NAMES.get(index).copied()? {
+        "text.title" => "heading",
+        "text.literal" => "literal",
+        "text.uri" | "text.reference" => "link",
+        "text.emphasis" => "emphasis",
+        "text.strong" => "strong",
+        name => name,
+    })
 }
 
 /// Which grammar a path gets, by extension and then by filename.
@@ -146,18 +164,31 @@ static GRAMMARS: LazyLock<HashMap<&'static str, HighlightConfiguration>> = LazyL
         tree_sitter_javascript::INJECTIONS_QUERY,
         tree_sitter_javascript::LOCALS_QUERY,
     );
+    // TypeScript's query holds only what TypeScript adds, and inherits the
+    // rest from JavaScript's, the way the grammar does. Alone it found two
+    // keywords in a whole `.ts` file. Its own patterns go first so that they
+    // win where the two disagree, and TSX also takes JavaScript's JSX half.
+    let typescript = format!(
+        "{}\n{}",
+        tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        tree_sitter_javascript::HIGHLIGHT_QUERY,
+    );
+    let tsx = format!(
+        "{typescript}\n{}",
+        tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
+    );
     add(
         "typescript",
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        "",
+        &typescript,
+        tree_sitter_javascript::INJECTIONS_QUERY,
         tree_sitter_typescript::LOCALS_QUERY,
     );
     add(
         "tsx",
         tree_sitter_typescript::LANGUAGE_TSX.into(),
-        tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        "",
+        &tsx,
+        tree_sitter_javascript::INJECTIONS_QUERY,
         tree_sitter_typescript::LOCALS_QUERY,
     );
     add(
@@ -186,6 +217,16 @@ static GRAMMARS: LazyLock<HashMap<&'static str, HighlightConfiguration>> = LazyL
         tree_sitter_md::LANGUAGE.into(),
         tree_sitter_md::HIGHLIGHT_QUERY_BLOCK,
         tree_sitter_md::INJECTION_QUERY_BLOCK,
+        "",
+    );
+    // Never chosen by a path, and never injected: `markdown` runs it over
+    // every paragraph, heading and list item itself, because that is where
+    // emphasis, code spans and links are.
+    add(
+        "markdown_inline",
+        tree_sitter_md::INLINE_LANGUAGE.into(),
+        tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
+        tree_sitter_md::INJECTION_QUERY_INLINE,
         "",
     );
     add(
@@ -254,6 +295,28 @@ fn language_for(path: &str) -> Option<(&'static str, &'static HighlightConfigura
     Some((name, GRAMMARS.get(name)?))
 }
 
+/// The grammar an injection asks for by name: a fenced block's info string
+/// (```` ```rust ````, ```` ```sh ````), or a name a query sets itself
+/// (`markdown_inline`, HTML's `javascript` and `css`).
+///
+/// A grammar's own name first, then the name read as an extension, so a fence
+/// can say `rust` or `rs` and mean the same thing. An unknown one is left as
+/// text, which is what a fence in a language nobody installed should be.
+fn injected(name: &str) -> Option<&'static HighlightConfiguration> {
+    let name = name.trim().to_ascii_lowercase();
+    let name = match name.as_str() {
+        "shell" | "console" => "bash",
+        // Asked for by the block grammar and run by `markdown` instead: as an
+        // injection it parses and then highlights nothing, so running it here
+        // would only be a second parse of every paragraph.
+        "markdown_inline" => return None,
+        other => other,
+    };
+    GRAMMARS
+        .get(name)
+        .or_else(|| GRAMMARS.get(language_of(&format!("x.{name}"))?))
+}
+
 /// The cap above which a file is served unhighlighted.
 ///
 /// Below [`crate::workspace::MAX_FILE_BYTES`] on purpose: a big file still
@@ -274,7 +337,11 @@ pub fn lines(path: &str, text: &str) -> (Option<&'static str>, Vec<Vec<Chunk>>) 
     let Some((name, config)) = language_for(path) else {
         return (None, plain(text));
     };
-    match highlighted(text, config) {
+    let highlighted = match name {
+        "markdown" => markdown(text),
+        _ => highlighted(text, config),
+    };
+    match highlighted {
         Some(lines) => (Some(name), lines),
         // A grammar that failed on this file is not worth a message: the file
         // is still readable, which is what the panel is for.
@@ -294,25 +361,33 @@ fn plain(text: &str) -> Vec<Vec<Chunk>> {
         .collect()
 }
 
+/// One run of the source, as byte offsets, and the class it gets.
+type Span = (usize, usize, Option<&'static str>);
+
 /// Runs the highlighter and cuts its events into lines.
-///
-/// The cutting is the fiddly half: tree-sitter reports a span that may cross
-/// newlines (a block comment, a multi-line string), and a line is what the
-/// viewer lays out. Each source span is split on `\n` and its pieces are
-/// pushed onto the line they belong to, so a chunk never contains one.
 fn highlighted(text: &str, config: &HighlightConfiguration) -> Option<Vec<Vec<Chunk>>> {
+    cut(text, &spans(text, config)?)
+}
+
+/// What the highlighter says about each run of `text`, innermost capture
+/// winning.
+fn spans(text: &str, config: &HighlightConfiguration) -> Option<Vec<Span>> {
     let mut highlighter = Highlighter::new();
     // `None` twice: no encoding override, and no cancellation flag — the
-    // 256 KB cap above is what bounds this, not a clock.
+    // 256 KB cap above is what bounds this, not a clock. Injections are on:
+    // without them a fenced block in Markdown and HTML's `<script>` and
+    // `<style>` were all plain text.
+    // A closure and not `injected` itself: the function item would pin the
+    // callback's lifetime to `'static`, and with it `text` and `config`.
+    #[allow(clippy::redundant_closure)]
     let events = highlighter
-        .highlight(config, text.as_bytes(), None, None, |_| None)
+        .highlight(config, text.as_bytes(), None, None, |name| injected(name))
         .ok()?;
 
-    let mut lines: Vec<Vec<Chunk>> = vec![Vec::new()];
+    let mut spans = Vec::new();
     // A stack, because captures nest: a string inside a macro inside a
     // function. The innermost is the one that wins, which is what `last` is.
     let mut stack: Vec<usize> = Vec::new();
-
     for event in events {
         match event.ok()? {
             HighlightEvent::HighlightStart(highlight) => stack.push(highlight.0),
@@ -320,27 +395,106 @@ fn highlighted(text: &str, config: &HighlightConfiguration) -> Option<Vec<Vec<Ch
                 stack.pop();
             }
             HighlightEvent::Source { start, end } => {
-                let kind = stack.last().copied().and_then(class_of);
-                let piece = text.get(start..end)?;
-                for (index, part) in piece.split('\n').enumerate() {
-                    if index > 0 {
-                        lines.push(Vec::new());
-                    }
-                    if part.is_empty() {
-                        continue;
-                    }
-                    let current = lines.last_mut()?;
-                    // Merged with the previous chunk when they agree, so a
-                    // line of code is a handful of spans rather than one per
-                    // token the parser happened to emit separately.
-                    match current.last_mut() {
-                        Some(last) if last.kind == kind => last.text.push_str(part),
-                        _ => current.push(Chunk {
-                            text: part.to_string(),
-                            kind,
-                        }),
-                    }
+                spans.push((start, end, stack.last().copied().and_then(class_of)));
+            }
+        }
+    }
+    Some(spans)
+}
+
+/// Markdown in two passes, where every other language takes one.
+///
+/// Markdown is two grammars: the block one (headings, lists, fences) and the
+/// inline one (emphasis, code spans, links), which the block grammar's query
+/// hands every `inline` node to by injection. `tree_sitter_highlight` runs
+/// that injection and gets **nothing back**. It parses correctly with the
+/// same ranges, and it highlights correctly on its own. Injected through a
+/// fence instead, it is empty again, so the failure is the inline grammar as
+/// an injected layer, not the block query. So the inline pass is run here
+/// instead: each `inline` node's text is highlighted on its own and laid over
+/// the block pass, winning wherever it has something to say.
+///
+/// One approximation: a paragraph inside a block quote carries its `> `
+/// markers inside the `inline` node's text, and the inline grammar reads them
+/// as text. They were plain before this, and they are plain now.
+fn markdown(text: &str) -> Option<Vec<Vec<Chunk>>> {
+    let block = GRAMMARS.get("markdown")?;
+    let inline = GRAMMARS.get("markdown_inline")?;
+
+    let mut kinds: Vec<Option<&'static str>> = vec![None; text.len()];
+    for (start, end, kind) in spans(text, block)? {
+        kinds[start..end].fill(kind);
+    }
+
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&tree_sitter_md::LANGUAGE.into()).ok()?;
+    let tree = parser.parse(text, None)?;
+    let mut cursor = tree.walk();
+    let mut visit = true;
+    loop {
+        let node = cursor.node();
+        if visit && node.kind() == "inline" {
+            let offset = node.start_byte();
+            for (start, end, kind) in spans(text.get(node.byte_range())?, inline)? {
+                if kind.is_some() {
+                    kinds[offset + start..offset + end].fill(kind);
                 }
+            }
+        }
+        if visit && node.kind() != "inline" && cursor.goto_first_child() {
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            visit = true;
+            continue;
+        }
+        if !cursor.goto_parent() {
+            break;
+        }
+        visit = false;
+    }
+
+    // Back into runs. A boundary only ever falls where a capture began or
+    // ended, which is a character boundary; `cut` refuses anything else, and
+    // the file is then served as text rather than split mid-character.
+    let mut runs = Vec::new();
+    let mut start = 0;
+    for index in 1..=kinds.len() {
+        if index == kinds.len() || kinds[index] != kinds[start] {
+            runs.push((start, index, kinds[start]));
+            start = index;
+        }
+    }
+    cut(text, &runs)
+}
+
+/// Cuts runs into lines.
+///
+/// The fiddly half: a run may cross newlines (a block comment, a multi-line
+/// string), and a line is what the viewer lays out. Each run is split on `\n`
+/// and its pieces are pushed onto the line they belong to, so a chunk never
+/// contains one.
+fn cut(text: &str, spans: &[Span]) -> Option<Vec<Vec<Chunk>>> {
+    let mut lines: Vec<Vec<Chunk>> = vec![Vec::new()];
+    for &(start, end, kind) in spans {
+        let piece = text.get(start..end)?;
+        for (index, part) in piece.split('\n').enumerate() {
+            if index > 0 {
+                lines.push(Vec::new());
+            }
+            if part.is_empty() {
+                continue;
+            }
+            let current = lines.last_mut()?;
+            // Merged with the previous chunk when they agree, so a line of
+            // code is a handful of spans rather than one per token the parser
+            // happened to emit separately.
+            match current.last_mut() {
+                Some(last) if last.kind == kind => last.text.push_str(part),
+                _ => current.push(Chunk {
+                    text: part.to_string(),
+                    kind,
+                }),
             }
         }
     }
@@ -401,6 +555,109 @@ mod tests {
         assert_eq!(lines.len(), 3, "trailing newline is an empty last line");
         assert_eq!(lines[0][0].text, "one");
         assert!(lines[0][0].kind.is_none());
+    }
+
+    fn kind_of<'a>(lines: &'a [Vec<Chunk>], text: &str) -> Option<&'a str> {
+        lines
+            .iter()
+            .flatten()
+            .find(|chunk| chunk.text.contains(text))
+            .and_then(|chunk| chunk.kind)
+    }
+
+    /// Markdown's captures are prose names (`text.title`, `text.literal`), and
+    /// until they were listed a README came back as its punctuation.
+    #[test]
+    fn markdown_gets_headings_code_and_links() {
+        let source =
+            "# Title here\n\nSome *soft* and **loud** with `code` and [a link](https://x.y).\n";
+        let (lang, lines) = lines("README.md", source);
+        assert_eq!(lang, Some("markdown"));
+        assert_eq!(kind_of(&lines, "Title here"), Some("heading"));
+        assert_eq!(kind_of(&lines, "soft"), Some("emphasis"));
+        assert_eq!(kind_of(&lines, "loud"), Some("strong"));
+        assert_eq!(kind_of(&lines, "code"), Some("literal"));
+        assert_eq!(kind_of(&lines, "https://x.y"), Some("link"));
+    }
+
+    /// The two passes must still add up to the file, byte for byte, through
+    /// multi-byte text, a block quote and a fence.
+    #[test]
+    fn markdown_chunks_join_back_into_the_file() {
+        let source = "# Añadir *más* — `ñ`\n\n> citado **fuerte**\n> segunda línea\n\n- uno\n- [dos](x.md)\n\n```rust\nlet s = \"é\";\n```\n";
+        let (lang, lines) = lines("x.md", source);
+        assert_eq!(lang, Some("markdown"));
+        let rebuilt = lines
+            .iter()
+            .map(|line| line.iter().map(|c| c.text.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rebuilt, source);
+        assert_eq!(kind_of(&lines, "fuerte"), Some("strong"));
+    }
+
+    /// A fenced block is its own language, by injection, under either name.
+    #[test]
+    fn a_fenced_block_in_markdown_is_highlighted_as_its_language() {
+        for fence in ["rust", "rs"] {
+            let source = format!("Text.\n\n```{fence}\nfn main() {{}}\n```\n");
+            let (_, lines) = lines("notes.md", &source);
+            assert_eq!(
+                kind_of(&lines, "fn"),
+                Some("keyword"),
+                "fence `{fence}`: {lines:?}"
+            );
+        }
+    }
+
+    /// TypeScript's query inherits JavaScript's; alone it found two keywords
+    /// in a whole file.
+    #[test]
+    fn typescript_inherits_javascript_highlighting() {
+        let (lang, ts) = lines(
+            "a.ts",
+            "const x: number = 1\nfunction f() { return \"s\" }\n",
+        );
+        assert_eq!(lang, Some("typescript"));
+        assert_eq!(kind_of(&ts, "const"), Some("keyword"));
+        assert_eq!(kind_of(&ts, "return"), Some("keyword"));
+        assert_eq!(kind_of(&ts, "\"s\""), Some("string"));
+        let (lang, _) = lines("a.tsx", "const a = <div className=\"x\" />\n");
+        assert_eq!(lang, Some("tsx"));
+    }
+
+    /// HTML hands `<script>` to JavaScript by injection, and so does every
+    /// component in `crates/luu/ui`.
+    #[test]
+    fn a_script_inside_html_is_highlighted_as_javascript() {
+        let (_, lines) = lines("c.html", "<script>\n  const n = 1\n</script>\n");
+        assert_eq!(kind_of(&lines, "const"), Some("keyword"));
+    }
+
+    /// A grammar whose query fails to compile is dropped silently, by design,
+    /// so this is the only place that notices one did.
+    #[test]
+    fn every_grammar_compiles() {
+        for name in [
+            "rust",
+            "javascript",
+            "typescript",
+            "tsx",
+            "html",
+            "css",
+            "toml",
+            "markdown",
+            "markdown_inline",
+            "json",
+            "python",
+            "go",
+            "c",
+            "cpp",
+            "yaml",
+            "bash",
+        ] {
+            assert!(GRAMMARS.contains_key(name), "`{name}` did not compile");
+        }
     }
 
     #[test]

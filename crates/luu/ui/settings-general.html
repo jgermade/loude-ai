@@ -4,7 +4,7 @@
   // which editor draws a file are facts about the screen somebody is reading
   // from, and one server answers two people on two machines. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const { prefs, setTheme, setEditor, setLayout, monacoAvailable } =
+  const { prefs, setTheme, setEditor, setCode, setLayout, monacoAvailable } =
     await import("./prefs.js")
   const { workspace, openPicker } = await import("./workspace.js")
   const Segmented = await import("./components/segmented.html")
@@ -13,6 +13,10 @@
     { value: "auto", label: "Auto" },
     { value: "light", label: "Light" },
     { value: "dark", label: "Dark" },
+  ]
+  const CODES = [
+    { value: "page", label: "This page" },
+    { value: "monokai", label: "Monokai" },
   ]
   const LAYOUTS = [
     { value: "responsive", label: "Responsive" },
@@ -60,6 +64,16 @@
     seventh of the bytes, and the whole file stays findable by the browser's own
     Ctrl+F. Monaco is here for what it can do that the other cannot — folding,
     and jumping to a symbol.
+  </dd>
+  <dt>Colours</dt>
+  <dd>
+    <Segmented :options="CODES" :model="prefs.code" @change="setCode($event.detail)" />
+  </dd>
+  <dd class="note">
+    <b>This page</b> draws code in the page's own palette and follows the
+    theme above. <b>Monokai</b> is Sublime Text 3's, on its own dark ground,
+    so it reads the same on a light page. Either way it applies to this
+    page's viewer and to Monaco.
   </dd>
 </dl>
 

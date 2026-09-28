@@ -1091,8 +1091,14 @@ read once into an id → path table and `/api/icons/{id}` serves only ids in it,
 reaches the filesystem. Syntax highlighting is `tree-sitter-highlight` on the server, thirteen
 grammars, sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
 UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does
-not. The capture names map to this page's own palette, so the viewer follows the light/dark
-toggle without acquiring a second theme system. The payload reads head-first — `path`,
+not. Injections are on, so a fenced block in Markdown is highlighted as its language and HTML's
+`<script>` and `<style>` as JavaScript and CSS. TypeScript's query is its own followed by
+JavaScript's, which it inherits. Markdown is highlighted in **two passes**: the block grammar,
+then the inline grammar over each `inline` node, laid on top. The inline grammar highlights
+nothing when `tree_sitter_highlight` runs it as an injection. The capture names map to this
+page's own palette, so by default the viewer follows the light/dark toggle. The one exception is
+opt-in: the `code` preference can choose **Monokai** (Sublime Text 3's), which brings its own
+dark ground and covers Monaco too. The payload reads head-first — `path`,
 `language`, `truncated`, `total_lines`, then `lines` — because `serde` writes fields in
 declaration order and the facts about a file have no business sitting behind 681 KB of it.
 `total_lines` is counted before the 512 KB cut, so a truncated file says *6255 of 20001 lines*

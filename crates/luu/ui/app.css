@@ -74,6 +74,10 @@
   --hl-attribute: #e0af68;
   --hl-tag: #f7768e;
   --hl-constructor: #2ac3de;
+  /* Markdown's: prose rather than code. */
+  --hl-heading: #7aa2f7;
+  --hl-literal: #9ece6a;
+  --hl-link: #73daca;
   color-scheme: dark;
 }
 
@@ -117,6 +121,9 @@
   --hl-attribute: #8a5d12;
   --hl-tag: #b8253f;
   --hl-constructor: #06697d;
+  --hl-heading: #2f5bbd;
+  --hl-literal: #35701a;
+  --hl-link: #0b6b5e;
   color-scheme: light;
 }
 
@@ -448,6 +455,39 @@ dialog.modal.narrow { width: min(34rem, calc(100vw - 2rem)); }
 /* One class per capture `crate::highlight` emits. Global rather than scoped to
    the viewer because the chunks are plain `<code>` elements and a future panel
    that shows code should colour it the same way. */
+/* Monokai, as Sublime Text 3 ships it: the code theme somebody chose in
+   Settings → General instead of the page's palette. It is a second set of
+   colours, which the note on the palette above argues against, and it stays
+   opt-in for that reason: the default is still the page's own. It brings its
+   own ground, because its yellow and green are unreadable on the light page. See
+   RECORD/2026-09-28.components-of-our-own.completed.md. */
+:root[data-code-theme="monokai"] {
+  --hl-keyword: #f92672;
+  --hl-operator: #f92672;
+  --hl-tag: #f92672;
+  --hl-string: #e6db74;
+  --hl-literal: #e6db74;
+  --hl-comment: #75715e;
+  --hl-number: #ae81ff;
+  --hl-constant: #ae81ff;
+  --hl-function: #a6e22e;
+  --hl-attribute: #a6e22e;
+  --hl-heading: #a6e22e;
+  --hl-type: #66d9ef;
+  --hl-constructor: #66d9ef;
+  --hl-link: #66d9ef;
+  --hl-variable: #f8f8f2;
+  --hl-property: #f8f8f2;
+  --hl-punctuation: #f8f8f2;
+}
+:root[data-code-theme="monokai"] .col.content .col-main,
+:root[data-code-theme="monokai"] .code-rows {
+  background: #272822;
+  color: #f8f8f2;
+}
+:root[data-code-theme="monokai"] .code-rows li::before { color: #90908a; opacity: 1; }
+:root[data-code-theme="monokai"] .hl-type { font-style: italic; }
+
 .hl-keyword { color: var(--hl-keyword); }
 .hl-string { color: var(--hl-string); }
 .hl-comment { color: var(--hl-comment); font-style: italic; }
@@ -462,3 +502,8 @@ dialog.modal.narrow { width: min(34rem, calc(100vw - 2rem)); }
 .hl-attribute { color: var(--hl-attribute); }
 .hl-tag { color: var(--hl-tag); }
 .hl-constructor { color: var(--hl-constructor); }
+.hl-heading { color: var(--hl-heading); font-weight: 600; }
+.hl-literal { color: var(--hl-literal); }
+.hl-link { color: var(--hl-link); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
+.hl-emphasis { font-style: italic; }
+.hl-strong { font-weight: 600; }

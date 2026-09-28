@@ -53,6 +53,7 @@
         text: textOf(content.lines),
         language: content.language,
         dark,
+        code: prefs.code,
       })
       if (!ok) monacoBroken = true
     })
@@ -66,7 +67,7 @@
     prefs.editor === "monaco" && monacoHere && !monacoBroken && shown?.kind === "file"
   // Disposed the moment the column stops using it: an editor left attached to a
   // detached element is a leak that only shows up after twenty tab switches.
-  $: attached = monacoing ? draw((prefs.theme, shown)) : (dispose(), "")
+  $: attached = monacoing ? draw((prefs.theme, prefs.code, shown)) : (dispose(), "")
 
   // ---- the own viewer ---------------------------------------------------
   //

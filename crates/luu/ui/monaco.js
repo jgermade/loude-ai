@@ -89,6 +89,38 @@ function defineThemes(monaco) {
       },
     })
   }
+  // Monokai as Sublime Text 3 ships it, for the `code` preference. Written out
+  // rather than read off the stylesheet, because it is the one set of colours
+  // that is not the page's.
+  monaco.editor.defineTheme("luu-monokai", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "", foreground: "f8f8f2" },
+      { token: "keyword", foreground: "f92672" },
+      { token: "operator", foreground: "f92672" },
+      { token: "tag", foreground: "f92672" },
+      { token: "string", foreground: "e6db74" },
+      { token: "attribute.value", foreground: "e6db74" },
+      { token: "comment", foreground: "75715e", fontStyle: "italic" },
+      { token: "number", foreground: "ae81ff" },
+      { token: "constant", foreground: "ae81ff" },
+      { token: "type", foreground: "66d9ef", fontStyle: "italic" },
+      { token: "attribute.name", foreground: "a6e22e" },
+      { token: "delimiter", foreground: "f8f8f2" },
+    ],
+    colors: {
+      "editor.background": "#272822",
+      "editor.foreground": "#f8f8f2",
+      "editor.lineHighlightBackground": "#3e3d32",
+      "editor.selectionBackground": "#49483e",
+      "editorCursor.foreground": "#f8f8f0",
+      "editorLineNumber.foreground": "#90908a",
+      "editorGutter.background": "#272822",
+      "editorIndentGuide.background": "#464741",
+      "editorWhitespace.foreground": "#3b3a32",
+    },
+  })
 }
 
 /// The server's own language names, which are `crate::highlight`'s, mapped to
@@ -105,10 +137,10 @@ let attachedTo = null
 /// half, and a tab switch that disposed and rebuilt it would spend that cost
 /// every time. `attachedTo` is the host it was built into, because the host
 /// element is recreated whenever the column's body re-renders.
-export async function paint(host, { text, language, dark }) {
+export async function paint(host, { text, language, dark, code }) {
   const monaco = await ensureMonaco()
   if (!monaco || !host) return false
-  const theme = dark ? "luu-dark" : "luu-light"
+  const theme = code === "monokai" ? "luu-monokai" : dark ? "luu-dark" : "luu-light"
   if (editor && attachedTo !== host) {
     editor.dispose()
     editor = null

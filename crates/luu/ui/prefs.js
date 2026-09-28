@@ -46,6 +46,11 @@ export const prefs = $reactive({
   /// npm dependency of this directory rather than a payload in the tree, so it
   /// is only offered where somebody installed it — see `monacoAvailable`.
   editor: kept("luu.editor", ["own", "monaco"], "own"),
+  /// `page` | `monokai`. The colours code is drawn in. `page` is the page's own
+  /// palette and follows the light/dark toggle; `monokai` is Sublime Text 3's
+  /// Monokai, which brings its own dark ground, so it reads the same on a light
+  /// page. It covers this page's viewer and Monaco alike.
+  code: kept("luu.code", ["page", "monokai"], "page"),
   /// `responsive` | `two`. `responsive` is three columns above 1260px and two
   /// below; `two` pins the two-column layout at any width, which is what
   /// somebody on a wide screen who wants the chat wide is asking for.
@@ -82,7 +87,13 @@ function paint() {
   else document.documentElement.removeAttribute("data-theme")
 }
 
+function paintCode() {
+  if (prefs.code === "page") document.documentElement.removeAttribute("data-code-theme")
+  else document.documentElement.setAttribute("data-code-theme", prefs.code)
+}
+
 paint()
+paintCode()
 // Only `auto` cares, and it cares while the page is open: somebody who switches
 // their machine to night mode should not have to reload.
 wantsLight?.addEventListener?.("change", () => {
@@ -93,6 +104,12 @@ export function setTheme(which) {
   prefs.theme = which
   keep("luu.theme", which)
   paint()
+}
+
+export function setCode(which) {
+  prefs.code = which
+  keep("luu.code", which)
+  paintCode()
 }
 
 export function setEditor(which) {
