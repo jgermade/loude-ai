@@ -128,6 +128,10 @@ fn run(name: &str, extra: &[&str]) -> (Counts, PathBuf) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_luu"));
     command
         .current_dir(&dir)
+        // A state directory of its own, empty: without it the run reads the
+        // `config.toml` of whoever runs the tests, and a `default` written
+        // there sends this corpus to their model instead of the mock.
+        .env("LUU_HOME", dir.join(".luu-home"))
         .arg("chat")
         .args(["--script", corpus.to_str().expect("a utf-8 path")])
         .args(["--allow-write", "."])

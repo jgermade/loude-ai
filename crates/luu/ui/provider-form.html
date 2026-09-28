@@ -1,0 +1,173 @@
+<script :setup="{ taken = [], added = null, close = null }">
+  // Adding a provider: a form of its own over Settings, rather than an empty
+  // row at the bottom of a seven-column table that had to be filled in place
+  // and then saved with the rest.
+  //
+  // **It writes one profile and nothing else.** The body is the file as the
+  // server last answered it plus this profile — never the table's draft — so an
+  // edit somebody has half-made in the table is neither saved by accident nor
+  // thrown away: `added` hands the new name back and the table merges it into
+  // its draft. `taken` is every name the table holds, saved or not.
+  const { state, saveProviders } = await import("./store.js")
+  const { asModal } = await import("./modal.js")
+
+  asModal("provider-dialog", { close: () => close?.() })
+
+  // What each backend is when nothing says otherwise, as a placeholder rather
+  // than a value: the server fills the same default in, and a URL the person
+  // never typed should not be written into their file as if they had.
+  const BACKENDS = [
+    { value: "ollama", label: "Ollama", url: "http://127.0.0.1:11434" },
+    {
+      value: "openai",
+      label: "OpenAI-compatible — llama-server, vLLM, LM Studio, a hosted API",
+      url: "http://127.0.0.1:8080/v1",
+    },
+    { value: "mock", label: "Mock — answers in sentences, sends nowhere", url: "" },
+  ]
+
+  let name = ""
+  let backend = "ollama"
+  let url = ""
+  let model = ""
+  let contextLimit = ""
+  let keyFile = ""
+  let makeDefault = false
+  let saving = false
+  let error = null
+  // The one refusal a person can answer: the same `{ profile, host }` the
+  // table's foot asks for, here because this form is what caused it.
+  let declaration = null
+  let typed = ""
+
+  $: chosen = BACKENDS.find(b => b.value === backend) || BACKENDS[0]
+  $: trimmed = name.trim()
+  $: clash = !!trimmed && taken.includes(trimmed)
+  $: canAdd = !!trimmed && !clash && !saving && (!declaration || typed.trim() === declaration.host)
+
+  const profile = remote => ({
+    backend,
+    ...(backend !== "mock" && url.trim() ? { url: url.trim() } : {}),
+    ...(model.trim() ? { model: model.trim() } : {}),
+    ...(String(contextLimit).trim() ? { "context-limit": Number(contextLimit) } : {}),
+    ...(backend === "openai" && keyFile.trim() ? { "key-file": keyFile.trim() } : {}),
+    ...(remote ? { remote: true } : {}),
+  })
+
+  const add = async () => {
+    if (!canAdd) return
+    saving = true
+    error = null
+    const result = await saveProviders({
+      default: makeDefault ? trimmed : (state.providers?.default ?? null),
+      providers: { ...(state.providers?.providers || {}), [trimmed]: profile(!!declaration) },
+    })
+    saving = false
+    if (result?.ok) {
+      added?.(trimmed, makeDefault)
+      close?.()
+      return
+    }
+    // Asked for the host: keep the form, and show the question inside it.
+    // Anything else is the server's own message, which is the useful one.
+    if (result?.declaration && !declaration) {
+      declaration = result.declaration
+      typed = ""
+    } else {
+      error = state.providersError || "the write was refused"
+    }
+  }
+</script>
+
+<dialog id="provider-dialog" class="modal narrow" @click.self="close?.()">
+  <header class="modal-head">
+    <strong>Add a provider</strong>
+    <button type="button" class="link" @click="close?.()">close</button>
+  </header>
+  <section class="modal-body">
+    <dl class="settings form">
+      <dt>Name</dt>
+      <dd>
+        <input :value="name" placeholder="local" autofocus
+               @input="name = $event.target.value, declaration = null">
+        <span :if="clash" class="warn">already a provider of that name</span>
+      </dd>
+      <dd class="note">What a session and <code>-p</code> call it.</dd>
+
+      <dt>Backend</dt>
+      <dd>
+        <select :value="backend" @change="backend = $event.target.value, declaration = null">
+          <option :each="b in BACKENDS" :key="b.value" :value="b.value">{{ b.label }}</option>
+        </select>
+      </dd>
+
+      <dt :if="backend !== 'mock'">URL</dt>
+      <dd :if="backend !== 'mock'">
+        <input :value="url" :attrs="{ placeholder: chosen.url }"
+               @input="url = $event.target.value, declaration = null">
+      </dd>
+      <dd :if="backend !== 'mock'" class="note">
+        Empty is {{ chosen.url }}. Anything that is not this machine has to be
+        declared before it can be the default.
+      </dd>
+
+      <dt :if="backend !== 'mock'">Model</dt>
+      <dd :if="backend !== 'mock'">
+        <input :value="model" placeholder="qwen2.5-coder:7b"
+               @input="model = $event.target.value">
+      </dd>
+
+      <dt :if="backend !== 'mock'">Window</dt>
+      <dd :if="backend !== 'mock'">
+        <input class="w-num" :value="contextLimit" placeholder="—" inputmode="numeric"
+               @input="contextLimit = $event.target.value">
+        <span class="dim">tokens, the context the server was started with</span>
+      </dd>
+
+      <dt :if="backend === 'openai'">Key file</dt>
+      <dd :if="backend === 'openai'">
+        <input :value="keyFile" placeholder="~/.luu/that.key"
+               @input="keyFile = $event.target.value">
+      </dd>
+      <dd :if="backend === 'openai'" class="note">
+        A path, never the key itself: a key in <code>config.toml</code> is a key
+        in every backup of it.
+      </dd>
+
+      <dt>Default</dt>
+      <dd>
+        <label>
+          <input type="checkbox" :checked="makeDefault"
+                 @change="makeDefault = $event.target.checked, declaration = null">
+          what every run that names no provider sends to
+        </label>
+      </dd>
+    </dl>
+
+    <p :if="error" class="error">{{ error }}</p>
+
+    <div class="modal-foot">
+      <div :if="declaration" class="declare">
+        <p>
+          <strong>{{ declaration.profile }}</strong> sends to
+          <strong>{{ declaration.host }}</strong>, which is not this machine, and
+          it would become the default. Type the host to confirm.
+        </p>
+        <input :value="typed" :attrs="{ placeholder: declaration.host }"
+               @input="typed = $event.target.value">
+      </div>
+      <div class="modal-actions">
+        <button type="button" @click="close?.()">Cancel</button>
+        <button type="button" class="save" :disabled="!canAdd" @click="add()">
+          {{ saving ? "Adding…" : (declaration ? "Confirm and add" : "Add provider") }}
+        </button>
+      </div>
+    </div>
+  </section>
+</dialog>
+
+<style scoped>
+  .form input:not([type]), .form select { width: 100%; }
+  .form input.w-num { width: 6rem; margin-right: .4rem; }
+  .form label { display: flex; gap: .4rem; align-items: center; }
+</style>

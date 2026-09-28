@@ -1,0 +1,209 @@
+<script :setup>
+  // Model servers luu starts: llama-server and ollama, as children of this
+  // server that stop with it. Each one is an `[engine.<name>]` in config.toml,
+  // and a profile that names it has it started before a session sends there.
+  // See `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
+  const { loadEngines, saveEngines, startEngine, stopEngine, installEngine, modelLabel } =
+    await import("./engines.js")
+  const { openStarter } = await import("./ui.js")
+  const EngineForm = await import("./engine-form.html")
+
+  let view = null
+  let error = ""
+  // `{ name }` for an edit, `{}` for a new one, `null` when the form is shut.
+  let editing = null
+  let busy = ""
+
+  const took = result => {
+    if (result.ok) {
+      view = result.view
+      error = ""
+    } else {
+      error = result.error
+    }
+    return result.ok
+  }
+  took(await loadEngines())
+
+  // Polled while this section is on screen, and only then: the pane's own id
+  // is what says so, the seam `modal.js` waits on for the same reason — jq79
+  // has no unmount hook a timer could be cleared from.
+  const tick = async () => {
+    if (!document.getElementById("engines-pane")) return
+    const result = await loadEngines()
+    if (result.ok) view = result.view
+    setTimeout(tick, 2000)
+  }
+  setTimeout(tick, 2000)
+
+  const act = async (label, action) => {
+    busy = label
+    took(await action())
+    busy = ""
+  }
+  const remove = async name => {
+    const rest = Object.fromEntries(
+      Object.entries(view.engines).filter(([n]) => n !== name).map(([n, e]) => [n, configOf(e)]))
+    await act(`remove:${name}`, () => saveEngines(rest))
+  }
+  // What the file says, out of the view — which also carries status, the
+  // resolved binary and the linked providers.
+  const configOf = e => Object.fromEntries(
+    ["kind", "binary", "version", "variant", "port", "model", "args", "ready-timeout"]
+      .filter(key => e[key] !== undefined && e[key] !== null)
+      .map(key => [key, e[key]]))
+
+  $: names = Object.keys(view?.engines || {})
+  $: installing = (view?.installs || []).filter(i => !["done", "failed"].includes(i.state))
+  $: failed = (view?.installs || []).filter(i => i.state === "failed")
+  const pct = i => (i.total ? Math.floor((100 * i.done) / i.total) : 0)
+  const mb = n => `${(n / 1e6).toFixed(1)} MB`
+  const binaryWord = b => (!b ? "found on this machine" : b === "managed" ? "luu's own copy" : "a path")
+  const stateWord = s => (s.state === "running"
+    ? (s.answering ? "running" : "starting")
+    : (s.answering ? "answering, not luu's" : s.state))
+</script>
+
+<div id="engines-pane">
+  <h3>Engines</h3>
+  <p class="dim small">
+    Model servers luu starts: <strong>llama-server</strong>,
+    <strong>mlx-serve</strong> or <strong>ollama</strong>. All of it is automatic — luu's own copy is
+    downloaded the first time a session needs it, the engine starts then, moves
+    to another model when the chat picks one, and stops when no session sends
+    to it or <code>luu serve</code> exits. <strong>start</strong> and
+    <strong>stop</strong> below are only for doing it by hand.
+    <span :if="view?.path">Written to {{ view.path }}.</span>
+  </p>
+  <p :if="view && !view.editable" class="refused">{{ view.refused }}</p>
+  <p :if="error" class="error">{{ error }}</p>
+
+  <div :if="view && !names.length" class="refused">
+    None yet. <strong>+ engine</strong> writes one, and a provider that
+    starts it.
+  </div>
+
+  <section :each="name in names" :key="name" class="engine">
+    <header>
+      <strong>{{ name }}</strong>
+      <span class="tag">{{ view.engines[name].kind }}</span>
+      <span class="state" :class="view.engines[name].status.state"
+            :class.up="view.engines[name].status.answering">
+        {{ stateWord(view.engines[name].status) }}
+      </span>
+      <span :if="view.engines[name].status.pid" class="dim small">
+        pid {{ view.engines[name].status.pid }}
+      </span>
+      <span :if="view.engines[name].status.exit && view.engines[name].status.state !== 'running'"
+            class="dim small">· {{ view.engines[name].status.exit }}</span>
+      <span class="grow"></span>
+      <button type="button" class="link" :disabled="!view.editable || !!busy"
+              :if="view.engines[name].status.state !== 'running'"
+              @click="act(`start:${name}`, () => startEngine(name))">start</button>
+      <button type="button" class="link" :disabled="!view.editable || !!busy"
+              :if="view.engines[name].status.state === 'running'"
+              @click="act(`stop:${name}`, () => stopEngine(name))">stop</button>
+      <button type="button" class="link" :disabled="!view.editable"
+              @click="editing = { name }">edit</button>
+      <button type="button" class="link" :disabled="!view.editable || !!busy"
+              @click="remove(name)">remove</button>
+    </header>
+
+    <dl class="settings">
+      <dt>Binary</dt>
+      <dd>
+        <span class="dim">{{ binaryWord(view.engines[name].binary) }}</span>
+        <code :if="view.engines[name].resolved">{{ view.engines[name].resolved }}</code>
+        <span :if="view.engines[name].problem" class="warn">{{ view.engines[name].problem }}</span>
+        <button type="button" class="link"
+                :if="view.engines[name].binary === 'managed' && !view.engines[name].resolved"
+                :disabled="!view.editable || installing.length > 0"
+                @click="act('install', () => installEngine(view.engines[name].kind, view.engines[name].version, view.engines[name].variant))">
+          download {{ view.engines[name].version || view.pinned[view.engines[name].kind] }}
+        </button>
+      </dd>
+
+      <dt :if="view.engines[name].kind !== 'ollama'">Model</dt>
+      <dd :if="view.engines[name].kind !== 'ollama'">
+        <span :if="view.engines[name].model">{{ modelLabel(view.engines[name].model) }}</span>
+        <span :if="!view.engines[name].model" class="dim">named in the arguments</span>
+      </dd>
+
+      <dt>Sends</dt>
+      <dd>
+        <code>{{ view.engines[name].url }}</code>
+        <span :if="!view.engines[name].providers.length" class="dim">· no provider names it</span>
+        <span :each="p in view.engines[name].providers" :key="p">
+          · <span class="tag">{{ p }}</span>
+          <button type="button" class="link" title="Start a session on this provider"
+                  @click="openStarter(p)">use →</button>
+        </span>
+      </dd>
+
+      <dt>Arguments</dt>
+      <dd>
+        <code :if="(view.engines[name].args || []).length">{{ view.engines[name].args.join(" ") }}</code>
+        <span :if="!(view.engines[name].args || []).length" class="dim">none — the model is the part worth writing here</span>
+      </dd>
+
+      <dt :if="view.engines[name].status.log.length">Output</dt>
+      <dd :if="view.engines[name].status.log.length">
+        <pre class="log">{{ view.engines[name].status.log.join("\n") }}</pre>
+      </dd>
+    </dl>
+  </section>
+
+  <section :if="installing.length || failed.length" class="downloads">
+    <h3>Downloads</h3>
+    <div :each="i in installing" :key="i.asset" class="download">
+      <span>{{ i.asset }}</span>
+      <progress :value="i.done" :max="i.total || 1"></progress>
+      <span class="dim small">{{ i.state }} · {{ mb(i.done) }} of {{ mb(i.total) }} · {{ pct(i) }}%</span>
+    </div>
+    <p :each="i in failed" :key="i.asset" class="error">{{ i.asset }}: {{ i.error }}</p>
+  </section>
+
+  <p class="dim small" :if="view?.root">
+    luu's own copies go in <code>{{ view.root }}</code>, one directory per
+    version, checked against the sha256 GitHub publishes before they are
+    unpacked.
+  </p>
+
+  <div class="modal-foot">
+    <div class="modal-actions">
+      <button type="button" class="add" :disabled="!view?.editable" @click="editing = {}">+ engine</button>
+    </div>
+  </div>
+</div>
+
+<EngineForm :if="editing" :view="view" :editing="editing?.name || ''"
+            :saved="next => { view = next }" :close="() => { editing = null }" />
+
+<style scoped>
+  h3:first-child { margin-top: 0; }
+  .engine {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: .6rem .8rem;
+    margin: .6rem 0;
+  }
+  .engine header { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .engine .grow { flex: 1; }
+  .engine .settings { margin-top: .5rem; }
+  .state { font-size: 12px; color: var(--dim); }
+  .state.running { color: var(--warn); }
+  .state.up { color: var(--ok, var(--accent)); }
+  .state.exited { color: var(--err, var(--warn)); }
+  .log {
+    margin: 0;
+    font-size: 11px;
+    max-height: 10rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--dim);
+  }
+  .download { display: flex; align-items: center; gap: .6rem; font-size: 12px; margin: .3rem 0; }
+  .download progress { flex: 1; }
+  code { overflow-wrap: anywhere; }
+</style>

@@ -209,6 +209,10 @@ struct App {
     /// Settings writes a new one — see [`put_icon_theme`]. The page follows
     /// through the manifest's `revision`, which is in every icon's URL.
     icons: std::sync::RwLock<Arc<crate::icons::Theme>>,
+    /// The model servers this server started, and the downloads of luu's own
+    /// copies. Children of this process — see [`Serving::run`] for how they
+    /// stop with it, and `crate::engines` for the rest.
+    engines: Arc<crate::engines::Supervisor>,
     /// Pinned sampling, forwarded to every call the same way `budget` is.
     /// `None` leaves it to the server's own default.
     temperature: Option<f32>,
@@ -404,6 +408,12 @@ pub struct Settings {
     /// mistake as a second `is_this_machine` in JavaScript, and it would call a
     /// deliberate `--backend mock` run unconfigured.
     unconfigured: bool,
+    /// Nobody chose this destination — it is the file's default, or the mock
+    /// where there is none — so it follows the file: a new `default` moves an
+    /// idle, empty live session at once, and a new session that names no
+    /// provider reads the file again rather than inheriting. See
+    /// [`crate::provider::Resolved::named`].
+    follows_default: bool,
 }
 
 impl Settings {
@@ -443,6 +453,7 @@ impl Settings {
             counter,
             counter_warning,
             unconfigured: provider.unconfigured(),
+            follows_default: !provider.named,
             ..self.clone()
         }
     }
@@ -674,6 +685,7 @@ impl App {
             floor: None,
             store: store.as_ref().map(|path| path.display().to_string()),
             unconfigured: provider.unconfigured(),
+            follows_default: !provider.named,
         };
         // One `Arc` for the field and the header both: the posture line is a
         // fact about this agency, and building it after the move would need a
@@ -735,6 +747,7 @@ impl App {
             postures,
             postures_path,
             icons: std::sync::RwLock::new(icons),
+            engines: Arc::default(),
             temperature,
             seed,
             constraint,
@@ -968,6 +981,7 @@ pub struct Serving {
     address: SocketAddr,
     listener: tokio::net::TcpListener,
     router: Router,
+    app: Arc<App>,
 }
 
 impl Serving {
@@ -976,10 +990,48 @@ impl Serving {
         self.address
     }
 
+    /// Serves until SIGINT or SIGTERM, then stops every engine it started.
+    ///
+    /// A signal ends the process without running one `Drop`, so
+    /// `kill_on_drop` alone would leave a model server holding its memory
+    /// after `serve` is gone. A terminal's Ctrl-C reaches the whole process
+    /// group anyway; a `kill` from a test harness reaches only this process.
+    ///
+    /// Not `with_graceful_shutdown`: that waits for every connection to close,
+    /// and the page holds a WebSocket open for as long as it is on screen, so
+    /// a Ctrl-C with the page open would never finish.
     pub async fn run(self) -> Result<()> {
-        axum::serve(self.listener, self.router)
-            .await
-            .context("serving")
+        let engines = self.app.engines.clone();
+        let result = tokio::select! {
+            served = async { axum::serve(self.listener, self.router).await } => {
+                served.context("serving")
+            }
+            () = asked_to_stop() => Ok(()),
+        };
+        engines.stop_all().await;
+        result
+    }
+}
+
+async fn asked_to_stop() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }
 
@@ -1021,6 +1073,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     // publish task approval to the network is not a port this binds and then
     // warns about.
     let auth = Arc::new(crate::auth::resolve(&address, auth_token_file.as_deref())?);
+    let starts = crate::engines::for_run(&provider);
 
     let app = App::create(StdioOptions {
         backend,
@@ -1048,6 +1101,18 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         approvers,
     })
     .await?;
+
+    // The profile this server resolved names an engine: started now, in the
+    // background, so the first turn is not the one that waits for a model to
+    // load. A failure is said here and again by the turn that meets it.
+    if let Some((name, engine)) = starts {
+        let supervisor = app.engines.clone();
+        tokio::spawn(async move {
+            if let Err(error) = supervisor.ensure(&name, &engine).await {
+                eprintln!("engine {name}: {error}");
+            }
+        });
+    }
 
     // Two halves, because they are two surfaces. `/ws` is authority and
     // `/api/*` is this session's prompts and source — both behind the token
@@ -1128,6 +1193,13 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // 404 — which works, and logs a console error on every visit of every
         // checkout that has no Monaco, which is most of them.
         .route("/api/monaco", get(get_monaco))
+        // Model servers luu starts. Every write here is held to more than the
+        // providers route: see [`engines_allowed`].
+        .route("/api/models", get(get_models))
+        .route("/api/engines", get(get_engines).put(put_engines))
+        .route("/api/engines/install", post(install_engine))
+        .route("/api/engines/{name}/start", post(start_engine))
+        .route("/api/engines/{name}/stop", post(stop_engine))
         .layer(middleware::from_fn_with_state(auth.clone(), require_token));
 
     let router = guarded
@@ -1158,6 +1230,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         address,
         listener,
         router,
+        app,
     })
 }
 
@@ -3309,6 +3382,369 @@ async fn get_postures(State(state): State<AppRouterState>) -> Response {
     .into_response()
 }
 
+// ---- engines ---------------------------------------------------------------
+//
+// See `crate::engines` and `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
+
+/// Whether this request may start, stop, download or configure an engine.
+///
+/// Loopback by the bound address, like every write from Settings — **and by
+/// `Host`**, which nothing else here checks. A page on any domain that rebinds
+/// its DNS to 127.0.0.1 is same-origin with this server; against
+/// `PUT /api/providers` that costs a config file, against an engine it would be
+/// an execution. A browser always sends the name it dialled, so the page on
+/// this machine passes and the rebinding one does not.
+fn engines_allowed(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), Box<Response>> {
+    let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
+    if !state.providers_editable {
+        return Err(refuse(
+            "this server is bound off loopback, and an engine is a process started on this \
+             machine. Start it from a browser on the machine itself."
+                .to_string(),
+        ));
+    }
+    let host = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .unwrap_or("");
+    match host_is_loopback(host) {
+        true => Ok(()),
+        false => Err(refuse(format!(
+            "Host `{host}` is not this machine, and only this machine starts an engine"
+        ))),
+    }
+}
+
+fn host_is_loopback(host: &str) -> bool {
+    let name = match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(name, _)| name),
+    };
+    name.eq_ignore_ascii_case("localhost")
+        || name
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+#[derive(serde::Serialize)]
+struct EngineView {
+    #[serde(flatten)]
+    config: crate::provider::Engine,
+    status: crate::engines::Status,
+    /// The binary it would run, or why there is none.
+    resolved: Option<String>,
+    problem: Option<String>,
+    /// Where a profile for it sends.
+    url: String,
+    /// The profiles that name it.
+    providers: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct EnginesView {
+    path: Option<String>,
+    editable: bool,
+    refused: Option<String>,
+    engines: std::collections::BTreeMap<String, EngineView>,
+    /// Every copy of each kind's binary on this machine.
+    found: std::collections::BTreeMap<&'static str, Vec<String>>,
+    /// The version luu downloads when a table names none.
+    pinned: std::collections::BTreeMap<&'static str, &'static str>,
+    /// luu's own copies already downloaded, per kind, by directory name.
+    managed: std::collections::BTreeMap<&'static str, Vec<String>>,
+    /// Where they go.
+    root: Option<String>,
+    installs: Vec<crate::engines::Install>,
+}
+
+const KINDS: [crate::provider::EngineKind; 3] = [
+    crate::provider::EngineKind::Llama,
+    crate::provider::EngineKind::Mlx,
+    crate::provider::EngineKind::Ollama,
+];
+
+async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::provider::ConfigError> {
+    let (config, path) = crate::provider::Config::load()?;
+    let supervisor = &state.app.engines;
+    let mut engines = std::collections::BTreeMap::new();
+    for (name, engine) in config.engines() {
+        let (resolved, problem) = match crate::engines::resolve_binary(engine) {
+            Ok(path) => (Some(path.display().to_string()), None),
+            Err(problem) => (None, Some(problem)),
+        };
+        engines.insert(
+            name.clone(),
+            EngineView {
+                status: supervisor.status(name, engine).await,
+                url: engine
+                    .kind
+                    .url(engine.port.unwrap_or(engine.kind.default_port())),
+                providers: config
+                    .profiles()
+                    .iter()
+                    .filter(|(_, p)| p.engine.as_deref() == Some(name))
+                    .map(|(n, _)| n.clone())
+                    .collect(),
+                config: engine.clone(),
+                resolved,
+                problem,
+            },
+        );
+    }
+    let root = crate::engines::root();
+    Ok(EnginesView {
+        path: path
+            .or_else(crate::provider::Config::path_for_writing)
+            .map(|path| path.display().to_string()),
+        editable: state.providers_editable,
+        refused: (!state.providers_editable).then(|| {
+            "this server is bound off loopback, and an engine is a process started on this \
+             machine. Edit config.toml on the machine itself."
+                .to_string()
+        }),
+        engines,
+        found: KINDS
+            .iter()
+            .map(|kind| {
+                let found = crate::engines::discover(*kind)
+                    .into_iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                (kind.as_str(), found)
+            })
+            .collect(),
+        pinned: KINDS.iter().map(|k| (k.as_str(), k.pinned())).collect(),
+        managed: KINDS
+            .iter()
+            .map(|kind| {
+                let mut copies: Vec<String> = root
+                    .as_ref()
+                    .and_then(|root| std::fs::read_dir(root.join(kind.as_str())).ok())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|e| e.path().is_dir())
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .filter(|name| !name.starts_with('.'))
+                    .collect();
+                copies.sort();
+                (kind.as_str(), copies)
+            })
+            .collect(),
+        root: root.map(|root| root.display().to_string()),
+        installs: supervisor.installs(),
+    })
+}
+
+async fn engines_answer(state: &AppRouterState) -> Response {
+    match engines_view(state).await {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    }
+}
+
+/// Every model on this machine, from ollama, llama.cpp, Hugging Face and luu's
+/// own directory. See `crate::models`.
+async fn get_models() -> Response {
+    #[derive(serde::Serialize)]
+    struct Entry {
+        #[serde(flatten)]
+        model: crate::models::LocalModel,
+        /// Engine kind → why it cannot load this, for each one that cannot:
+        /// the rule stays in `models::LocalModel::runs_on`, not in the page.
+        cannot: std::collections::BTreeMap<&'static str, String>,
+    }
+    #[derive(serde::Serialize)]
+    struct Catalog {
+        models: Vec<Entry>,
+        roots: std::collections::BTreeMap<&'static str, Option<String>>,
+    }
+    let models = tokio::task::spawn_blocking(crate::models::catalog)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|model| Entry {
+            cannot: KINDS
+                .iter()
+                .filter_map(|kind| Some((kind.as_str(), model.runs_on(*kind).err()?)))
+                .collect(),
+            model,
+        })
+        .collect();
+    let roots = [
+        crate::models::Source::Ollama,
+        crate::models::Source::LlamaCpp,
+        crate::models::Source::HuggingFace,
+        crate::models::Source::Luu,
+    ]
+    .into_iter()
+    .map(|s| {
+        (
+            s.as_str(),
+            crate::models::root(s).map(|p| p.display().to_string()),
+        )
+    })
+    .collect();
+    Json(Catalog { models, roots }).into_response()
+}
+
+async fn get_engines(State(state): State<AppRouterState>) -> Response {
+    engines_answer(&state).await
+}
+
+#[derive(serde::Deserialize)]
+struct EnginesAsk {
+    engines: std::collections::BTreeMap<String, crate::provider::Engine>,
+}
+
+/// Replaces `[engine.*]`, and only if the file still loads — a profile whose
+/// `engine` would name a table this removes is refused by the loader.
+async fn put_engines(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<EnginesAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let Some(path) = crate::provider::Config::path_for_writing() else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match crate::provider::Config::load() {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    for (name, engine) in &asked.engines {
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("`{name}` is not an engine name: letters, digits, `-` and `_`"),
+            )
+                .into_response();
+        }
+        // The page may name only the kind's own binary; a path the file
+        // already had is kept as it was, whoever wrote it.
+        if let Some(binary) = &engine.binary {
+            let kept = current.engines().get(name).and_then(|e| e.binary.as_ref()) == Some(binary);
+            if !kept && !crate::engines::accepts_from_page(engine.kind, binary) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!(
+                        "{binary} is not a {}: from this page an engine runs only its own \
+                         binary. Any other path is written in config.toml by hand.",
+                        engine.kind.binary_name()
+                    ),
+                )
+                    .into_response();
+            }
+        }
+    }
+    let removed: Vec<String> = current
+        .engines()
+        .keys()
+        .filter(|name| !asked.engines.contains_key(*name))
+        .cloned()
+        .collect();
+    if let Err(error) = current.with_engines(asked.engines).write(&path) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    for name in removed {
+        state.app.engines.stop(&name).await;
+    }
+    engines_answer(&state).await
+}
+
+/// Starts one without waiting for it: the page polls, and shows its output
+/// while it loads. A port something else already answers on is refused,
+/// because a second server there would fail to bind and say so less clearly.
+async fn start_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    // Required, and empty: a JSON body is what a cross-site form cannot send
+    // without a preflight this server never answers.
+    Json(_): Json<serde_json::Value>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let engine = match crate::provider::Config::load() {
+        Ok((config, _)) => config.engines().get(&name).cloned(),
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let Some(engine) = engine else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("there is no [engine.{name}]"),
+        )
+            .into_response();
+    };
+    let status = state.app.engines.status(&name, &engine).await;
+    if status.answering && status.state != "running" {
+        let port = engine.port.unwrap_or(engine.kind.default_port());
+        return (
+            StatusCode::CONFLICT,
+            format!("something already answers on port {port}, and it is not one luu started"),
+        )
+            .into_response();
+    }
+    if let Err(error) = state.app.engines.start(&name, &engine).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    engines_answer(&state).await
+}
+
+async fn stop_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(name): Path<String>,
+    Json(_): Json<serde_json::Value>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    state.app.engines.stop(&name).await;
+    engines_answer(&state).await
+}
+
+#[derive(serde::Deserialize)]
+struct InstallAsk {
+    kind: crate::provider::EngineKind,
+    version: Option<String>,
+    variant: Option<String>,
+}
+
+async fn install_engine(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<InstallAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let blank = |v: Option<String>| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    if let Err(error) =
+        state
+            .app
+            .engines
+            .install(asked.kind, blank(asked.version), blank(asked.variant))
+    {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error).into_response();
+    }
+    engines_answer(&state).await
+}
+
 /// The providers file, as the editor sees it.
 #[derive(serde::Serialize)]
 struct ProvidersView {
@@ -3327,12 +3763,26 @@ struct ProvidersView {
     /// longer be: the file can be edited while a server that resolved hours ago
     /// keeps sending where it was pointed.
     running: Option<String>,
+    /// Whether the live session follows the file's default. See
+    /// [`Settings::follows_default`].
+    follows: bool,
+    /// Why the live session is not on the file's default when it follows it:
+    /// a turn in flight, or turns already sent to the old one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waiting: Option<String>,
 }
 
 async fn providers_view(
     state: &AppRouterState,
 ) -> Result<ProvidersView, crate::provider::ConfigError> {
     let (config, path) = crate::provider::Config::load()?;
+    let (running, follows) = {
+        let destination = state.app.destination().await;
+        (
+            destination.settings.profile.clone(),
+            destination.settings.follows_default,
+        )
+    };
     Ok(ProvidersView {
         path: path
             .or_else(crate::provider::Config::path_for_writing)
@@ -3349,7 +3799,26 @@ async fn providers_view(
         },
         default: config.default_name().map(str::to_string),
         providers: config.profiles().clone(),
-        running: state.app.destination().await.settings.profile.clone(),
+        running: running.clone(),
+        follows,
+        waiting: match follows && running.as_deref() != config.default_name() {
+            false => None,
+            true => {
+                let session = state.app.session.lock().await;
+                Some(
+                    match session.current.is_some() || session.pending.is_some() {
+                        true => "a turn is running; it moves to the default when you start a new \
+                             session"
+                            .to_string(),
+                        false => format!(
+                            "the live session has {} turn(s) on the previous destination, and moving \
+                         a conversation to another model is a choice rather than a side effect",
+                            session.next_turn.saturating_sub(1)
+                        ),
+                    },
+                )
+            }
+        },
     })
 }
 
@@ -3382,6 +3851,22 @@ struct ProviderModels {
     suggested: Option<String>,
     /// Where that suggestion came from, so the page can say.
     suggested_from: Option<&'static str>,
+    /// What to show for each model: `qwen2.5-coder:7b (ollama)`. Where a name
+    /// is absent the page shows the name itself.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    labels: std::collections::BTreeMap<String, String>,
+    /// Models on this machine the provider's engine cannot load, with why:
+    /// shown greyed out rather than hidden, so a model that is on the disk
+    /// does not look missing. See `models::LocalModel::runs_on`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unavailable: Vec<Unavailable>,
+}
+
+#[derive(serde::Serialize)]
+struct Unavailable {
+    model: String,
+    label: String,
+    reason: String,
 }
 
 /// The models one profile offers. Reaches the destination — see the record.
@@ -3414,9 +3899,64 @@ async fn get_provider_models(
         }
     };
 
-    let (models, reason) = match backend.models().await {
-        Ok(models) => (models, None),
-        Err(error) => (Vec::new(), Some(error.to_string())),
+    // A llama.cpp or mlx engine serves the one model it was started on, so
+    // asking it would list one. What it *can* serve is every model on the
+    // machine it loads — and a session that picks another restarts it there
+    // (`engines::for_run`) — so that is the list, the engine's own model
+    // first, and the ones it cannot load beside it, greyed, with why.
+    let local_engine = resolved
+        .engine
+        .as_ref()
+        .filter(|(_, e)| e.kind != crate::provider::EngineKind::Ollama)
+        .map(|(_, e)| e.clone());
+    let mut labels = std::collections::BTreeMap::new();
+    let mut unavailable = Vec::new();
+    let (models, reason) = match &local_engine {
+        Some(engine) => {
+            let catalog = tokio::task::spawn_blocking(crate::models::catalog)
+                .await
+                .unwrap_or_default();
+            let mut models: Vec<String> = Vec::new();
+            if let Some(own) = &engine.model {
+                models.push(own.clone());
+                labels.insert(own.clone(), crate::models::label(own));
+            }
+            for model in catalog {
+                match model.runs_on(engine.kind) {
+                    Ok(()) => {
+                        if !models.contains(&model.reference) {
+                            models.push(model.reference.clone());
+                        }
+                        labels.insert(model.reference, model.label);
+                    }
+                    Err(reason) => unavailable.push(Unavailable {
+                        model: model.reference,
+                        label: model.label,
+                        reason,
+                    }),
+                }
+            }
+            let reason = models.is_empty().then(|| {
+                format!(
+                    "no model this {} engine loads in ollama, llama.cpp, Hugging Face or luu's \
+                     own models directory",
+                    engine.kind.as_str()
+                )
+            });
+            (models, reason)
+        }
+        None => match backend.models().await {
+            Ok(models) => {
+                // Named by where they came from, the way the catalog is.
+                if resolved.kind == crate::provider::BackendKind::Ollama {
+                    for model in &models {
+                        labels.insert(model.clone(), format!("{model} (ollama)"));
+                    }
+                }
+                (models, None)
+            }
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        },
     };
 
     // Last used with *this profile*, then what the profile itself says, then
@@ -3443,6 +3983,8 @@ async fn get_provider_models(
         reason,
         suggested,
         suggested_from,
+        labels,
+        unavailable,
     })
     .into_response()
 }
@@ -3523,10 +4065,51 @@ async fn put_providers(
         )
             .into_response();
     }
+    follow_the_default(&state, config.default_name()).await;
     match providers_view(&state).await {
         Ok(view) => Json(view).into_response(),
         Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     }
+}
+
+/// Stops the engines this server started that the live session's destination
+/// does not use: a session that moved elsewhere should not leave a model
+/// loaded in memory until `serve` exits. See [`crate::engines::Supervisor::stop_others`].
+async fn release_engines(app: &App, profile: Option<&str>) {
+    let keep = profile.and_then(|profile| {
+        crate::provider::Config::load()
+            .ok()?
+            .0
+            .profiles()
+            .get(profile)?
+            .engine
+            .clone()
+    });
+    app.engines.stop_others(keep.as_deref()).await;
+}
+
+/// A new `default`, taken up by the live session without restarting `serve`
+/// — where nobody chose where it sends, nothing is running, and it has no
+/// turns yet. A session *with* turns stays where it is: moving a conversation
+/// to another model is a choice with a header of its own ("Continue here"),
+/// not a side effect of saving a file, and `ProvidersView::waiting` says so.
+async fn follow_the_default(state: &AppRouterState, default: Option<&str>) {
+    let app = &state.app;
+    let current = app.destination().await;
+    if !current.settings.follows_default || current.settings.profile.as_deref() == default {
+        return;
+    }
+    {
+        let session = app.session.lock().await;
+        if session.current.is_some() || session.pending.is_some() || session.next_turn > 1 {
+            return;
+        }
+    }
+    // The same path `POST /api/sessions` with no body takes, which follows the
+    // file for exactly this kind of destination. A failure — an engine that
+    // will not start — leaves the session where it was, and the page reads
+    // `waiting` rather than a refusal of a write that did succeed.
+    let _ = create_session(State(state.clone()), axum::body::Bytes::new()).await;
 }
 
 /// The `[resend]` table, as an editor sees it and as the live session is under.
@@ -4209,6 +4792,16 @@ async fn destination_for(
     {
         resolved.model = model.to_string();
     }
+    // A profile that names an engine is one luu starts: before the backend is
+    // built, and waited for, so the session this creates is one that can
+    // send — on the model it asked for, which for a llama.cpp engine may mean
+    // restarting it on another. After the model override for that reason.
+    if let Some((name, engine)) = crate::engines::for_run(&resolved) {
+        app.engines
+            .ensure(&name, &engine)
+            .await
+            .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error))?;
+    }
     let backend = crate::backend_for(&resolved)
         .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, format!("{error:#}")))?;
     // Written back through the same function the CLI uses, so the page, the
@@ -4258,7 +4851,21 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // Resolved before anything is reset: a session that cannot be pointed
     // anywhere is one that should not have ended the previous one.
     let sending = match (asked.provider.is_some(), asked.model.is_some()) {
-        (false, false) => app.destination().await,
+        // Nothing named: keep what is in place — unless nobody chose that
+        // either, in which case it is the file's default, and the file is read
+        // again so a default written since `serve` started is the one used.
+        // `true` for editable: following the file is not a token holder
+        // picking a destination, which is what that check is about.
+        (false, false) => {
+            let current = app.destination().await;
+            match current.settings.follows_default {
+                false => current,
+                true => match destination_for(app, &current, &asked, true).await {
+                    Ok(next) => Arc::new(next),
+                    Err((status, message)) => return (status, message).into_response(),
+                },
+            }
+        }
         _ => {
             let current = app.destination().await;
             match destination_for(app, &current, &asked, state.providers_editable).await {
@@ -4293,6 +4900,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         Err((status, message)) => return (status, message).into_response(),
     };
     *app.destination.write().await = sending.clone();
+    release_engines(app, sending.settings.profile.as_deref()).await;
     // The previous posture is ended rather than dropped: the thing being ended
     // may be a container, and `kill_on_drop` would get to it eventually. Skipped
     // when the resolver handed back the one already in place, which is what a
@@ -4539,6 +5147,7 @@ async fn resume_session(
 
     // After the fold is rebuilt and before anything runs on it.
     *app.destination.write().await = sending.clone();
+    release_engines(app, sending.settings.profile.as_deref()).await;
     // The posture the session keeps, which is its own. A no-op when the body
     // named nothing — the resolver hands back the agency already in place, so
     // the pointers are equal and nothing is ended.
@@ -4937,6 +5546,7 @@ mod tests {
                     floor: None,
                     store: None,
                     unconfigured: true,
+                    follows_default: true,
                     authority: crate::provider::AuthorityNotes::default(),
                 },
                 authority: crate::provider::AuthorityNotes::default(),
@@ -4962,6 +5572,7 @@ mod tests {
             postures: Default::default(),
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
+            engines: Arc::default(),
             temperature: None,
             seed: None,
             constraint: None,
@@ -5077,6 +5688,7 @@ mod tests {
                 floor: None,
                 store: None,
                 unconfigured: false,
+                follows_default: false,
                 authority: crate::provider::AuthorityNotes::default(),
             },
             authority: crate::provider::AuthorityNotes::default(),
@@ -5373,6 +5985,29 @@ mod tests {
     /// control that reports a change it did not make is the cheap failure here;
     /// the expensive one is rule C, where handing output back can spend the
     /// conversation through the floor.
+    /// What a browser on this machine sends as `Host`, and what a rebinding
+    /// page on another domain does.
+    #[test]
+    fn only_a_loopback_host_may_start_an_engine() {
+        for host in [
+            "127.0.0.1:7878",
+            "localhost:7878",
+            "LOCALHOST",
+            "[::1]:7878",
+            "127.0.0.2",
+        ] {
+            assert!(host_is_loopback(host), "{host}");
+        }
+        for host in [
+            "evil.example:7878",
+            "192.168.1.40:7878",
+            "",
+            "localhost.evil.example",
+        ] {
+            assert!(!host_is_loopback(host), "{host}");
+        }
+    }
+
     #[test]
     fn a_saved_table_moves_a_running_session_only_where_moving_it_is_free() {
         use agent_core::context::{Prune, Repeat, Results};

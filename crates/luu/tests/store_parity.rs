@@ -52,6 +52,9 @@ fn record(name: &str, args: &[&str]) -> Vec<agent_core::record::RecordLine> {
     let path = scratch().join(format!("{name}.jsonl"));
     let status = Command::new(env!("CARGO_BIN_EXE_luu"))
         .current_dir(root())
+        // A state directory of its own, for `edit_reread_probe`'s reason: the
+        // `config.toml` of whoever runs the tests is not this test's input.
+        .env("LUU_HOME", scratch().join("home"))
         .arg("chat")
         .args(args)
         .args(["--mock-delay-ms", "0"])

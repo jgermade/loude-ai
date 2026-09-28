@@ -42,7 +42,13 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
         agency_for: None,
         postures: Default::default(),
         postures_path: None,
-        provider: luu::provider::Resolved::mock(),
+        // `named`: a destination handed to the server, which it keeps. One
+        // nobody chose would follow the `config.toml` of whoever runs the
+        // tests — and start the engine it names.
+        provider: luu::provider::Resolved {
+            named: true,
+            ..luu::provider::Resolved::mock()
+        },
         counter_warning: None,
         approvers: Default::default(),
         backend,

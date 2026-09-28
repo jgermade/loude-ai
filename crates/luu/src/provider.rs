@@ -103,6 +103,67 @@ pub struct Profile {
     /// profile `default` names.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remote: bool,
+    /// An `[engine.<name>]` luu starts before a session sends here. The URL
+    /// stays this profile's own rather than derived from the engine's port, so
+    /// the destination a run prints is still one line of the file. See
+    /// `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+}
+
+/// `[engine.<name>]`: a model server luu is allowed to start, as a child of
+/// `luu serve` that dies with it. See `crate::engines` and
+/// `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
+///
+/// Every key but `kind` is optional, and absent means the kind's own answer:
+/// the binary found on this machine, the pinned version, the usual port.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Engine {
+    pub kind: EngineKind,
+    /// `"managed"` for luu's own copy, a path for that binary, or absent for
+    /// the one found on `PATH` and the usual places.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// The release tag of the managed copy. Absent is the one luu pins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Which build of that release: llama.cpp's `vulkan`, `cuda-12.8`,
+    /// `rocm-10.0`. Absent is the plain CPU/Metal one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// The model a llama.cpp engine loads, as a reference into what this
+    /// machine already has — `ollama:qwen2.5-coder:7b`,
+    /// `huggingface:<org>/<repo>/<file>.gguf` — which luu turns into `-m
+    /// <path>`. A session that picks another moves the engine onto it. See
+    /// `crate::models`. Unused by ollama, which serves every model it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Passed after the ones luu adds (`--host`, `--port`): the model, the
+    /// context, the GPU layers — the half of the command that is the tuning.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Seconds a session waits for it to answer. A guess, and a key so that it
+    /// can be tuned: `-hf` downloads the model on first use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_timeout: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineKind {
+    /// llama.cpp's `llama-server`, spoken to as `openai`.
+    #[default]
+    Llama,
+    /// `ollama serve`, spoken to as `ollama`.
+    Ollama,
+    /// `mlx-serve`, spoken to as `openai`: MLX and safetensors models in
+    /// Hugging Face's layout, and GGUF through the llama.cpp it embeds, on
+    /// Apple Silicon. Chosen over `mlx_lm.server` by measurement — see the
+    /// engines record.
+    Mlx,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -139,6 +200,9 @@ struct File {
     /// `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     authority: Option<AuthorityNotes>,
+    /// `[engine.<name>]`: model servers luu may start. See [`Engine`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    engine: BTreeMap<String, Engine>,
 }
 
 /// `[ui]`. One setting so far.
@@ -297,6 +361,7 @@ pub struct Config {
     ui: Option<Ui>,
     resend: Option<Resend>,
     authority: Option<AuthorityNotes>,
+    engines: BTreeMap<String, Engine>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -346,6 +411,14 @@ pub enum ConfigError {
     NoSuchProfile { path: String, name: String },
     #[error("there is no [posture.{name}] in {path}")]
     NoSuchPosture { path: String, name: String },
+    #[error(
+        "{path}: [provider.{profile}] names engine = \"{engine}\", and there is no [engine.{engine}]"
+    )]
+    NoSuchEngine {
+        path: String,
+        profile: String,
+        engine: String,
+    },
     #[error("-p {name} was named, and this machine has no {file}")]
     NoConfigFile { name: String, file: String },
 }
@@ -389,9 +462,29 @@ impl Config {
             ui: file.ui,
             resend: file.resend,
             authority: file.authority,
+            engines: file.engine,
         };
         config.check_default(path)?;
+        config.check_engines(path)?;
         Ok(config)
+    }
+
+    /// A profile's `engine` names a table that exists. Checked at load rather
+    /// than at the session that would start it, so an editor cannot write a
+    /// file whose failure waits for somebody to pick that provider.
+    fn check_engines(&self, path: &str) -> Result<(), ConfigError> {
+        for (profile, p) in &self.providers {
+            if let Some(engine) = &p.engine
+                && !self.engines.contains_key(engine)
+            {
+                return Err(ConfigError::NoSuchEngine {
+                    path: path.to_string(),
+                    profile: profile.clone(),
+                    engine: engine.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The whole of the load-time rule, and it is about one profile.
@@ -490,6 +583,7 @@ impl Config {
             ui: self.ui.clone(),
             resend: self.resend,
             authority: self.authority.clone(),
+            engine: self.engines.clone(),
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -542,6 +636,7 @@ impl Config {
             ui: self.ui.clone(),
             resend: self.resend,
             authority: self.authority.clone(),
+            engines: self.engines.clone(),
         }
     }
 
@@ -575,6 +670,21 @@ impl Config {
             authority: Some(authority),
             ..self.clone()
         }
+    }
+
+    /// The file as the engines editor hands it back: `[engine.*]`, and
+    /// everything else this config already had, [`Config::with_resend`]'s
+    /// reason.
+    pub fn with_engines(&self, engines: BTreeMap<String, Engine>) -> Self {
+        Self {
+            engines,
+            ..self.clone()
+        }
+    }
+
+    /// Every engine the file names.
+    pub fn engines(&self) -> &BTreeMap<String, Engine> {
+        &self.engines
     }
 
     /// What this machine sets the three rules to, where it says anything.
@@ -668,6 +778,13 @@ pub struct Resolved {
     pub profile: Option<String>,
     /// Whether anything named this destination at all. See [`DestinationFrom`].
     pub destination_from: DestinationFrom,
+    /// The engine this profile starts, and its table, when it names one.
+    pub engine: Option<(String, Engine)>,
+    /// Whether anybody *chose* this: `-p`, or any flag at all, or a provider
+    /// picked for a session. A destination nobody chose is the file's default
+    /// (or the mock with no default), and it follows the file when the file
+    /// changes — a new default is used without restarting `serve`.
+    pub named: bool,
 }
 
 impl Resolved {
@@ -684,6 +801,8 @@ impl Resolved {
             window_from: WindowFrom::Unset,
             profile: None,
             destination_from: DestinationFrom::Default,
+            engine: None,
+            named: false,
         }
     }
 
@@ -777,6 +896,15 @@ pub fn resolve(
             .model
             .map(str::to_string)
             .or(profile.model)
+            // Then the model its engine loads: what the session is on is what
+            // that server holds, and the built-in default would name another.
+            .or_else(|| {
+                config
+                    .engines
+                    .get(profile.engine.as_deref()?)?
+                    .model
+                    .clone()
+            })
             .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         key_file: flags
             .api_key_file
@@ -791,10 +919,30 @@ pub fn resolve(
             (0, Some(_)) => WindowFrom::Profile,
             _ => WindowFrom::Flag,
         },
+        // Only while the URL is still the profile's own: a flag that sent
+        // this run elsewhere is not a reason to start the profile's server.
+        engine: match flag_url.is_none() && flags.backend.is_none_or(|b| Some(b) == profile.backend)
+        {
+            true => profile
+                .engine
+                .as_ref()
+                .and_then(|engine| Some((engine.clone(), config.engines.get(engine)?.clone()))),
+            false => None,
+        },
         profile: name,
         // A flag beats the file here exactly as it does field by field above,
         // and the mock is a destination when somebody typed it.
         destination_from,
+        // Any flag, not only `-p`: a server started with `-m` over the default
+        // was told something the file does not say, and re-reading the file
+        // would quietly drop it.
+        named: flags.provider.is_some()
+            || flags.backend.is_some()
+            || flags.model.is_some()
+            || flags.ollama_url.is_some()
+            || flags.openai_url.is_some()
+            || flags.api_key_file.is_some()
+            || flags.context_limit != 0,
     })
 }
 
@@ -850,6 +998,50 @@ mod tests {
 
     fn config(text: &str) -> Result<Config, ConfigError> {
         Config::from_toml(text, PATH)
+    }
+
+    /// A profile's `engine` names a table the file has, or the file does not
+    /// load; and a profile that names one resolves with it.
+    #[test]
+    fn a_profile_starts_the_engine_it_names() {
+        let error = config("[provider.local]\nbackend = \"openai\"\nengine = \"gone\"\n")
+            .expect_err("an engine nobody wrote down");
+        assert!(matches!(error, ConfigError::NoSuchEngine { .. }));
+
+        let text = "[engine.gemma]\nkind = \"llama\"\nbinary = \"managed\"\nport = 8081\n\
+                    args = [\"-hf\", \"ggml-org/gemma-3-1b-it-GGUF\"]\n\n\
+                    [provider.gemma]\nbackend = \"openai\"\nurl = \"http://127.0.0.1:8081/v1\"\n\
+                    engine = \"gemma\"\n";
+        let resolved = resolved(
+            text,
+            Flags {
+                provider: Some("gemma"),
+                ..Default::default()
+            },
+        );
+        let (name, engine) = resolved.engine.expect("it names one");
+        assert_eq!(name, "gemma");
+        assert_eq!(engine.kind, EngineKind::Llama);
+        assert_eq!(engine.port, Some(8081));
+
+        // A flag that sends the run elsewhere is not a reason to start it.
+        let elsewhere = resolved_with_flag(text);
+        assert!(elsewhere.engine.is_none());
+
+        // And the file round-trips through the writer with the table in it.
+        let written = config(text).unwrap().render().unwrap();
+        assert!(written.contains("[engine.gemma]"), "{written}");
+    }
+
+    fn resolved_with_flag(text: &str) -> Resolved {
+        resolved(
+            text,
+            Flags {
+                provider: Some("gemma"),
+                openai_url: Some("http://127.0.0.1:9999/v1"),
+                ..Default::default()
+            },
+        )
     }
 
     fn resolved(text: &str, flags: Flags<'_>) -> Resolved {

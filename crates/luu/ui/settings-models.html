@@ -7,6 +7,7 @@
   const { state, saveProviders, loadProviders, refreshSettings } = await import("./store.js")
   const { ui, openStarter } = await import("./ui.js")
   const SaveButton = await import("./components/save-button.html")
+  const ProviderForm = await import("./provider-form.html")
 
   // `config` is a *copy* of the providers file: typing into the server's own
   // answer would make an unsaved change look saved. Rows carry an id because a
@@ -34,6 +35,10 @@
       // Carried through untouched. The editor never *invents* this word — the
       // server asks for the host to be typed and only then does it go in.
       remote: !!p.remote,
+      // Also carried through untouched: which `[engine.*]` this profile
+      // starts is written by Settings → Engines, and a table that dropped it
+      // would unlink the two the first time somebody saved a URL.
+      engine: p.engine || "",
     })),
   })
 
@@ -47,6 +52,7 @@
         ...(String(p.contextLimit).trim() ? { "context-limit": Number(p.contextLimit) } : {}),
         ...(p.keyFile.trim() ? { "key-file": p.keyFile.trim() } : {}),
         ...(p.remote ? { remote: true } : {}),
+        ...(p.engine ? { engine: p.engine } : {}),
       }]),
     ),
   })
@@ -63,14 +69,27 @@
   await loadProviders()
   config = toDraft(state.providers)
 
+  // **In place, not a new row.** jq79's keyed `:each` keeps a row's elements
+  // only while its item is the *same object*: rebuilding every row on each
+  // keystroke rebuilt its `<input>` too, and the field being typed in lost the
+  // focus after one letter. The store is deep, so `changes` still follows.
   const edit = (id, field, value) => {
-    config = { ...config, profiles: config.profiles.map(p => p.id === id ? { ...p, [field]: value } : p) }
+    const row = config.profiles.find(p => p.id === id)
+    if (row) row[field] = value
   }
-  const addProfile = () => {
-    config = { ...config, profiles: [...config.profiles, {
-      id: ++rowId, name: "", backend: "ollama", url: "", model: "",
-      contextLimit: "", keyFile: "", remote: false,
-    }] }
+  // A new provider is a form in a modal (`provider-form.html`), which writes
+  // it on its own and hands the name back. It is merged into the draft rather
+  // than the draft being rebuilt from the file, so an edit half-made in the
+  // table survives somebody adding a provider beside it.
+  let adding = false
+  const added = async (name, isDefault) => {
+    refreshSettings()
+    const [row] = toDraft({ providers: { [name]: state.providers?.providers?.[name] || {} } }).profiles
+    config = {
+      ...config,
+      profiles: [...config.profiles, row],
+      default: isDefault ? name : config.default,
+    }
   }
   const removeProfile = id => {
     const gone = config.profiles.find(p => p.id === id)
@@ -95,6 +114,8 @@
       : config)
     const result = await saveProviders(body)
     saving = false
+    // What the live session sends to may have moved with the file.
+    await refreshSettings()
     if (result.ok) {
       config = toDraft(state.providers)
       declaration = null
@@ -107,6 +128,12 @@
   }
 
   $: profileNames = Object.keys(state.providers?.providers || {})
+  $: takenNames = (config?.profiles || []).map(p => p.name.trim()).filter(Boolean)
+  // The built-in mock is not a profile and was never a row, so a server that
+  // fell back to it showed a table with nothing chosen while the mock answered
+  // every turn. It is a row now: "no default" in the file *is* the mock, and
+  // choosing it writes exactly that.
+  $: runningMock = !state.providers?.running && state.settings?.backend === "mock"
   $: editable = !!state.providers?.editable
   // How many profiles the draft adds, removes or edits, plus one if the default
   // moved. Compared as what would be written, so a row with no name, which the
@@ -136,15 +163,17 @@
   <p>
     There is no provider in <code>config.toml</code> and no destination was
     typed on the command line, so this server fell back to the mock — which
-    answers in sentences and is nowhere. Write one below, then start a
+    answers in sentences and is nowhere. Add one below, then start a
     session on it.
   </p>
 </div>
 
-<h3>What this server is running</h3>
+<h3>What the live session sends to</h3>
 <p class="dim small">
-  Resolved when it started and fixed for its lifetime. Editing the providers
-  below changes what the <em>next</em> run reads, not this one.
+  No restart to change it. <strong>use →</strong> on a provider moves this
+  session there, with its history or without. A new <em>default</em> is taken
+  up at once while the session has no turns and nobody chose where it sends
+  (<code>-p</code> or a flag on the command line is a choice, and is kept).
 </p>
 
 <dl class="settings" :if="state.settings">
@@ -211,7 +240,15 @@
 <h3>Providers</h3>
 <p class="dim small" :if="state.providers?.path">
   {{ state.providers.path }}
-  <span :if="state.providers.running">· this server is running <strong>{{ state.providers.running }}</strong></span>
+  <span :if="state.providers.running">· the live session is on <strong>{{ state.providers.running }}</strong></span>
+</p>
+<!-- The file's default moved and the live session did not: the server says
+     why, and the one button is the one that moves it by choice. -->
+<p :if="state.providers?.waiting" class="refused">
+  The default is <strong>{{ state.providers.default || "the mock" }}</strong> and the
+  live session stayed where it was: {{ state.providers.waiting }}.
+  <button type="button" class="link" :if="state.providers.default"
+          @click="openStarter(state.providers.default)">move it →</button>
 </p>
 <p :if="state.providers && !state.providers.editable" class="refused">
   {{ state.providers.refused }}
@@ -226,6 +263,22 @@
     </tr>
   </thead>
   <tbody>
+    <tr class="builtin">
+      <td>
+        <input type="radio" name="default" :disabled="!editable"
+               :checked="!config.default"
+               @change="chooseDefault('')">
+      </td>
+      <td>mock</td>
+      <td>mock</td>
+      <td colspan="4" class="dim">
+        built in — what a run with no default falls back to. It answers in
+        sentences and sends nowhere.
+      </td>
+      <td>
+        <span :if="runningMock" class="tag" title="What this server is sending to">running</span>
+      </td>
+    </tr>
     <tr :each="row in config?.profiles || []" :key="row.id">
       <td>
         <input type="radio" name="default" :disabled="!editable || !row.name"
@@ -257,7 +310,11 @@
                @input="edit(row.id, 'keyFile', $event.target.value)">
       </td>
       <td>
+        <span :if="row.name && row.name === state.providers?.running" class="tag"
+              title="What this server is sending to">running</span>
         <span :if="row.remote" class="tag warn" title="Declared as off this machine">remote</span>
+        <span :if="row.engine" class="tag"
+              :attrs="{ title: `luu starts [engine.${row.engine}] before a session sends here` }">engine</span>
         <!-- Only for a profile that is in the file: this starts a session
              against what the server can resolve, not against an unsaved
              row. -->
@@ -283,18 +340,21 @@
       it is about to become the default — so every run that names no provider
       goes there. Type the host to confirm.
     </p>
-    <input :value="typed" placeholder="{{ declaration.host }}"
+    <input :value="typed" :attrs="{ placeholder: declaration.host }"
            @input="typed = $event.target.value">
     <button type="button" :disabled="!canDeclare || saving"
             @click="saveConfig(true)">Confirm and save</button>
   </div>
 
   <div class="modal-actions" :if="config">
-    <button type="button" class="add" :disabled="!editable" @click="addProfile()">+ profile</button>
+    <button type="button" class="add" :disabled="!editable" @click="adding = true">+ provider</button>
     <SaveButton :action="() => saveConfig(false)" :changes="changes" :disabled="!editable" />
   </div>
 </div>
 
+<ProviderForm :if="adding" :taken="takenNames" :added="added" :close="() => { adding = false }" />
+
 <style scoped>
   h3:first-child { margin-top: 0; }
+  .builtin td { color: var(--dim); }
 </style>

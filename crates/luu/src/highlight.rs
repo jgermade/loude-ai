@@ -88,8 +88,8 @@ fn class_of(index: usize) -> Option<&'static str> {
 /// Separate from the table below on purpose: this half is a fact about
 /// filenames and changes when somebody adds an extension, that half is a fact
 /// about crates and changes when somebody adds a grammar. A name with no entry
-/// in the table — `dockerfile`, today — simply has no grammar, and the file is
-/// served as text.
+/// in the table simply has no grammar, and the file is served as text — which
+/// is what `Dockerfile` was, and `Makefile` was not even asked about.
 fn language_of(path: &str) -> Option<&'static str> {
     let name = path.rsplit('/').next().unwrap_or(path);
     let ext = name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
@@ -99,6 +99,7 @@ fn language_of(path: &str) -> Option<&'static str> {
     let key = match name {
         "Cargo.lock" => "toml",
         "Dockerfile" | "Containerfile" => "dockerfile",
+        "Makefile" | "makefile" | "GNUmakefile" => "make",
         _ => ext,
     };
 
@@ -118,6 +119,8 @@ fn language_of(path: &str) -> Option<&'static str> {
         "cc" | "cpp" | "cxx" | "hpp" | "hh" => "cpp",
         "yaml" | "yml" => "yaml",
         "sh" | "bash" | "zsh" => "bash",
+        "dockerfile" | "containerfile" => "dockerfile",
+        "mk" | "make" => "make",
         _ => return None,
     })
 }
@@ -278,6 +281,34 @@ static GRAMMARS: LazyLock<HashMap<&'static str, HighlightConfiguration>> = LazyL
         "",
         "",
     );
+    // Its `RUN` bodies and heredocs are handed to `bash`, `json`, `yaml` and
+    // `toml` by the crate's own injections.
+    add(
+        "dockerfile",
+        tree_sitter_containerfile::LANGUAGE.into(),
+        tree_sitter_containerfile::HIGHLIGHTS_QUERY,
+        tree_sitter_containerfile::INJECTIONS_QUERY,
+        "",
+    );
+    // The crate's query speaks Neovim's older names — `@conditional`,
+    // `@include`, `@repeat`, `@exception` — none of which [`NAMES`] lists, so
+    // alone `ifeq` and `include` came back plain and a target was not told
+    // apart from its prerequisites. These go *last*: where two patterns
+    // capture the same node, this version of `tree_sitter_highlight` keeps the
+    // later one — first, they lost to `@include` and `@conditional`.
+    let make = format!(
+        "{}\n{}",
+        tree_sitter_make::HIGHLIGHTS_QUERY,
+        r#"
+[
+ "ifeq" "ifneq" "ifdef" "ifndef" "else" "endif"
+ "include" "sinclude" "-include"
+ "if" "or" "and" "foreach" "error" "warning" "info"
+] @keyword
+(targets (word) @function)
+"#,
+    );
+    add("make", tree_sitter_make::LANGUAGE.into(), &make, "", "");
     grammars
 });
 
@@ -634,6 +665,24 @@ mod tests {
         assert_eq!(kind_of(&lines, "const"), Some("keyword"));
     }
 
+    /// Neither has an extension, so both are found by name.
+    #[test]
+    fn a_containerfile_and_a_makefile_are_found_by_name() {
+        let source = "FROM rust:1 AS build\nRUN cargo build --release\n";
+        for name in ["Containerfile", "Dockerfile", "a/app.dockerfile"] {
+            let (lang, lines) = lines(name, source);
+            assert_eq!(lang, Some("dockerfile"), "{name}");
+            assert_eq!(kind_of(&lines, "FROM"), Some("keyword"), "{name}");
+        }
+        let source = "include x.mk\nCC ?= cc\n\nbuild: main.c\n\t$(CC) -o main main.c\n";
+        for name in ["Makefile", "GNUmakefile", "a/rules.mk"] {
+            let (lang, lines) = lines(name, source);
+            assert_eq!(lang, Some("make"), "{name}");
+            assert_eq!(kind_of(&lines, "include"), Some("keyword"), "{name}");
+            assert_eq!(kind_of(&lines, "build"), Some("function"), "{name}");
+        }
+    }
+
     /// A grammar whose query fails to compile is dropped silently, by design,
     /// so this is the only place that notices one did.
     #[test]
@@ -655,6 +704,8 @@ mod tests {
             "cpp",
             "yaml",
             "bash",
+            "dockerfile",
+            "make",
         ] {
             assert!(GRAMMARS.contains_key(name), "`{name}` did not compile");
         }

@@ -121,15 +121,31 @@ cargo run --bin luu -- serve --no-store
 # (files, git, the context panel), the content, and the chat. Below 1260px it is
 # two, and the second column toggles between content and chat from its own head.
 # The content column keeps one tab per open thing — a file, a diff, a prompt —
-# and the chat names its session instead of spending a row on tabs.
+# and a single click opens a preview tab (italic) the next click replaces; a
+# double click keeps it. The chat names its session instead of spending a row
+# on tabs.
 # On a first visit it asks which folder to look at: a subdirectory of the one
 # `serve` was started in, which is the ceiling and is not negotiable from the
 # browser. Settings has sections down the side — General (theme, editor, layout,
-# files, folder) and Models — and everything in General a person can *change* is
-# kept in `localStorage`, because it is a fact about the screen rather than about
-# the run. Files is the exception and is read-only: it names the icon theme that
+# files, folder), Models, Engines, Resend and Authority — and everything in
+# General a person can *change* is kept in `localStorage`, because it is a fact
+# about the screen rather than about the run. Files is the exception and is read-only: it names the icon theme that
 # drew the tree, or says the two shapes are a fallback and names the key below
 # that replaces them.
+#
+# Engines are model servers luu starts: `[engine.<name>]` in config.toml
+# (llama-server, mlx-serve or ollama; a binary found here, a path, or luu's own
+# copy of an official release, checked against GitHub's sha256), started when a session on
+# a profile with `engine = "<name>"` needs it and stopped with `serve`:
+#
+#   [engine.gemma]
+#   kind = "llama"
+#   binary = "managed"
+#   model = "ollama:qwen2.5-coder:7b"   # any GGUF from ollama, llama.cpp,
+#                                       # Hugging Face or <state dir>/models
+#
+# Downloading luu's copy, starting it, switching its model when the chat picks
+# another, and stopping it when no session uses it are all automatic.
 #
 # Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed

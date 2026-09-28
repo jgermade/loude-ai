@@ -69,7 +69,8 @@
       type="button"
       class="row"
       :attrs="{ title: row.path }"
-      @click="row.dir ? toggleDir(row.path) : showFile(row.path)">
+      @click="row.dir ? toggleDir(row.path) : showFile(row.path)"
+      @dblclick="row.dir || showFile(row.path, { pinned: true })">
       <span class="twist">
         <svg :if="row.dir" class="ic" :class.open="row.open"><use href="#i-caret"/></svg>
       </span>
@@ -94,7 +95,7 @@
       type="button"
       class="edit"
       :attrs="{ title: `Edit ${row.name}` }"
-      @click="showFile(row.path)">
+      @click="showFile(row.path, { pinned: true })">
       <svg class="ic"><use href="#i-edit"/></svg>
     </button>
   </li>

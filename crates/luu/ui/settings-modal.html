@@ -16,6 +16,7 @@
 
   const SettingsGeneral = await import("./settings-general.html")
   const SettingsModels = await import("./settings-models.html")
+  const SettingsEngines = await import("./settings-engines.html")
   const SettingsResend = await import("./settings-resend.html")
   const SettingsAuthority = await import("./settings-authority.html")
   const Rail = await import("./components/rail.html")
@@ -23,6 +24,7 @@
   const SECTIONS = [
     { value: "general", label: "General", icon: "i-sliders" },
     { value: "models", label: "Models", icon: "i-server" },
+    { value: "engines", label: "Engines", icon: "i-chip" },
     { value: "resend", label: "Resend", icon: "i-repeat" },
     { value: "authority", label: "Authority", icon: "i-chat" },
   ]
@@ -55,6 +57,7 @@
     <section class="modal-body pane">
       <SettingsGeneral :if="ui.section === 'general'" />
       <SettingsModels :if="ui.section === 'models'" />
+      <SettingsEngines :if="ui.section === 'engines'" />
       <SettingsResend :if="ui.section === 'resend'" />
       <SettingsAuthority :if="ui.section === 'authority'" />
     </section>

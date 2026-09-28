@@ -55,7 +55,8 @@
       class="row"
       :class.on="picked?.path === change.path"
       :attrs="{ title: change.path }"
-      @click="showDiff(change.path, change.staged && !change.unstaged)">
+      @click="showDiff(change.path, change.staged && !change.unstaged)"
+      @dblclick="showDiff(change.path, change.staged && !change.unstaged, { pinned: true })">
       <span class="code" :class.new="change.untracked">{{ change.code }}</span>
       <span class="name">{{ change.name }}</span>
       <span :if="change.dir" class="where dim">{{ change.dir }}</span>

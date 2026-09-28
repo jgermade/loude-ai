@@ -33,9 +33,11 @@ use anyhow::{Context, Result};
 
 pub mod auth;
 pub mod config;
+pub mod engines;
 pub mod export;
 pub mod highlight;
 pub mod icons;
+pub mod models;
 pub mod provider;
 pub mod secret;
 pub mod serve;
@@ -1405,6 +1407,27 @@ struct ModelArgs<'a> {
 /// callers assembling a backend out of the same flags is how the three drift
 /// apart, and the file they now all read can only move them together. It hands
 /// back the window as well, because a profile may have supplied it.
+/// The `[engine.*]` a profile names, started and answering before a run sends
+/// — what `serve` does per session, done once for `chat` and `stdio`. `None`
+/// where the profile names none. The returned handle is the server's life:
+/// dropping it stops what it started, and a server something else already runs
+/// on that port is used and left alone. See
+/// `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
+async fn engine_for(
+    resolved: &provider::Resolved,
+) -> Result<Option<std::sync::Arc<engines::Supervisor>>> {
+    let Some((name, engine)) = engines::for_run(resolved) else {
+        return Ok(None);
+    };
+    let supervisor = std::sync::Arc::new(engines::Supervisor::default());
+    eprintln!("engine: {name} ({})", engine.kind.as_str());
+    supervisor
+        .ensure(&name, &engine)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?;
+    Ok(Some(supervisor))
+}
+
 fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resolved)> {
     let (config, path) = provider::Config::load()?;
     let resolved = provider::resolve(
@@ -2294,6 +2317,8 @@ pub async fn run() -> Result<()> {
             mock_replies,
             mock_cycle,
         })?;
+        // Held for as long as the protocol runs, and stopped with it.
+        let _engine = engine_for(&resolved).await?;
         let model = resolved.model.clone();
         let context_limit = resolved.context_limit;
         let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
@@ -2423,6 +2448,8 @@ pub async fn run() -> Result<()> {
         mock_replies,
         mock_cycle,
     })?;
+    // Held until the run ends: dropping it stops the server it started.
+    let _engine = engine_for(&resolved).await?;
     let model = resolved.model.clone();
     let context_limit = resolved.context_limit;
     let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;

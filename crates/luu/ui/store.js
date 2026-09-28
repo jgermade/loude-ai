@@ -227,6 +227,9 @@ function onProtocol(message) {
       if (!isReplay) {
         refreshLiveSession()
         refreshSessionsList()
+        // The destination may have moved under the page — a new default the
+        // server followed, or another tab's switch.
+        refreshSettings()
       }
       break
 

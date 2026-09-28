@@ -1,7 +1,7 @@
 // @ts-check
 import { expect, test } from "@playwright/test"
 import { spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -55,6 +55,25 @@ test.beforeAll(async () => {
     join(home, "config.toml"),
     '[provider.here]\nbackend = "mock"\nmodel = "mock"\n',
   )
+  // Three models, one per kind of store the catalog reads, and an MLX one
+  // llama.cpp cannot load. Four bytes of GGUF magic is all a listing reads.
+  const manifest = (dir, layers) => {
+    mkdirSync(dirname(dir), { recursive: true })
+    writeFileSync(dir, JSON.stringify({ layers }))
+  }
+  const ollama = join(home, "stores/ollama")
+  manifest(join(ollama, "manifests/registry.ollama.ai/library/tiny/1b"), [
+    { mediaType: "application/vnd.ollama.image.model", digest: "sha256:aaa", size: 4 },
+  ])
+  manifest(join(ollama, "manifests/registry.ollama.ai/library/big/27b-mlx"), [
+    { mediaType: "application/vnd.ollama.image.tensor", digest: "sha256:bbb", size: 4 },
+  ])
+  mkdirSync(join(ollama, "blobs"), { recursive: true })
+  writeFileSync(join(ollama, "blobs/sha256-aaa"), "GGUF")
+  const snapshot = join(home, "stores/hub/models--org--small-GGUF/snapshots/abc")
+  mkdirSync(snapshot, { recursive: true })
+  writeFileSync(join(snapshot, "small-Q4_K_M.gguf"), "GGUF")
+
   server = spawn(
     binary(),
     [
@@ -62,7 +81,19 @@ test.beforeAll(async () => {
       "--bind", `127.0.0.1:${PORT}`,
       "--mock-delay-ms", "0",
     ],
-    { cwd: root, env: { ...process.env, LUU_HOME: home }, stdio: "pipe" },
+    {
+      cwd: root,
+      // The model stores too, each where the tool's own variable points: the
+      // catalog would otherwise list the models of whoever runs the suite.
+      env: {
+        ...process.env,
+        LUU_HOME: home,
+        OLLAMA_MODELS: join(home, "stores/ollama"),
+        HF_HUB_CACHE: join(home, "stores/hub"),
+        LLAMA_CACHE: join(home, "stores/llama.cpp"),
+      },
+      stdio: "pipe",
+    },
   )
   let output = ""
   server.stdout?.on("data", chunk => (output += chunk))
@@ -325,4 +356,305 @@ test("an icon theme is imported from a picked folder and drawn at once", async (
 
   rmSync(dirname(picked), { recursive: true, force: true })
   expect(errors).toEqual([])
+})
+
+/**
+ * Settings → Models: the built-in mock is a row and shows as chosen when the
+ * server fell back to it, and a provider is added through a form of its own
+ * rather than an empty row in the table.
+ */
+test("the mock a server fell back to is chosen, and a provider is added in a modal", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await chooseFolder(page)
+
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
+
+  // No default in the file: the mock is what this server runs, and the table
+  // says so instead of showing nothing chosen.
+  const builtin = page.locator(".modal table.providers tr.builtin")
+  await expect(builtin.locator('input[type="radio"]')).toBeChecked()
+  await expect(builtin.locator(".tag")).toHaveText("running")
+
+  await page.locator('.modal button.add:has-text("+ provider")').click()
+  const form = page.locator("#provider-dialog")
+  await expect(form).toBeVisible()
+  // A name the table already has is refused before it is sent.
+  await form.locator("dd input").first().fill("here")
+  await expect(form.locator(".warn")).toContainText("already a provider")
+  await expect(form.locator("button.save")).toBeDisabled()
+
+  await form.locator("dd input").first().fill("local")
+  await form.locator("select").selectOption("openai")
+  await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill("http://127.0.0.1:8081/v1")
+  await form.locator('input[placeholder="qwen2.5-coder:7b"]').fill("tiny")
+  await form.locator("button.save").click()
+  await expect(form).toHaveCount(0)
+
+  // Written on its own, and in the table without a second save.
+  const onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain("[provider.local]")
+  expect(onDisk).toContain('url = "http://127.0.0.1:8081/v1"')
+  expect(onDisk).toContain("[provider.here]")
+  const names = page.locator(".modal table.providers input.w-name")
+  await expect(names).toHaveCount(2)
+  await expect(names.nth(1)).toHaveValue("local")
+  await expect(page.locator(".modal button.save .count")).toHaveCount(0)
+  // Not asked to be the default, so the mock still is.
+  await expect(builtin.locator('input[type="radio"]')).toBeChecked()
+
+  // A field in the table keeps the focus while it is typed in. Every keystroke
+  // used to rebuild the row, and its input with it, so the second letter went
+  // nowhere.
+  const model = page.locator(".modal table.providers input.w-model").nth(1)
+  await model.click()
+  await page.keyboard.press("End")
+  await page.keyboard.type("-q4")
+  await expect(model).toHaveValue("tiny-q4")
+  await expect(model).toBeFocused()
+  await expect(page.locator(".modal button.save .count")).toHaveText("1")
+
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
+
+  expect(errors).toEqual([])
+})
+
+/**
+ * Settings → Engines: a model server luu starts. No download here — the suite
+ * does not reach the network — so the binary is a stand-in named
+ * `llama-server` that serves HTTP on the port luu hands it, which is enough to
+ * see it written, started, heard from and stopped. See
+ * `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
+ */
+test("an engine is added with its provider, started, and stopped from Settings", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  // `--host 127.0.0.1 --port <port>` is what luu passes first, so the port is $4.
+  const bin = join(home, "bin")
+  mkdirSync(bin, { recursive: true })
+  const fake = join(bin, "llama-server")
+  writeFileSync(fake, '#!/bin/sh\necho "stand-in on $4"\nexec python3 -m http.server --bind 127.0.0.1 "$4"\n')
+  chmodSync(fake, 0o755)
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await chooseFolder(page)
+
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Engines")')
+  await expect(page.locator("#engines-pane")).toContainText("None yet")
+
+  await page.locator('#engines-pane button.add:has-text("+ engine")').click()
+  const form = page.locator("#engine-dialog")
+  await expect(form).toBeVisible()
+  await form.locator("dd input").first().fill("fake")
+  await form.locator("select").nth(1).selectOption("custom")
+
+  // Only the kind's own binary, from here.
+  const path = form.locator('input[placeholder$="/llama-server"]')
+  await path.fill("/bin/sh")
+  await expect(form.locator(".warn", { hasText: "must be a file named" })).toBeVisible()
+  await expect(form.locator("button.save")).toBeDisabled()
+  await path.fill(fake)
+  await form.locator('input[placeholder="8080"]').fill("8097")
+  await form.locator("button.save").click()
+  await expect(form).toHaveCount(0)
+
+  const onDisk = readFileSync(join(home, "config.toml"), "utf8")
+  expect(onDisk).toContain("[engine.fake]")
+  expect(onDisk).toContain("port = 8097")
+  expect(onDisk).toContain("[provider.fake]")
+  expect(onDisk).toContain('url = "http://127.0.0.1:8097/v1"')
+  expect(onDisk).toContain('engine = "fake"')
+
+  const card = page.locator("#engines-pane section.engine", { hasText: "fake" })
+  await expect(card.locator(".state")).toHaveText("stopped")
+  await expect(card).toContainText(fake)
+
+  await card.locator('button:has-text("start")').click()
+  await expect(card.locator(".state")).toHaveText(/starting|running/)
+  await expect(card.locator("pre.log")).toContainText("stand-in on 8097", { timeout: 10_000 })
+  await card.locator('button:has-text("stop")').click()
+  await expect(card.locator(".state")).toHaveText("exited")
+  await expect(card).toContainText("stopped from luu")
+
+  // And Models shows the provider as one that starts an engine.
+  await page.click('.modal .rail button:has-text("Models")')
+  await expect(page.locator(".modal table.providers .tag", { hasText: "engine" })).toHaveCount(1)
+
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
+/**
+ * Changing where a session sends needs no restart: a new `default` is taken up
+ * by an empty live session nobody pointed anywhere, and the chat's own picker
+ * lists every provider with the models it serves and moves the session there.
+ */
+test("a new default and the chat's picker both move the session without a restart", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await chooseFolder(page)
+
+  // This server was started with no -p and no default: it follows the file.
+  const before = await (await fetch(`${BASE}/api/settings`)).json()
+  expect(before.follows_default).toBe(true)
+  expect(before.profile).toBeNull()
+
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
+  // The table is in the file's order, which is by name: fake, here, local —
+  // after the built-in mock's row, which has no inputs of its own.
+  const here = page.locator(".modal table.providers tbody tr:not(.builtin)").nth(1)
+  await expect(here.locator("input.w-name")).toHaveValue("here")
+  await here.locator('input[type="radio"]').check()
+  await page.locator(".modal button.save").click()
+  await expect(page.locator(".modal")).toContainText("the live session is on here")
+  const after = await (await fetch(`${BASE}/api/settings`)).json()
+  expect(after.profile).toBe("here")
+  expect(after.follows_default).toBe(true)
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
+
+  // The picker, in two columns: it opens on the session's own provider, with
+  // that provider's models beside it; another provider in focus shows its own.
+  await page.click(".options .dest")
+  const menu = page.locator(".options .menu")
+  const models = menu.locator(".models")
+  await expect(menu.locator(".prov.on")).toContainText("here")
+  await expect(models.locator("button.model.on")).toHaveText(/mock/)
+  await menu.locator(".prov", { hasText: "local" }).hover()
+  await expect(menu.locator(".prov.on")).toContainText("local")
+  await expect(models.locator("button.model")).toHaveText(/tiny/)
+  await models.locator("button.model", { hasText: "tiny" }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(page.locator(".options .dest")).toContainText("local")
+  await expect(page.locator(".options .dest")).toContainText("tiny")
+  const moved = await (await fetch(`${BASE}/api/settings`)).json()
+  expect(moved.profile).toBe("local")
+  // Chosen, so it no longer follows the file.
+  expect(moved.follows_default).toBe(false)
+
+  expect(errors).toEqual([])
+})
+
+/**
+ * The models already on the machine, named by where they came from, in the
+ * engine form and in the chat's picker for a provider whose engine luu
+ * starts. The stores are the suite's own fixtures — see `beforeAll`.
+ */
+test("the models on this machine are listed by where they came from", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+
+  const catalog = await (await fetch(`${BASE}/api/models`)).json()
+  expect(catalog.models.map(m => m.label).sort()).toEqual([
+    "big:27b-mlx (ollama, mlx)",
+    "small-Q4_K_M (huggingface)",
+    "tiny:1b (ollama)",
+  ])
+  expect(catalog.models.find(m => m.label === "tiny:1b (ollama)").reference).toBe("ollama:tiny:1b")
+  // And which engine cannot load which, in the server's words.
+  const big = catalog.models.find(m => m.label.startsWith("big:27b-mlx"))
+  expect(Object.keys(big.cannot).sort()).toEqual(["llama", "mlx"])
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await chooseFolder(page)
+
+  // The engine form offers the two llama.cpp can load, and says why not the third.
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Engines")')
+  await page.locator("#engines-pane section.engine", { hasText: "fake" }).locator('button:has-text("edit")').click()
+  const form = page.locator("#engine-dialog")
+  const models = form.locator("select").nth(2)
+  await expect(models.locator("option")).toHaveText([
+    "none — named in the arguments below",
+    /tiny:1b \(ollama\)/,
+    /small-Q4_K_M \(huggingface\)/,
+    /⚠ big:27b-mlx \(ollama, mlx\)/,
+  ])
+  await expect(models.locator("option").last()).toBeDisabled()
+  await expect(models.locator("option").last()).toHaveAttribute("title", /only ollama/)
+  await expect(form).toContainText("1 on this machine this engine cannot load")
+  await models.selectOption("ollama:tiny:1b")
+  await form.locator("button.save").click()
+  await expect(form).toHaveCount(0)
+  expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "ollama:tiny:1b"')
+  await expect(page.locator("#engines-pane section.engine", { hasText: "fake" })).toContainText("tiny:1b (ollama)")
+  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+
+  // And the chat's picker lists them under the provider that starts it.
+  await page.click(".options .dest")
+  await page.locator(".options .menu .prov", { hasText: "fake" }).click()
+  const group = page.locator(".options .menu .models")
+  await expect(group.locator("button.model .name")).toHaveText([
+    "tiny:1b (ollama)",
+    "small-Q4_K_M (huggingface)",
+  ])
+  // The one it cannot load is there, greyed, with a warning and why.
+  const off = group.locator(".model.off")
+  await expect(off).toHaveCount(1)
+  await expect(off).toContainText("⚠")
+  await expect(off).toContainText("big:27b-mlx (ollama, mlx)")
+  await expect(off).toHaveAttribute("aria-disabled", "true")
+  await expect(off).toHaveAttribute("title", /llama.cpp loads GGUF only/)
+  await page.keyboard.press("Escape")
+
+  expect(errors).toEqual([])
+})
+
+/**
+ * Who answers the gate, as a dropup: the choice on a button in the chat's
+ * foot, and each answer with a line about what it means.
+ */
+test("the gate's mode is chosen from a dropup", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await chooseFolder(page)
+
+  const face = page.locator(".options .dropup .face")
+  await expect(face).toContainText("Manual")
+  await face.click()
+  const list = page.locator(".options .dropup .list")
+  await expect(list.locator(".opt")).toHaveCount(2)
+  await expect(list.locator(".opt.on")).toContainText("Every job waits for you")
+  await list.locator(".opt", { hasText: "Auto" }).click()
+  await expect(list).toHaveCount(0)
+  await expect(face).toContainText("Auto")
+  // Kept, like every General preference, and put back for the next test.
+  expect(await page.evaluate(() => localStorage.getItem("luu.confirm"))).toBe("auto")
+  await face.click()
+  await page.keyboard.press("Escape")
+  await expect(list).toHaveCount(0)
+  await face.click()
+  await list.locator(".opt", { hasText: "Manual" }).click()
+  await expect(face).toContainText("Manual")
 })

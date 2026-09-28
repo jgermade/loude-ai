@@ -6,12 +6,13 @@
           resumeSession, deleteSession, renameSession,
           loadProviders, refreshSettings } = await import("./store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("./prefs.js")
-  const { workspace, loadRoot, openPicker, activate, closeTab, showFile, showDiff } =
+  const { workspace, loadRoot, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
     await import("./workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel } =
     await import("./ui.js")
   const { modalOpen } = await import("./modal.js")
   const Segmented = await import("./components/segmented.html")
+  const Dropup = await import("./components/dropup.html")
 
   // The gate's two narrowings. `null` is *leave*, which is what almost every
   // approval means; the other two are a person deciding this job is not the
@@ -47,6 +48,7 @@
   const ContentViewer = await import("./content-viewer.html")
   const FolderPicker = await import("./folder-picker.html")
   const SettingsModal = await import("./settings-modal.html")
+  const ModelPicker = await import("./model-picker.html")
   const SessionStarter = await import("./session-starter.html")
 
   connect()
@@ -401,6 +403,7 @@
     <path d="M20 14.5a3.5 3.5 0 0 1-3.5 3.5H6"/>
     <path d="m8.5 20.5-3-2.5 3-2.5"/>
   </symbol>
+  <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/></symbol>
   <symbol id="i-server" viewBox="0 0 24 24">
     <rect x="3.5" y="4.5" width="17" height="6" rx="2"/>
     <rect x="3.5" y="13.5" width="17" height="6" rx="2"/>
@@ -469,9 +472,12 @@
           :each="tab in workspace.tabs"
           :key="tab.id"
           class="tab"
-          :class.on="tab.id === workspace.active">
+          :class.on="tab.id === workspace.active"
+          :class.preview="tab.preview">
+          <!-- A preview tab is in italics until something keeps it: a double
+               click here, or on the row that opened it. See `openTab`. -->
           <button type="button" class="pick" :attrs="{ title: tab.path }"
-                  @click="activate(tab.id)">
+                  @click="activate(tab.id)" @dblclick="pinTab(tab.id)">
             <svg class="ic kind"><use :attrs="{ href: tab.kind === 'diff' ? '#i-refresh' : (tab.kind === 'debug' ? '#i-sliders' : '#i-file') }"/></svg>
             <span class="label">{{ tab.title }}</span>
           </button>
@@ -830,16 +836,14 @@
         <!-- Who answers the gate. A person deciding once instead of per job —
              never the server running unapproved work, which is why this control
              is here and not behind a modal somebody set and forgot. -->
-        <Segmented size="small" :options="CONFIRM" :model="prefs.confirm" @change="setConfirm($event.detail)" />
+        <Dropup :options="CONFIRM" :model="prefs.confirm" title="Who answers the gate"
+                @change="setConfirm($event.detail)" />
 
-        <!-- Where this session sends. Reported rather than switched: changing it
-             is `Continue here` in the session starter, and it is there for a
-             reason — every per-turn number is backend-specific. -->
-        <button type="button" class="dest" title="Where this session sends"
-                @click="openSettingsAt('models')">
-          <span :if="state.settings?.profile" class="tag">{{ state.settings?.profile }}</span>
-          <span class="tag">{{ state.model || state.settings?.model || "—" }}</span>
-        </button>
+        <!-- Where this session sends, and the place to change it: every
+             provider with the models it serves. A session with turns moves by
+             the starter's `Continue here`, header and all, because every
+             per-turn number is backend-specific. See `model-picker.html`. -->
+        <ModelPicker />
         <span :if="unreachableModel" class="warn small">{{ unreachableModel }}</span>
         <span :if="ui.reach?.verdict === 'unreachable'" class="dim small">provider not answering</span>
 
@@ -991,6 +995,7 @@
     padding: 0 .2rem 0 .5rem;
   }
   .tabs.files .tab .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tabs.files .tab.preview .label { font-style: italic; }
   .tabs.files .tab .kind { width: 13px; height: 13px; opacity: .7; }
   .tabs.files .tab:hover { color: var(--fg); }
   .tabs.files .tab.on { color: var(--fg); border-bottom-color: var(--accent); }
@@ -1240,19 +1245,6 @@
     border-radius: 999px;
     padding: 0 .45rem;
   }
-  .dest {
-    display: flex;
-    align-items: center;
-    gap: .3rem;
-    background: none;
-    border: 0;
-    border-radius: 6px;
-    padding: .15rem .2rem;
-    cursor: pointer;
-    min-width: 0;
-  }
-  .dest:hover .tag { border-color: var(--accent); color: var(--fg); }
-  .dest .tag { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .clip {
     margin-left: auto;
     flex: none;

@@ -1,0 +1,145 @@
+<script :setup="{ options = [], model = '', disabled = false, title = '' }">
+  // A choice that opens upward: the current answer on a button, and the others
+  // with a line each about what they mean. For a status bar, where a row of
+  // segments takes the width the other controls need and has nowhere to put
+  // the explanation. The same contract as `Segmented`, so either fits a tag.
+  //
+  // **Self-contained**, like everything in `components/`: it imports nothing
+  // from the page, and its colours are the page's tokens *with fallbacks*. See
+  // `RECORD/2026-09-28.components-of-our-own.completed.md`.
+  //
+  //   <Dropup :options="[{ value: 'a', label: 'A', title: 'what A does' }]"
+  //           :model="x" @change="save($event.detail)" />
+  //
+  // An option is a string or `{ value, label, title, disabled }`; `title` is the
+  // line under its label. The choice goes back up through `:model` when the tag
+  // binds one, and always as `change`.
+
+  $: items = options.map(o => typeof o === "string" ? { value: o, label: o } : o)
+  $: chosen = items.find(i => i.value === model) || items[0]
+
+  let open = false
+  // Fixed, from the button's own box: a status bar clips what overflows it,
+  // and a menu that opens upward overflows it by design.
+  let place = ""
+
+  const toggle = event => {
+    if (disabled) return
+    open = !open
+    if (!open) return
+    const box = event.currentTarget.getBoundingClientRect()
+    const width = Math.min(352, window.innerWidth * 0.9)
+    const left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8))
+    place = `left:${left}px;bottom:${window.innerHeight - box.top + 6}px`
+    requestAnimationFrame(() => $self(".opt.on")?.focus())
+  }
+
+  const choose = item => {
+    if (item.disabled) return
+    open = false
+    if (item.value === model) return
+    $updateModel(item.value)
+    $emit("change", item.value)
+  }
+
+  // Up and down through the options, Escape to close — a menu somebody
+  // opened with the keyboard should not need the mouse to leave.
+  // On the window while open, so Escape works wherever the focus is.
+  window.addEventListener("keydown", event => {
+    if (open && event.key === "Escape") open = false
+  })
+  const key = event => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
+    event.preventDefault()
+    const all = [...$self(".list").querySelectorAll(".opt:not(:disabled)")]
+    const at = all.indexOf(document.activeElement)
+    const next = event.key === "ArrowDown" ? at + 1 : at - 1
+    all[(next + all.length) % all.length]?.focus()
+  }
+</script>
+
+<span class="dropup">
+  <button type="button" class="face" :class.open="open" :disabled="disabled"
+          :attrs="{ title: title || chosen?.title || '', 'aria-haspopup': 'listbox', 'aria-expanded': String(open) }"
+          @click="toggle($event)">
+    <span>{{ chosen?.label }}</span>
+    <svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14.5 12 9.5l5 5"/></svg>
+  </button>
+
+  <div :if="open" class="backdrop" @click="open = false"></div>
+  <div :if="open" class="list" role="listbox" :attrs="{ style: place }" @keydown="key($event)">
+    <button :each="item in items" :key="String(item.value)" type="button"
+            class="opt" :class.on="item.value === model" role="option"
+            :attrs="{ 'aria-selected': String(item.value === model) }"
+            :disabled="item.disabled" @click="choose(item)">
+      <span class="check">{{ item.value === model ? "✓" : "" }}</span>
+      <span class="text">
+        <span class="label">{{ item.label }}</span>
+        <span :if="item.title" class="hint">{{ item.title }}</span>
+      </span>
+    </button>
+  </div>
+</span>
+
+<style scoped>
+  .dropup { display: inline-flex; }
+  .face {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    background: var(--bg, #f4f5f8);
+    color: var(--fg, #1a1d23);
+    border: 1px solid var(--line, #d7dbe2);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.5;
+    padding: .1rem .45rem .1rem .55rem;
+    cursor: pointer;
+  }
+  .face:hover:not(:disabled), .face.open { border-color: var(--accent, #2f5bbd); }
+  .face:disabled { opacity: .5; cursor: default; }
+  .caret {
+    width: 11px;
+    height: 11px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    opacity: .6;
+    transition: transform .15s;
+  }
+  .face.open .caret { transform: rotate(180deg); }
+  .backdrop { position: fixed; inset: 0; z-index: 40; }
+  .list {
+    position: fixed;
+    z-index: 41;
+    min-width: 14rem;
+    max-width: min(22rem, 90vw);
+    background: var(--raised, #fff);
+    border: 1px solid var(--line, #d7dbe2);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgb(0 0 0 / .25);
+    padding: .3rem;
+  }
+  .opt {
+    display: flex;
+    gap: .4rem;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    padding: .35rem .5rem;
+    color: var(--fg, #1a1d23);
+    font: inherit;
+    cursor: pointer;
+  }
+  .opt:hover:not(:disabled), .opt:focus-visible { background: var(--sunken, #eceef2); outline: none; }
+  .opt:disabled { opacity: .5; cursor: default; }
+  .opt.on .label { color: var(--accent, #2f5bbd); }
+  .check { width: 1em; flex: none; font-size: 12px; color: var(--accent, #2f5bbd); }
+  .text { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+  .label { font-size: 12px; font-weight: 500; }
+  .hint { font-size: 11px; color: var(--dim, #5b6472); line-height: 1.4; }
+</style>

@@ -391,6 +391,7 @@ test("a session is started on a posture, and the page says which", async ({ page
   // row, which is where the destination is reported now — the two tags that
   // used to be in the page header.
   await page.click(".options .dest")
+  await page.locator('.options .menu button:has-text("providers…")').click()
   await expect(page.locator("dialog.modal").first()).toBeVisible()
   await expect(page.locator(".modal .rail button.on")).toHaveText("Models")
   const said = page.locator(".settings")
@@ -464,7 +465,7 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(15)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(16)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip. The live session cannot be deleted — the
@@ -548,16 +549,28 @@ test("the tree shows an edit icon on hover, and the name does not move", async (
   await expect(edit).toHaveCSS("opacity", "0")
   await expect(edit).toHaveCSS("pointer-events", "none")
 
+  // Measured until there is something to measure: the row can be rebuilt
+  // under the test, and a locator read in that frame has no box — which is
+  // what made this fail one run in three, before and after the engines work.
+  const boxOf = async locator => {
+    for (let tries = 0; tries < 50; tries++) {
+      const box = await locator.boundingBox()
+      if (box) return box
+      await page.waitForTimeout(50)
+    }
+    throw new Error("the element never had a box")
+  }
+
   // The slot is reserved, so revealing the icon must not move the name.
-  const before = await name.boundingBox()
+  const before = await boxOf(name)
   await node.hover()
   await expect(edit).toHaveCSS("opacity", "1")
-  const after = await name.boundingBox()
+  const after = await boxOf(name)
   expect(Math.round(after.width)).toBe(Math.round(before.width))
 
   // And the icon is the rightmost thing in the row.
-  const nameBox = await name.boundingBox()
-  const editBox = await edit.boundingBox()
+  const nameBox = await boxOf(name)
+  const editBox = await boxOf(edit)
   expect(editBox.x).toBeGreaterThan(nameBox.x + nameBox.width - 1)
 
   // A keyboard can find it: hover is not the only way it appears.
@@ -777,12 +790,20 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   await expect(page.locator(".content code.hl-comment").first()).toBeVisible()
   await expect(page.locator(".content code.hl-string").first()).toBeVisible()
 
-  // A file with no grammar takes the same path out: lines, no language.
+  // Found by its name, having no extension to be found by.
   await page.evaluate(async () => {
     const { showFile } = await import("./workspace.js")
     await showFile("Makefile")
   })
-  await expect(page.locator(".content .col-foot .path")).toHaveText("Makefile")
+  await expect(page.locator(".content .col-foot .lang")).toHaveText("make")
+  await expect(page.locator(".content code.hl-function").first()).toBeVisible()
+
+  // A file with no grammar takes the same path out: lines, no language.
+  await page.evaluate(async () => {
+    const { showFile } = await import("./workspace.js")
+    await showFile(".gitignore")
+  })
+  await expect(page.locator(".content .col-foot .path")).toHaveText(".gitignore")
   await expect(page.locator(".content .col-foot .lang")).toHaveCount(0)
   await expect(page.locator(".content .code-rows li").first()).toBeVisible()
 
@@ -812,12 +833,28 @@ test("the content column keeps one tab per open thing", async ({ page }) => {
 
   await page.click('.inspector .tabs button:has-text("Files")')
   await expect(page.locator(".inspector .tree .row").first()).toBeVisible({ timeout: 15_000 })
+  // A single click is a preview, in italics, and the next single click
+  // replaces it in place rather than adding a tab: VS Code's rule.
+  const tabs = page.locator(".content .tabs.files .tab")
   await page.click('.inspector .tree .row:has-text("luu.toml")')
-  await expect(page.locator(".content .tabs.files .tab")).toHaveCount(1)
+  await expect(tabs).toHaveCount(1)
+  await expect(tabs.first()).toHaveClass(/preview/)
+  await expect(tabs.first().locator(".label")).toHaveCSS("font-style", "italic")
   await page.click('.inspector .tree .row:has-text("Makefile")')
-  await expect(page.locator(".content .tabs.files .tab")).toHaveCount(2)
+  await expect(tabs).toHaveCount(1)
+  await expect(tabs.first().locator(".label")).toHaveText("Makefile")
 
-  // The second one is what the column is showing, and the foot says which.
+  // A double click keeps it, and the next single click opens beside it.
+  await page.dblclick('.inspector .tree .row:has-text("Makefile")')
+  await expect(tabs.first()).not.toHaveClass(/preview/)
+  await page.click('.inspector .tree .row:has-text("luu.toml")')
+  await expect(tabs).toHaveCount(2)
+  // So does a double click on the tab itself.
+  await page.dblclick('.content .tabs.files .tab:has-text("luu.toml") .pick')
+  await expect(page.locator(".content .tabs.files .tab.preview")).toHaveCount(0)
+  await page.click('.content .tabs.files .tab:has-text("Makefile") .pick')
+
+  // The one clicked is what the column is showing, and the foot says which.
   await expect(page.locator(".content .tabs.files .tab.on .label")).toHaveText("Makefile")
   await expect(page.locator(".content .col-foot .path")).toHaveText("Makefile")
 

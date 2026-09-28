@@ -1,0 +1,303 @@
+<script :setup>
+  // Where this session sends, chosen from the chat rather than only reported.
+  //
+  // **Two columns**: the providers in `config.toml`, and the models of the one
+  // in focus — what *it* can serve, asked of it when it is focused, the same
+  // `/models` the session starter reads. For a provider whose engine luu
+  // starts that is every model on the machine the engine loads, and the ones it
+  // cannot load greyed out beside them with why. Choosing a model moves the live
+  // session without restarting anything:
+  //
+  // - **no turns yet**: a new session there, which loses nothing;
+  // - **with turns**: the session starter's *Continue here* — the history is
+  //   kept and the stream gains a header saying where it changed, because every
+  //   per-turn number is backend-specific and the turns before the switch are
+  //   not comparable with the ones after.
+  const { state, loadProviders, providerModels, newSession, resumeSession } =
+    await import("./store.js")
+  const { checkModel, openSettingsAt } = await import("./ui.js")
+  const { modelLabel } = await import("./engines.js")
+
+  let open = false
+  // Where the menu goes: fixed, from the button's own box, because the chat
+  // foot clips what overflows it and a menu that opens upward overflows it
+  // by design.
+  let place = ""
+  let switching = false
+  let error = ""
+  // The provider whose models the second column shows.
+  let focus = ""
+  // name → { loading, models, reason, labels, unavailable }. Kept while the
+  // menu is open, so going back to a provider does not ask it twice.
+  let lists = {}
+
+  $: names = Object.keys(state.providers?.providers || {})
+  $: hasTurns = state.messages.length > 0
+  $: proposed = (state.jobs || []).some(j => j.state === "proposed")
+  $: busy = state.status === "running"
+    ? "a turn is running"
+    : proposed ? "a proposal is waiting at the gate" : ""
+  $: current = state.settings?.profile || ""
+  $: currentModel = state.model || state.settings?.model || ""
+  $: shown = lists[focus] || null
+  $: profile = state.providers?.providers?.[focus] || {}
+
+  const load = async name => {
+    if (!name || lists[name]) return
+    lists = { ...lists, [name]: { loading: true, models: [], labels: {}, unavailable: [] } }
+    const answer = await providerModels(name)
+    const own = state.providers?.providers?.[name]?.model
+    const models = answer.models?.length ? answer.models : (own ? [own] : [])
+    lists = {
+      ...lists,
+      [name]: {
+        loading: false,
+        models,
+        reason: answer.reason || null,
+        labels: answer.labels || {},
+        unavailable: answer.unavailable || [],
+      },
+    }
+  }
+
+  const focusOn = name => {
+    focus = name
+    load(name)
+  }
+
+  const toggle = async event => {
+    open = !open
+    error = ""
+    if (!open) return
+    // Kept inside the window: the menu is wider than the button, and in the
+    // two-column layout the button is near the right edge.
+    const box = event.currentTarget.getBoundingClientRect()
+    const width = Math.min(640, window.innerWidth * 0.92)
+    const left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8))
+    place = `left:${left}px;bottom:${window.innerHeight - box.top + 6}px`
+    lists = {}
+    await loadProviders()
+    // Opens on where the session is, so the second column starts on the
+    // models it is choosing among.
+    focusOn(names.includes(current) ? current : names[0] || "")
+  }
+
+  const choose = async (provider, model) => {
+    if (busy || switching) return
+    switching = true
+    error = ""
+    const choice = { provider, ...(model ? { model } : {}) }
+    const ok = hasTurns && state.session && state.settings?.store
+      ? await resumeSession(state.session, choice)
+      : await newSession(choice)
+    switching = false
+    if (!ok) {
+      error = state.error || "the switch was refused"
+      return
+    }
+    open = false
+    await checkModel()
+  }
+
+  // Escape closes it wherever the focus is — on the window, and only while
+  // open, rather than on the menu, which may never have had the focus.
+  window.addEventListener("keydown", event => {
+    if (open && event.key === "Escape") open = false
+  })
+</script>
+
+<span class="picker">
+  <button type="button" class="dest" title="Where this session sends — choose another"
+          @click="toggle($event)">
+    <span :if="state.settings?.profile" class="tag">{{ state.settings?.profile }}</span>
+    <span class="tag">{{ modelLabel(currentModel) || "—" }}</span>
+    <svg class="ic caret" :class.open="open"><use href="#i-caret"/></svg>
+  </button>
+
+  <div :if="open" class="backdrop" @click="open = false"></div>
+  <div :if="open" class="menu" role="dialog" aria-label="Provider and model"
+       :attrs="{ style: place }">
+    <p :if="!names.length" class="dim small pad">
+      No providers yet.
+      <button type="button" class="link" @click="open = false, openSettingsAt('models')">add one →</button>
+    </p>
+
+    <div :if="names.length" class="cols">
+      <!-- Providers. Hover or click puts one in focus; nothing is chosen until
+           a model is. -->
+      <ul class="providers" role="listbox" aria-label="Providers">
+        <li :each="name in names" :key="name">
+          <button type="button" class="prov" role="option"
+                  :class.on="name === focus" :class.current="name === current"
+                  :attrs="{ 'aria-selected': String(name === focus) }"
+                  @click="focusOn(name)" @mouseenter="focusOn(name)" @focus="focusOn(name)">
+            <span class="check">{{ name === current ? "✓" : "" }}</span>
+            <span class="text">
+              <strong>{{ name }}</strong>
+              <span class="dim small">
+                {{ state.providers?.providers?.[name]?.backend || "ollama" }}{{ state.providers?.providers?.[name]?.engine ? " · luu starts it" : "" }}
+              </span>
+            </span>
+            <svg class="ic go"><use href="#i-caret"/></svg>
+          </button>
+        </li>
+      </ul>
+
+      <!-- The focused provider's models. -->
+      <div class="models" role="listbox" aria-label="Models">
+        <header class="dim small">
+          <strong>{{ focus }}</strong>
+          <span :if="profile.engine">· engine {{ profile.engine }}</span>
+        </header>
+        <p :if="shown?.loading" class="dim small pad">asking the provider…</p>
+        <p :if="shown?.reason && !shown?.models.length" class="dim small pad">{{ shown?.reason }}</p>
+        <button :each="model in shown?.models || []" :key="model" type="button"
+                class="model" role="option"
+                :class.on="focus === current && model === currentModel"
+                :disabled="!!busy || switching"
+                @click="choose(focus, model)">
+          <span class="check">{{ focus === current && model === currentModel ? "✓" : "" }}</span>
+          <span class="name">{{ shown?.labels?.[model] || modelLabel(model) }}</span>
+        </button>
+        <!-- On this machine and not loadable by this provider's engine — an
+             MLX model under llama.cpp, ollama's own MLX under anything but
+             ollama. Shown rather than hidden, so a model on the disk does not
+             look missing; the tooltip is the server's own reason. Not a
+             button: a disabled one shows no tooltip in every browser. -->
+        <div :each="u in shown?.unavailable || []" :key="u.model"
+             class="model off" role="option" aria-disabled="true"
+             :attrs="{ title: u.reason }">
+          <span class="check warn">⚠</span>
+          <span class="name">{{ u.label }}</span>
+        </div>
+        <!-- A provider whose list is empty is still a destination: its own
+             model, or the one the server picks. -->
+        <button :if="shown && !shown.loading && !shown.models.length" type="button"
+                class="model" :disabled="!!busy || switching" @click="choose(focus, '')">
+          <span class="check"></span>
+          <span class="name dim">use it with its own model</span>
+        </button>
+      </div>
+    </div>
+
+    <footer>
+      <span :if="busy" class="warn small">Cannot switch: {{ busy }}.</span>
+      <span :if="!busy && hasTurns && state.settings?.store" class="dim small">
+        The history comes along; the stream marks where it changed.
+      </span>
+      <span :if="!busy && hasTurns && !state.settings?.store" class="warn small">
+        This server keeps no sessions, so switching starts an empty one.
+      </span>
+      <span :if="switching" class="dim small">Switching…</span>
+      <span :if="error" class="error small">{{ error }}</span>
+      <span class="grow"></span>
+      <button type="button" class="link" @click="open = false, openSettingsAt('models')">providers…</button>
+    </footer>
+  </div>
+</span>
+
+<style scoped>
+  .picker { display: inline-flex; min-width: 0; }
+  .dest {
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    padding: .15rem .2rem;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .dest .tag {
+    font-size: 11px;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0 .45rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dest:hover .tag { border-color: var(--accent); color: var(--fg); }
+  .caret { width: 10px; height: 10px; transform: rotate(-90deg); opacity: .6; }
+  .caret.open { transform: rotate(90deg); }
+  .backdrop { position: fixed; inset: 0; z-index: 40; }
+  .menu {
+    position: fixed;
+    z-index: 41;
+    width: min(40rem, 92vw);
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgb(0 0 0 / .25);
+    display: flex;
+    flex-direction: column;
+  }
+  .cols {
+    display: grid;
+    grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
+    max-height: min(60vh, 26rem);
+    min-height: 10rem;
+  }
+  .providers {
+    list-style: none;
+    margin: 0;
+    padding: .3rem;
+    overflow-y: auto;
+    border-right: 1px solid var(--line);
+  }
+  .prov {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    padding: .35rem .4rem;
+    color: var(--fg);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .prov .text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .prov .text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prov.on { background: var(--sunken); }
+  .prov.current strong { color: var(--accent); }
+  .prov .go { width: 10px; height: 10px; opacity: .4; flex: none; }
+  .models { overflow-y: auto; padding: .3rem 0; }
+  .models header { padding: .2rem .8rem .3rem; }
+  .model {
+    display: flex;
+    gap: .4rem;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: .25rem .8rem;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .model:hover:not(:disabled):not(.off) { background: var(--sunken); }
+  .model.on { color: var(--accent); }
+  .model.off { color: var(--dim); cursor: help; }
+  .model.off .name { font-style: italic; }
+  .model .warn { color: var(--warn); }
+  .check { width: 1em; flex: none; color: var(--accent); }
+  .model .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pad { margin: 0; padding: .2rem .8rem; }
+  .menu footer {
+    display: flex;
+    gap: .5rem;
+    align-items: center;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--line);
+    padding: .4rem .8rem;
+  }
+  .menu footer .grow { flex: 1; }
+</style>

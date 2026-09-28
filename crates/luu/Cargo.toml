@@ -15,12 +15,14 @@ tree-sitter.workspace = true
 tree-sitter-highlight.workspace = true
 tree-sitter-bash.workspace = true
 tree-sitter-c.workspace = true
+tree-sitter-containerfile.workspace = true
 tree-sitter-cpp.workspace = true
 tree-sitter-css.workspace = true
 tree-sitter-go.workspace = true
 tree-sitter-html.workspace = true
 tree-sitter-javascript.workspace = true
 tree-sitter-json.workspace = true
+tree-sitter-make.workspace = true
 tree-sitter-md.workspace = true
 tree-sitter-python.workspace = true
 tree-sitter-rust.workspace = true
@@ -36,9 +38,12 @@ clap.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tokio.workspace = true
+# Downloading a model server's release and checking it — `crate::engines`.
+# reqwest is agent-core's already; this makes it this crate's too.
+reqwest.workspace = true
+sha2.workspace = true
 
 # The tests only: `tests/serve_ws.rs` drives the running server over its own
 # socket, which needs a client for each half of what it serves.
 [dev-dependencies]
-reqwest.workspace = true
 tokio-tungstenite.workspace = true

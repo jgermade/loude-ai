@@ -34,9 +34,10 @@ export const workspace = $reactive({
   /// object beside `open` rather than a flag inside it: collapsing a directory
   /// should not throw away what was already fetched.
   expanded: {},
-  /// What the content column is holding: `{ id, kind, title, path, staged }`,
-  /// where `kind` is `file`, `diff` or `debug`. One tab per open thing, so
-  /// looking at a diff no longer loses the file that was on screen.
+  /// What the content column is holding: `{ id, kind, title, path, staged,
+  /// preview }`, where `kind` is `file`, `diff` or `debug`. One tab per open
+  /// thing, so looking at a diff no longer loses the file that was on screen;
+  /// at most one of them a `preview`, which the next single click replaces.
   tabs: [],
   /// The active tab's id, or `null` for an empty column.
   active: null,
@@ -50,8 +51,10 @@ export const workspace = $reactive({
   /// `{ kind: "diff", path, staged, hunks, note }` or
   /// `{ kind: "debug", text }`.
   content: null,
-  /// Set while a fetch for the active tab is in flight, so the viewer can say
-  /// so instead of showing the previous file under the new file's name.
+  /// Set while a fetch for the active tab is in flight, so the viewer shows
+  /// nothing rather than the previous file under the new file's name. It no
+  /// longer says "Reading…": a line that came and went on every click moved the
+  /// file down and back up.
   loading: false,
   /// Every changed path in the whole base, mapped to git's own two-letter code.
   /// Asked for the base and filtered to the root in the page rather than
@@ -315,16 +318,40 @@ const basename = path => path.split("/").pop() || path
 /// second column at the content — the click already said which column the
 /// person wants, and in the two-column layout having nothing happen is the bug
 /// this rule exists to prevent.
-function openTab(tab) {
+///
+/// **A single click opens a preview, the way VS Code does.** There is one
+/// preview tab at most, drawn in italics, and the next single click replaces
+/// it in place rather than adding a tab beside it: looking through ten files
+/// should not leave ten tabs to close. A double click, the tree's pencil, or a
+/// double click on the tab itself pins it ([`pinTab`]). Reopening a tab that is
+/// already pinned never unpins it — the foot's "staged" toggle calls this with
+/// the same id.
+function openTab(tab, { preview = false } = {}) {
   const found = workspace.tabs.find(open => open.id === tab.id)
   // Replaced rather than mutated, the way every reactive list in this page is:
   // jq79 does not wake an `:each` when a property of an object inside a
   // reactive array is assigned from outside the component. See `store.js`.
-  workspace.tabs = found
-    ? workspace.tabs.map(open => open.id === tab.id ? { ...open, ...tab } : open)
-    : [...workspace.tabs, tab]
+  if (found) {
+    const next = { ...found, ...tab, preview: found.preview && preview }
+    workspace.tabs = workspace.tabs.map(open => open.id === tab.id ? next : open)
+  } else {
+    const next = { ...tab, preview }
+    const old = preview ? workspace.tabs.findIndex(open => open.preview) : -1
+    workspace.tabs = old < 0
+      ? [...workspace.tabs, next]
+      : workspace.tabs.map((open, at) => at === old ? next : open)
+  }
   setPane("content")
   return activate(tab.id)
+}
+
+/// Keeps a preview tab: the next single click opens beside it instead of over
+/// it. Also what an edit should call, once this column can edit — the viewer
+/// is read-only today, so nothing does yet.
+export function pinTab(id) {
+  const found = workspace.tabs.find(open => open.id === id)
+  if (!found?.preview) return
+  workspace.tabs = workspace.tabs.map(open => open.id === id ? { ...open, preview: false } : open)
 }
 
 export function closeTab(id) {
@@ -365,12 +392,19 @@ export function activate(id) {
 }
 
 
-export function showFile(path) {
-  return openTab({ id: fileId(path), kind: "file", path, title: basename(path), staged: false })
+/// `pinned` is the double click and the pencil; anything else is a preview.
+export function showFile(path, { pinned = false } = {}) {
+  return openTab(
+    { id: fileId(path), kind: "file", path, title: basename(path), staged: false },
+    { preview: !pinned },
+  )
 }
 
-export function showDiff(path, staged = false) {
-  return openTab({ id: diffId(path), kind: "diff", path, staged, title: basename(path) })
+export function showDiff(path, staged = false, { pinned = false } = {}) {
+  return openTab(
+    { id: diffId(path), kind: "diff", path, staged, title: basename(path) },
+    { preview: !pinned },
+  )
 }
 
 /// A prompt, a trace, a tool's output: text the context panel already has, in

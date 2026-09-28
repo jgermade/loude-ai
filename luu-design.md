@@ -925,7 +925,9 @@ height, so the grid was `calc(100vh - 3rem)` — a magic number that was wrong t
 wrapped. What each 40px carries now: the inspector's head is the `luu` logo (which is a control
 — it means *back to the conversation*) and the panel tabs, its foot the chosen folder, the
 status word and **settings**; the content column's head is one tab per open thing and its foot
-that thing's own facts; the chat's head is the session's name, editable in place, beside
+that thing's own facts — and, the way VS Code does it, a single click opens a **preview** tab, in
+italics, that the next single click replaces in place, while a double click (on the row, or on
+the tab) or the tree's pencil keeps it; the chat's head is the session's name, editable in place, beside
 new-session and history. Settings sits in the inspector rather than in the chat's head because
 the chat's head is the one head that disappears: below 1260px the second column is a choice, and
 with the content showing there was no settings button on the page at all.
@@ -1024,7 +1026,11 @@ was never shown is in the document and invisible. See
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps:
 *General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*
-(what this server resolved, then the providers file the next run reads) and *Resend* (the three
+(what this server resolved, then the providers file the next run reads — with the built-in mock
+as a row of its own, chosen when the file names no default, because a server that fell back to
+it used to show a table with nothing chosen; a new provider is a form in a modal that writes that
+one profile and nothing else), *Engines* (the model servers luu starts — see [A model server luu
+starts](#a-model-server-luu-starts)) and *Resend* (the three
 rules that decide how much of the history a turn pays for again). *Resend* is beside *Models* and
 not inside *General* on the same rule that keeps `config.toml` and `localStorage` apart: General
 holds facts about the **screen** somebody is reading from, and one server answers two people on
@@ -1094,12 +1100,16 @@ picked in the browser and imported into `<state dir>/icon-themes/`. A choice is 
 `config.toml` only if it loads, and is swapped in live. The manifest's `revision`, in every icon
 URL, keeps the browser's cache honest. A versioned extension path that an update removed resolves
 to the newest version beside it. See
-[`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, thirteen
-grammars, sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
+[`RECORD/2026-09-28.an-icon-theme-from-settings.completed.md`](RECORD/2026-09-28.an-icon-theme-from-settings.completed.md). Syntax highlighting is `tree-sitter-highlight` on the server, sixteen
+grammar crates — `Makefile`, `Containerfile` and `Dockerfile` found by name, having no extension
+to be found by — sent as **pre-sliced chunks rather than offsets** — a byte offset from Rust read as a
 UTF-16 index in JavaScript agrees until the first non-ASCII character and then silently does
 not. Injections are on, so a fenced block in Markdown is highlighted as its language and HTML's
 `<script>` and `<style>` as JavaScript and CSS. TypeScript's query is its own followed by
-JavaScript's, which it inherits. Markdown is highlighted in **two passes**: the block grammar,
+JavaScript's, which it inherits. **Where two patterns capture the same node, the later one
+wins** in this version of `tree_sitter_highlight` — measured on make's query, whose Neovim-era
+names (`@conditional`, `@include`) this page does not colour, so the patterns that rename them go
+*after* it. Markdown is highlighted in **two passes**: the block grammar,
 then the inline grammar over each `inline` node, laid on top. The inline grammar highlights
 nothing when `tree_sitter_highlight` runs it as an injection. The capture names map to this
 page's own palette, so by default the viewer follows the light/dark toggle. The one exception is
@@ -1440,6 +1450,23 @@ machine's prompts leaving it to a destination whoever holds the token picked.
 See
 [`RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`](RECORD/2026-09-07.the-first-run-has-no-provider.completed.md).
 
+**Nothing here needs a restart.** A destination **nobody chose** — the file's
+`default`, or the mock where there is none, with no `-p` and no flag —
+*follows the file* (`Resolved::named`, `/api/settings`' `follows_default`): a
+new session that names no provider reads `config.toml` again rather than
+inheriting, and saving a new `default` moves the live session at once **while
+it has no turns**. One with turns stays where it is and the page says why,
+because moving a conversation to another model is a choice with a header of its
+own, not a side effect of saving a file. A destination somebody chose is kept,
+flags included. **And it is chosen from the chat**: the composer's destination
+tags open a dropup in two columns — the providers, and the models of the one in
+focus, which *it* says it serves — and picking one starts a session there when
+there are no turns, or moves this one with its history (the starter's
+*Continue here*) when there are. Who answers the gate (*Manual* / *Auto*) sits
+beside it as a dropup too (`components/dropup.html`), each answer with the line
+that says what it means, because a status bar has room for one word and not for
+the explanation.
+
 **And so do the three resend rules.** `POST /api/sessions` takes `repeat`,
 `prune` and `results` beside the three above — `always`/`once`, `never`/`behind`,
 `kept`/`cited`, the header's own words, so the request that started a session and
@@ -1643,6 +1670,61 @@ and `/ws`'s bearer token — are read and checked in the same place. See
 configuration modal edits this file on loopback, and a new session names one of
 these profiles and a model it serves — see [The first run, and the session that
 picks a destination](#the-first-run-and-the-session-that-picks-a-destination).
+
+### A model server luu starts
+
+**An engine is a server luu is allowed to start**: `[engine.<name>]` beside the providers, and a
+profile that names it has it started, and waited for, before a session sends there.
+
+```toml
+[engine.gemma]
+kind = "llama"          # llama | mlx | ollama
+binary = "managed"      # luu's own copy; a path; or absent: found on PATH
+port = 8080
+model = "ollama:qwen2.5-coder:7b"   # -m, out of what this machine already has
+args = ["-c", "8192"]
+
+[provider.gemma]
+backend = "openai"
+url = "http://127.0.0.1:8080/v1"
+engine = "gemma"
+```
+
+**The profile keeps its URL**, so the destination a run prints is still one line of the file.
+**It is a child of `luu serve`** and dies with it: stopped on SIGINT and SIGTERM, and
+`kill_on_drop` for every other way the handle goes. **luu's own copy is an official release by
+tag** — `b11236` for llama.cpp, `v0.34.4` for ollama, moved by `version` — downloaded into
+`<state dir>/engines/`, checked against the sha256 GitHub publishes for the asset before it is
+unpacked, and refused when there is none. **Starting a process is a larger authority than
+writing a provider**, so every engine route is loopback-bound, loopback by `Host` as well (a
+page that rebinds its DNS to 127.0.0.1 is otherwise same-origin), JSON-only, and from the page an
+engine's binary is luu's own copy or a file named `llama-server` or `ollama` — any other path is
+written in the file by hand. llama.cpp is the recommended one: 12 MB, no daemon, no model store.
+**`mlx` is mlx-serve**, a native binary with a GitHub release and a digest like the other two,
+chosen over `mlx_lm.server` by measurement on this machine: 90–92 against 79–81 tok/s decode and
+a first token in ~32 ms against ~125 ms, same MLX weights. It also loads GGUF through an embedded
+llama.cpp — an ollama blob is handed to it as a `.gguf` link, because it tells the two apart by
+extension.
+
+**It is all automatic.** luu's own copy is downloaded the first time a session needs it; the
+engine starts then; a session that picks another model restarts a llama.cpp engine on it (it
+holds one); and an engine no session sends to is stopped, so a model does not stay in memory
+until `serve` exits. `luu chat` and `luu stdio` start it for the length of the run.
+
+**The models are the ones already on the machine** (`crate::models`, `GET /api/models`):
+ollama's store, llama.cpp's cache, Hugging Face's hub cache and `<state dir>/models`, each
+where its tool's own variable says (`OLLAMA_MODELS`, `LLAMA_CACHE`, `HF_HUB_CACHE`). Nothing is
+copied. A model is named by a **reference** — `ollama:qwen2.5-coder:7b`,
+`huggingface:<org>/<repo>/<file>.gguf`, `huggingface:mlx-community/Qwen3-4B-4bit` — rather than a
+path, because a path into ollama's store is a content hash nobody can read; it is shown as
+`qwen2.5-coder:7b (ollama)`. **Which engine loads which is one rule**
+(`LocalModel::runs_on`): llama.cpp loads GGUF; mlx-serve loads MLX, safetensors and GGUF; ollama
+serves its own store. **ollama's MLX models run on ollama only** — they are NVFP4 in
+compressed-tensors, which `mlx_lm` refused and mlx-serve loaded and then failed on at the first
+matmul. A provider whose engine is llama.cpp or mlx lists every model it can load in the chat's
+picker, and the ones it cannot **greyed out, with a warning and the reason as a tooltip**, so a
+model on the disk never looks missing.
+See [`RECORD/2026-09-28.a-model-server-luu-starts.completed.md`](RECORD/2026-09-28.a-model-server-luu-starts.completed.md).
 
 ## Persistence
 

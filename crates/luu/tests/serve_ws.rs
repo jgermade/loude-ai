@@ -235,7 +235,13 @@ async fn server_storing_selecting(
     let serving = bind(ServeOptions {
         // No icon theme in a test: the page is not what is under test.
         icons: std::sync::Arc::new(luu::icons::Theme::default()),
-        provider: luu::provider::Resolved::mock(),
+        // `named`: a destination handed to the server, which it keeps. One
+        // nobody chose would follow the `config.toml` of whoever runs the
+        // tests — and start the engine it names.
+        provider: luu::provider::Resolved {
+            named: true,
+            ..luu::provider::Resolved::mock()
+        },
         counter_warning: None,
         approvers: Default::default(),
         address: "127.0.0.1:0".parse().expect("a loopback address"),
@@ -362,7 +368,13 @@ async fn server_with_postures(
     let serving = bind(ServeOptions {
         // No icon theme in a test: the page is not what is under test.
         icons: std::sync::Arc::new(luu::icons::Theme::default()),
-        provider: luu::provider::Resolved::mock(),
+        // `named`: a destination handed to the server, which it keeps. One
+        // nobody chose would follow the `config.toml` of whoever runs the
+        // tests — and start the engine it names.
+        provider: luu::provider::Resolved {
+            named: true,
+            ..luu::provider::Resolved::mock()
+        },
         counter_warning: None,
         approvers,
         address: "127.0.0.1:0".parse().expect("a loopback address"),

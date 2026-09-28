@@ -1,0 +1,292 @@
+<script :setup="{ view = null, editing = '', saved = null, close = null }">
+  // One `[engine.<name>]`, added or edited, over Settings → Engines. Adding one
+  // also writes the provider that starts it, because an engine nothing names
+  // is a server no session will ever ask for.
+  //
+  // The binary is a choice among what the server found, luu's own copy, or a
+  // path — and the path must end in the kind's own binary name, which the
+  // server checks again: see `accepts_from_page` in `crate::engines`.
+  const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("./engines.js")
+  const { state, loadProviders, saveProviders } = await import("./store.js")
+  const { asModal } = await import("./modal.js")
+
+  asModal("engine-dialog", { close: () => close?.() })
+
+  const current = editing ? view?.engines?.[editing] : null
+  const quote = arg => (/\s/.test(arg) ? `"${arg}"` : arg)
+  // A line as a shell would split it, quotes and all — but nothing is
+  // expanded: there is no shell, so `~` in a path stays a `~`.
+  const split = line =>
+    [...line.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(m => m[1] ?? m[2] ?? m[3])
+
+  let name = editing || ""
+  let kind = current?.kind || "llama"
+  // "" found automatically, "managed", a found path, or "custom".
+  let binary = !current
+    ? "managed"
+    : !current.binary
+      ? ""
+      : current.binary === "managed" || (view?.found?.[current.kind] || []).includes(current.binary)
+        ? current.binary
+        : "custom"
+  let path = binary === "custom" ? current.binary : ""
+  let version = current?.version || ""
+  let variant = current?.variant || ""
+  let port = current?.port ? String(current.port) : ""
+  let args = (current?.args || []).map(quote).join(" ")
+  let readyTimeout = current?.["ready-timeout"] ? String(current["ready-timeout"]) : ""
+  let model = current?.model || ""
+  // What this machine already has, for a llama.cpp engine to load. Asked
+  // once, when the form opens: the catalog is a walk of four directories.
+  let catalog = []
+  let roots = {}
+  const listed = await loadCatalog()
+  if (listed.ok) {
+    catalog = listed.view.models
+    roots = listed.view.roots
+  }
+  let withProvider = !editing
+  let saving = false
+  let error = ""
+
+  $: bin = kind === "ollama" ? "ollama" : "llama-server"
+  // Which ones this kind of engine loads is the server's answer (`cannot`),
+  // not a rule restated here.
+  $: loadable = catalog.filter(m => !m.cannot?.[kind])
+  $: unloadable = catalog.filter(m => m.cannot?.[kind])
+  const gb = n => `${(n / 1e9).toFixed(1)} GB`
+  $: found = view?.found?.[kind] || []
+  $: pinned = view?.pinned?.[kind] || ""
+  $: copies = view?.managed?.[kind] || []
+  $: haveCopy = copies.includes(variant ? `${version || pinned}-${variant}` : (version || pinned))
+  $: trimmed = name.trim()
+  $: badName = !!trimmed && !/^[A-Za-z0-9_-]+$/.test(trimmed)
+  $: clash = !editing && !!trimmed && !!view?.engines?.[trimmed]
+  $: badPath = binary === "custom" && !!path.trim() && path.trim().split("/").pop() !== bin
+  $: portNumber = Number(port.trim() || defaultPort(kind))
+  $: badPort = !Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535
+  $: canSave = !!trimmed && !badName && !clash && !badPath && !badPort && !saving
+    && !(binary === "custom" && !path.trim())
+
+  const configOf = e => Object.fromEntries(
+    ["kind", "binary", "version", "variant", "port", "model", "args", "ready-timeout"]
+      .filter(key => e[key] !== undefined && e[key] !== null)
+      .map(key => [key, e[key]]))
+
+  const table = () => ({
+    kind,
+    ...(binary === "custom" ? { binary: path.trim() } : binary ? { binary } : {}),
+    ...(binary === "managed" && version.trim() ? { version: version.trim() } : {}),
+    ...(binary === "managed" && variant.trim() ? { variant: variant.trim() } : {}),
+    ...(port.trim() ? { port: portNumber } : {}),
+    ...(kind !== "ollama" && model ? { model } : {}),
+    ...(args.trim() ? { args: split(args) } : {}),
+    ...(readyTimeout.trim() ? { "ready-timeout": Number(readyTimeout) } : {}),
+  })
+
+  const save = async () => {
+    if (!canSave) return
+    saving = true
+    error = ""
+    const engines = Object.fromEntries(
+      Object.entries(view?.engines || {}).map(([n, e]) => [n, configOf(e)]))
+    engines[trimmed] = table()
+    const written = await saveEngines(engines)
+    if (!written.ok) {
+      saving = false
+      error = written.error
+      return
+    }
+    saved?.(written.view)
+
+    // The providers that send to it: a new one, or the URLs of the linked
+    // ones when the port moved — each only where it still says the old URL,
+    // so a URL somebody changed by hand is left alone.
+    await loadProviders()
+    const providers = { ...(state.providers?.providers || {}) }
+    let changed = false
+    if (withProvider && !providers[trimmed]) {
+      providers[trimmed] = profileFor(trimmed, kind, portNumber)
+      changed = true
+    }
+    const before = current?.url
+    const after = written.view.engines[trimmed]?.url
+    for (const linked of current?.providers || []) {
+      if (before !== after && providers[linked]?.url === before) {
+        providers[linked] = { ...providers[linked], url: after }
+        changed = true
+      }
+    }
+    if (changed) {
+      const result = await saveProviders({ default: state.providers?.default ?? null, providers })
+      if (!result?.ok) {
+        saving = false
+        error = `The engine was written, and its provider was not: ${state.providersError}`
+        return
+      }
+    }
+    saving = false
+    close?.()
+  }
+</script>
+
+<dialog id="engine-dialog" class="modal narrow" @click.self="close?.()">
+  <header class="modal-head">
+    <strong>{{ editing ? `Engine ${editing}` : "Add an engine" }}</strong>
+    <button type="button" class="link" @click="close?.()">close</button>
+  </header>
+  <section class="modal-body">
+    <dl class="settings form">
+      <dt>Name</dt>
+      <dd>
+        <input :value="name" placeholder="gemma" :disabled="!!editing"
+               @input="name = $event.target.value">
+        <span :if="badName" class="warn">letters, digits, <code>-</code> and <code>_</code></span>
+        <span :if="clash" class="warn">already an engine of that name</span>
+      </dd>
+
+      <dt>Kind</dt>
+      <dd>
+        <select :value="kind" :disabled="!!editing"
+                @change="kind = $event.target.value, binary = 'managed', path = '', variant = ''">
+          <option value="llama">llama.cpp — llama-server, 12 MB, GGUF, one model per server</option>
+          <option value="mlx">mlx — mlx-serve, Apple Silicon, MLX and GGUF</option>
+          <option value="ollama">ollama — its own model store and its own MLX, 160 MB</option>
+        </select>
+      </dd>
+
+      <dt>Binary</dt>
+      <dd>
+        <select :value="binary" @change="binary = $event.target.value">
+          <option value="managed">luu's own copy{{ haveCopy ? " — downloaded" : " — downloaded when you press download" }}</option>
+          <option :each="p in found" :key="p" :value="p">{{ p }}</option>
+          <option value="">whichever is found first on this machine</option>
+          <option value="custom">a path…</option>
+        </select>
+      </dd>
+      <dd :if="binary === 'custom'">
+        <input :value="path" :attrs="{ placeholder: `/opt/homebrew/bin/${bin}` }"
+               @input="path = $event.target.value">
+        <span :if="badPath" class="warn">must be a file named <code>{{ bin }}</code></span>
+      </dd>
+      <dd :if="binary === 'custom'" class="note">
+        From here, only a file named <code>{{ bin }}</code>. Anything else is
+        written in <code>config.toml</code> by hand.
+      </dd>
+      <dd :if="!found.length && binary !== 'managed'" class="note">
+        No <code>{{ bin }}</code> was found on this machine.
+      </dd>
+
+      <dt :if="binary === 'managed'">Version</dt>
+      <dd :if="binary === 'managed'">
+        <input class="w-num" :value="version" :attrs="{ placeholder: pinned }"
+               @input="version = $event.target.value">
+        <span class="dim">a release tag; empty is the one luu pins</span>
+      </dd>
+      <dt :if="binary === 'managed' && kind === 'llama'">Variant</dt>
+      <dd :if="binary === 'managed' && kind === 'llama'">
+        <input class="w-num" :value="variant" placeholder="—"
+               @input="variant = $event.target.value">
+        <span class="dim"><code>vulkan</code>, <code>cuda-12.8</code>, <code>rocm-10.0</code> on Linux; empty is CPU/Metal</span>
+      </dd>
+
+      <dt>Port</dt>
+      <dd>
+        <input class="w-num" :value="port" :attrs="{ placeholder: String(defaultPort(kind)) }"
+               @input="port = $event.target.value">
+        <span :if="badPort" class="warn">a port is 1–65535</span>
+      </dd>
+
+      <dt :if="kind !== 'ollama'">Model</dt>
+      <dd :if="kind !== 'ollama'">
+        <select :value="model" @change="model = $event.target.value">
+          <option value="">none — named in the arguments below</option>
+          <option :if="model && !loadable.some(m => m.reference === model)" :value="model">
+            {{ modelLabel(model) }} — not found on this machine
+          </option>
+          <option :each="m in loadable" :key="m.reference" :value="m.reference">
+            {{ m.label }} · {{ gb(m.size) }}
+          </option>
+          <option :each="m in unloadable" :key="m.reference" disabled
+                  :attrs="{ title: m.cannot[kind] }">
+            ⚠ {{ m.label }}
+          </option>
+        </select>
+      </dd>
+      <dd :if="kind !== 'ollama'" class="note">
+        What this machine already has, where each tool keeps it — nothing is
+        copied. A session that picks another from the chat restarts the engine
+        on it.
+      </dd>
+      <!-- The greyed ones, with why: a native select shows no tooltip on a
+           disabled option everywhere, so the reasons are also written out. -->
+      <dd :if="kind !== 'ollama' && unloadable.length" class="caveat">
+        <span class="warn">⚠</span> {{ unloadable.length }} on this machine this engine cannot load:
+        <span :each="m in unloadable" :key="m.reference" class="blocked"
+              :attrs="{ title: m.cannot[kind] }">{{ m.label }}</span>
+        <span class="dim">— {{ unloadable[0].cannot[kind] }}{{ unloadable.length > 1 ? " (hover each for its own reason)" : "" }}</span>
+        <span :if="!catalog.length">None found in {{ Object.values(roots).filter(Boolean).join(", ") }}.</span>
+      </dd>
+
+      <dt>Arguments</dt>
+      <dd>
+        <input :value="args"
+               :attrs="{ placeholder: kind === 'llama' ? '-hf ggml-org/gemma-3-1b-it-GGUF -c 8192' : '' }"
+               @input="args = $event.target.value">
+      </dd>
+      <dd :if="kind === 'llama'" class="note">
+        After <code>--host 127.0.0.1 --port</code> and the model's
+        <code>-m</code>, which luu adds. Without a model above, name one here:
+        <code>-hf &lt;repo&gt;</code> (downloaded on first start, so the first
+        wait is long) or <code>-m &lt;file.gguf&gt;</code>. Then the tuning:
+        <code>-c</code>, <code>-ngl</code>, <code>-fa</code>. There is no
+        shell, so write paths whole: <code>~</code> is not expanded.
+      </dd>
+      <dd :if="kind === 'mlx'" class="note">
+        After <code>--serve --host 127.0.0.1 --port</code> and the model's
+        <code>--model</code>, which luu adds. <code>mlx-serve --help</code> has
+        the rest: KV-cache quantization, speculative decoding, the context.
+        Needs macOS 26.2 or later.
+      </dd>
+      <dd :if="kind === 'ollama'" class="note">
+        After <code>serve</code>. The models are ollama's own —
+        <code>ollama pull</code> them, and the provider's model names one.
+      </dd>
+
+      <dt>Ready within</dt>
+      <dd>
+        <input class="w-num" :value="readyTimeout" placeholder="120"
+               @input="readyTimeout = $event.target.value">
+        <span class="dim">seconds a session waits for it to answer</span>
+      </dd>
+
+      <dt :if="!editing">Provider</dt>
+      <dd :if="!editing">
+        <label>
+          <input type="checkbox" :checked="withProvider"
+                 @change="withProvider = $event.target.checked">
+          also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it
+        </label>
+      </dd>
+    </dl>
+
+    <p :if="error" class="error">{{ error }}</p>
+
+    <div class="modal-foot">
+      <div class="modal-actions">
+        <button type="button" @click="close?.()">Cancel</button>
+        <button type="button" class="save" :disabled="!canSave" @click="save()">
+          {{ saving ? "Saving…" : (editing ? "Save" : "Add engine") }}
+        </button>
+      </div>
+    </div>
+  </section>
+</dialog>
+
+<style scoped>
+  .form input:not([type]), .form select { width: 100%; }
+  .form input.w-num { width: 8rem; margin-right: .4rem; }
+  .form label { display: flex; gap: .4rem; align-items: center; }
+  .blocked { font-style: italic; margin-right: .4rem; cursor: help; text-decoration: underline dotted; }
+  .warn { color: var(--warn); }
+</style>
