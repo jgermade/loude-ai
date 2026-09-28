@@ -9,6 +9,10 @@
   // refusal is a turn. See
   // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
   const { state, loadAuthority, saveAuthority } = await import("./store.js")
+  const Segmented = await import("./components/segmented.html")
+  const SaveButton = await import("./components/save-button.html")
+
+  const POSITIONS = [{ value: "", label: "system (default)" }, "prompt"]
 
   await loadAuthority()
 
@@ -22,7 +26,6 @@
     planText: state.authority?.file?.plan?.text || "",
     planPosition: state.authority?.file?.plan?.position || "",
   }
-  let saving = false
 
   const set = (key, value) => { draft = { ...draft, [key]: value } }
 
@@ -32,21 +35,27 @@
     text ? { text, ...(position ? { position } : {}) } : undefined
 
   const save = async () => {
-    saving = true
-    await saveAuthority({
+    const ok = await saveAuthority({
       draft: note(draft.draftText, draft.draftPosition),
       plan: note(draft.planText, draft.planPosition),
     })
-    saving = false
     draft = {
       draftText: state.authority?.file?.draft?.text || "",
       draftPosition: state.authority?.file?.draft?.position || "",
       planText: state.authority?.file?.plan?.text || "",
       planPosition: state.authority?.file?.plan?.position || "",
     }
+    return ok
   }
 
   $: editable = !!state.authority?.editable
+  // How many of the four fields the draft moves away from the file.
+  $: changes = [
+    [draft.draftText, state.authority?.file?.draft?.text],
+    [draft.draftPosition, state.authority?.file?.draft?.position],
+    [draft.planText, state.authority?.file?.plan?.text],
+    [draft.planPosition, state.authority?.file?.plan?.position],
+  ].filter(([mine, file]) => mine !== (file || "")).length
   $: running = state.authority?.running || {}
   // Whether the file names a note the live session is not (yet) telling a
   // turn — a session may have started before this table existed, or under a
@@ -104,12 +113,7 @@
               @input="set('draftText', $event.target.value)"></textarea>
   </dd>
   <dd>
-    <div class="choice">
-      <button type="button" :disabled="!editable" :class.on="draft.draftPosition === ''"
-              @click="set('draftPosition', '')">system (default)</button>
-      <button type="button" :disabled="!editable" :class.on="draft.draftPosition === 'prompt'"
-              @click="set('draftPosition', 'prompt')">prompt</button>
-    </div>
+    <Segmented :options="POSITIONS" :model="draft.draftPosition" :disabled="!editable" />
   </dd>
   <dd class="note">
     <b>system</b> appends the note to the cached prefix once — free while the
@@ -126,12 +130,7 @@
               @input="set('planText', $event.target.value)"></textarea>
   </dd>
   <dd>
-    <div class="choice">
-      <button type="button" :disabled="!editable" :class.on="draft.planPosition === ''"
-              @click="set('planPosition', '')">system (default)</button>
-      <button type="button" :disabled="!editable" :class.on="draft.planPosition === 'prompt'"
-              @click="set('planPosition', 'prompt')">prompt</button>
-    </div>
+    <Segmented :options="POSITIONS" :model="draft.planPosition" :disabled="!editable" />
   </dd>
 
   <dd class="note caveat">
@@ -145,8 +144,7 @@
 
 <div class="modal-foot">
   <div class="modal-actions" :if="state.authority">
-    <button type="button" class="save" :disabled="!editable || saving"
-            @click="save()">{{ saving ? "Saving…" : "Save" }}</button>
+    <SaveButton :action="save" :changes="changes" :disabled="!editable" />
   </div>
 </div>
 

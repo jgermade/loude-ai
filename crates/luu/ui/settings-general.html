@@ -7,23 +7,34 @@
   const { prefs, setTheme, setEditor, setLayout, monacoAvailable } =
     await import("./prefs.js")
   const { workspace, openPicker } = await import("./workspace.js")
+  const Segmented = await import("./components/segmented.html")
+
+  const THEMES = [
+    { value: "auto", label: "Auto" },
+    { value: "light", label: "Light" },
+    { value: "dark", label: "Dark" },
+  ]
+  const LAYOUTS = [
+    { value: "responsive", label: "Responsive" },
+    { value: "two", label: "Always two" },
+  ]
 
   // Whether Monaco is on this machine. Asked once — the answer is whether
   // `npm install` was run in `crates/luu/ui`, and that does not change while
   // the page is open.
   let monacoHere = null
   monacoAvailable().then(found => { monacoHere = found })
+  $: editors = [
+    { value: "own", label: "This page" },
+    { value: "monaco", label: "Monaco", disabled: monacoHere === false },
+  ]
 </script>
 
 <h3>Theme</h3>
 <dl class="settings">
   <dt>Appearance</dt>
   <dd>
-    <div class="choice">
-      <button type="button" :class.on="prefs.theme === 'auto'" @click="setTheme('auto')">Auto</button>
-      <button type="button" :class.on="prefs.theme === 'light'" @click="setTheme('light')">Light</button>
-      <button type="button" :class.on="prefs.theme === 'dark'" @click="setTheme('dark')">Dark</button>
-    </div>
+    <Segmented :options="THEMES" :model="prefs.theme" @change="setTheme($event.detail)" />
   </dd>
   <dd class="note">
     <b>Auto</b> follows this machine, live — no reload. <b>Dark</b> is what a
@@ -36,14 +47,7 @@
 <dl class="settings">
   <dt>Files are drawn by</dt>
   <dd>
-    <div class="choice">
-      <button type="button" :class.on="prefs.editor === 'own'" @click="setEditor('own')">This page</button>
-      <button
-        type="button"
-        :class.on="prefs.editor === 'monaco'"
-        :disabled="monacoHere === false"
-        @click="setEditor('monaco')">Monaco</button>
-    </div>
+    <Segmented :options="editors" :model="prefs.editor" @change="setEditor($event.detail)" />
   </dd>
   <dd :if="monacoHere === false" class="caveat">
     Monaco is not installed. It is a node dependency of
@@ -63,16 +67,7 @@
 <dl class="settings">
   <dt>Columns</dt>
   <dd>
-    <div class="choice">
-      <button
-        type="button"
-        :class.on="prefs.layout === 'responsive'"
-        @click="setLayout('responsive')">Responsive</button>
-      <button
-        type="button"
-        :class.on="prefs.layout === 'two'"
-        @click="setLayout('two')">Always two</button>
-    </div>
+    <Segmented :options="LAYOUTS" :model="prefs.layout" @change="setLayout($event.detail)" />
   </dd>
   <dd class="note">
     <b>Responsive</b> is three columns — inspector, content, chat — above

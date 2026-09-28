@@ -16,6 +16,14 @@
   // nobody can reach from the surface they actually use is a narrowing nobody
   // applies.
   const { state, loadResend, saveResend } = await import("./store.js")
+  const Segmented = await import("./components/segmented.html")
+  const SaveButton = await import("./components/save-button.html")
+
+  // `""` is drawn as the word it means here.
+  const UNSET = { value: "", label: "unset" }
+  const REPEAT = [UNSET, "always", "once"]
+  const PRUNE = [UNSET, "never", "behind"]
+  const RESULTS = [UNSET, "kept", "cited_reads", "cited"]
 
   // Asked here and awaited here, like the providers section: `openSettings`
   // only mounts the component, and a `:setup` runs to completion before the
@@ -34,26 +42,25 @@
     prune: state.resend?.file?.prune || "",
     results: state.resend?.file?.results || "",
   }
-  let saving = false
-
-  const set = (key, value) => { draft = { ...draft, [key]: value } }
 
   const save = async () => {
-    saving = true
-    await saveResend({
+    const ok = await saveResend({
       ...(draft.repeat ? { repeat: draft.repeat } : {}),
       ...(draft.prune ? { prune: draft.prune } : {}),
       ...(draft.results ? { results: draft.results } : {}),
     })
-    saving = false
     draft = {
       repeat: state.resend?.file?.repeat || "",
       prune: state.resend?.file?.prune || "",
       results: state.resend?.file?.results || "",
     }
+    return ok
   }
 
   $: editable = !!state.resend?.editable
+  // How many of the three the draft moves away from the file.
+  $: changes = ["repeat", "prune", "results"]
+    .filter(key => draft[key] !== (state.resend?.file?.[key] || "")).length
   $: running = state.resend?.running || {}
   $: waiting = state.resend?.waiting || []
   // Whether the file and the live session disagree, which is ordinary rather
@@ -112,14 +119,7 @@
 <dl class="settings" :if="state.resend">
   <dt>Repeat</dt>
   <dd>
-    <div class="choice">
-      <button type="button" :disabled="!editable" :class.on="draft.repeat === ''"
-              @click="set('repeat', '')">unset</button>
-      <button type="button" :disabled="!editable" :class.on="draft.repeat === 'always'"
-              @click="set('repeat', 'always')">always</button>
-      <button type="button" :disabled="!editable" :class.on="draft.repeat === 'once'"
-              @click="set('repeat', 'once')">once</button>
-    </div>
+    <Segmented :options="REPEAT" :model="draft.repeat" :disabled="!editable" />
   </dd>
   <dd class="note">
     <b>once</b> renders a span in the <b>oldest</b> turn of the window that
@@ -134,14 +134,7 @@
 
   <dt>Prune</dt>
   <dd>
-    <div class="choice">
-      <button type="button" :disabled="!editable" :class.on="draft.prune === ''"
-              @click="set('prune', '')">unset</button>
-      <button type="button" :disabled="!editable" :class.on="draft.prune === 'never'"
-              @click="set('prune', 'never')">never</button>
-      <button type="button" :disabled="!editable" :class.on="draft.prune === 'behind'"
-              @click="set('prune', 'behind')">behind</button>
-    </div>
+    <Segmented :options="PRUNE" :model="draft.prune" :disabled="!editable" />
   </dd>
   <dd class="note">
     <b>behind</b> makes the oldest turns give up their code and keep their
@@ -153,16 +146,7 @@
 
   <dt>Results</dt>
   <dd>
-    <div class="choice">
-      <button type="button" :disabled="!editable" :class.on="draft.results === ''"
-              @click="set('results', '')">unset</button>
-      <button type="button" :disabled="!editable" :class.on="draft.results === 'kept'"
-              @click="set('results', 'kept')">kept</button>
-      <button type="button" :disabled="!editable" :class.on="draft.results === 'cited_reads'"
-              @click="set('results', 'cited_reads')">cited_reads</button>
-      <button type="button" :disabled="!editable" :class.on="draft.results === 'cited'"
-              @click="set('results', 'cited')">cited</button>
-    </div>
+    <Segmented :options="RESULTS" :model="draft.results" :disabled="!editable" />
   </dd>
   <dd class="note">
     Both replace a tool result behind the prune line with the line that cites
@@ -200,8 +184,7 @@
 
 <div class="modal-foot">
   <div class="modal-actions" :if="state.resend">
-    <button type="button" class="save" :disabled="!editable || saving"
-            @click="save()">{{ saving ? "Saving…" : "Save" }}</button>
+    <SaveButton :action="save" :changes="changes" :disabled="!editable" />
   </div>
 </div>
 

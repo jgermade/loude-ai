@@ -918,7 +918,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
     (await (await fetch("./api/monaco")).json()).installed)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
-  const monaco = page.locator('.modal .choice button:has-text("Monaco")')
+  const monaco = page.locator('.modal .seg button:has-text("Monaco")')
   await expect(monaco).toBeVisible()
 
   if (!installed) {
@@ -944,7 +944,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
   // And switching back disposes it: an editor left attached to a detached
   // element is a leak that only shows up after twenty tab switches.
   await page.click('.inspector .col-foot button[title="Settings"]')
-  await page.click('.modal .choice button:has-text("This page")')
+  await page.click('.modal .seg button:has-text("This page")')
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
   await expect(page.locator("#monaco-host")).toHaveCount(0)
   await expect(page.locator(".content .code-rows li").first()).toBeVisible()

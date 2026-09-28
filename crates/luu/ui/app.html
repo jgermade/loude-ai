@@ -11,6 +11,25 @@
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel } =
     await import("./ui.js")
   const { modalOpen } = await import("./modal.js")
+  const Segmented = await import("./components/segmented.html")
+
+  // The gate's two narrowings. `null` is *leave*, which is what almost every
+  // approval means; the other two are a person deciding this job is not the
+  // session.
+  const NETWORK = [
+    { value: null, label: "leave" },
+    { value: true, label: "grant" },
+    { value: false, label: "deny" },
+  ]
+  const ENFORCEMENT = [
+    { value: null, label: "leave" },
+    { value: "kernel", label: "kernel" },
+    { value: "best-effort", label: "best-effort" },
+  ]
+  const CONFIRM = [
+    { value: "manual", label: "Manual", title: "Every job waits for you" },
+    { value: "auto", label: "Auto", title: "This page approves each proposal as it arrives" },
+  ]
 
   // The panes' contents and the page's modals, each its own file — see
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
@@ -724,22 +743,11 @@
                job is not the session. -->
           <div class="narrow" :if="!replaying">
             <span class="dim">network</span>
-            <div class="choice tiny">
-              <button type="button" :class.on="network === null" @click="network = null">leave</button>
-              <button type="button" :class.on="network === true" @click="network = true">grant</button>
-              <button type="button" :class.on="network === false" @click="network = false">deny</button>
-            </div>
+            <Segmented size="small" :options="NETWORK" :model="network" />
           </div>
           <div class="narrow" :if="!replaying">
             <span class="dim">enforcement</span>
-            <div class="choice tiny">
-              <button type="button" :class.on="enforcement === null" @click="enforcement = null">leave</button>
-              <button type="button" :class.on="enforcement === 'kernel'" @click="enforcement = 'kernel'">kernel</button>
-              <button
-                type="button"
-                :class.on="enforcement === 'best-effort'"
-                @click="enforcement = 'best-effort'">best-effort</button>
-            </div>
+            <Segmented size="small" :options="ENFORCEMENT" :model="enforcement" />
           </div>
           <!-- The one field here that narrows backwards: `kernel` is a
                tightening and needs no permission, `best-effort` asks the policy
@@ -822,12 +830,7 @@
         <!-- Who answers the gate. A person deciding once instead of per job —
              never the server running unapproved work, which is why this control
              is here and not behind a modal somebody set and forgot. -->
-        <div class="choice tiny">
-          <button type="button" :class.on="prefs.confirm === 'manual'"
-                  title="Every job waits for you" @click="setConfirm('manual')">Manual</button>
-          <button type="button" :class.on="prefs.confirm === 'auto'"
-                  title="This page approves each proposal as it arrives" @click="setConfirm('auto')">Auto</button>
-        </div>
+        <Segmented size="small" :options="CONFIRM" :model="prefs.confirm" @change="setConfirm($event.detail)" />
 
         <!-- Where this session sends. Reported rather than switched: changing it
              is `Continue here` in the session starter, and it is there for a
@@ -1229,7 +1232,6 @@
     overflow: hidden;
   }
   /* The page's segmented control, at the size a status bar has room for. */
-  .choice.tiny button { font-size: 11px; padding: .1rem .5rem; }
 
   .options .tag {
     font-size: 11px;

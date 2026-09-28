@@ -1,0 +1,96 @@
+<script :setup="{ items = [], model = '' }">
+  // A vertical list of sections with a dot that springs to the chosen one. The
+  // chosen label is the only one at full colour. The idea is rare-ui's
+  // `bounce-sidebar`; the code is not.
+  //
+  // **Self-contained**, like everything in `components/`: it imports nothing
+  // from the page, and what an item looks like is the caller's, through the
+  // slot — so an icon sprite the page owns stays the page's. See
+  // `RECORD/2026-09-28.components-of-our-own.completed.md`.
+  //
+  //   <Rail :items="[{ value: 'a', label: 'A' }]" :model="section" :slot="{ item }">
+  //     <b>{{ item.label }}</b>
+  //   </Rail>
+  //
+  // Without a slot an item draws its `label`. The choice goes back up through
+  // `:model` when the tag binds one, and always as `change`.
+
+  // Where the dot is, as a y in the rail's own pixels, or `null` before the
+  // first measurement. `moving` is the same first-placement rule as
+  // `segmented.html`: the dot appears where it belongs and only moves after.
+  let y = null
+  let moving = false
+
+  const place = () => {
+    const on = $self("button.on")
+    if (!on || !on.offsetHeight) return
+    y = on.offsetTop + on.offsetHeight / 2 - 3
+    if (!moving) requestAnimationFrame(() => { moving = true })
+  }
+
+  const choose = item => {
+    if (item.value === model) return
+    $updateModel(item.value)
+    $emit("change", item.value)
+  }
+
+  await $mounted()
+  new ResizeObserver(() => place()).observe($self(".rail"))
+  $: (model, items, requestAnimationFrame(place))
+  $: dot = y === null ? "display:none" : `transform:translateY(${y}px)`
+</script>
+
+<nav class="rail" :class.moving="moving">
+  <span class="dot" :style="dot" aria-hidden="true"></span>
+  <button
+    :each="item in items"
+    :key="item.value"
+    type="button"
+    :class.on="item.value === model"
+    :aria-current="item.value === model ? 'page' : null"
+    @click="choose(item)">
+    <slot :item="item">{{ item.label }}</slot>
+  </button>
+</nav>
+
+<style scoped>
+  .rail {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+    padding-left: .7rem;
+  }
+  .dot {
+    position: absolute;
+    top: 0;
+    left: .05rem;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent, #2f5bbd);
+  }
+  .rail.moving .dot { transition: transform .28s cubic-bezier(.34, 1.56, .64, 1); }
+  button {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    width: 100%;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim, #5b6472);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: .35rem .6rem;
+    cursor: pointer;
+    text-align: left;
+    transition: color .2s;
+  }
+  button:hover { color: var(--fg, #1a1d23); background: var(--bg, #f4f5f8); }
+  button.on { color: var(--fg, #1a1d23); }
+  @media (prefers-reduced-motion: reduce) {
+    .rail.moving .dot { transition: none; }
+  }
+</style>

@@ -1,0 +1,108 @@
+<script :setup="{ action = null, changes = 0, disabled = false, label = 'Save' }">
+  // A save button that says how much it would save and whether it did.
+  //
+  // - `changes` is a count the caller works out. Above zero it rides on the
+  //   button, and at zero the button is off, because there is nothing to write.
+  // - `action` is the caller's save, called on click and awaited. **Truthy
+  //   means it was written**: the label turns into a tick that draws itself, and
+  //   the button says `saved` until the next change. Falsy leaves the button as
+  //   it was, since the caller is the one that knows what to say about a refusal.
+  //
+  // The tick is rare-ui's `delete-button` confirmation; the code is not.
+  // **Self-contained**, like everything in `components/`. See
+  // `RECORD/2026-09-28.components-of-our-own.completed.md`.
+  //
+  //   <SaveButton :action="save" :changes="changed" :disabled="!editable" />
+
+  let busy = false
+  // Set by a save that worked. It only shows while nothing has changed since:
+  // the next edit brings the count back instead.
+  let done = false
+
+  const run = async () => {
+    if (busy || !action) return
+    busy = true
+    done = false
+    let ok = false
+    try {
+      ok = !!(await action())
+    } finally {
+      busy = false
+    }
+    done = ok
+    $emit(ok ? "saved" : "failed")
+  }
+
+  $: saved = done && !changes
+  $: off = disabled || busy || (!changes && !done) || saved
+</script>
+
+<button
+  type="button"
+  class="save"
+  :class.busy="busy"
+  :class.saved="saved"
+  :disabled="off"
+  :aria-label="saved ? 'Saved' : null"
+  @click="run()">
+  <span class="label">{{ busy ? "Saving…" : label }}</span>
+  <span class="count" :if="changes > 0 && !busy">{{ changes }}</span>
+  <svg class="tick" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M4 12.5 9.5 18 20 7" />
+  </svg>
+</button>
+
+<style scoped>
+  .save {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+    background: var(--accent, #2f5bbd);
+    color: var(--on-accent, #fff);
+    border: 0;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    padding: .4rem .9rem;
+    cursor: pointer;
+  }
+  .save:disabled { cursor: default; }
+  .save:disabled:not(.saved) { opacity: .5; }
+  .label, .count { transition: opacity .2s; }
+  .count {
+    min-width: 1.1rem;
+    padding: 0 .3rem;
+    border-radius: 999px;
+    background: var(--on-accent, #fff);
+    color: var(--accent, #2f5bbd);
+    font-size: 11px;
+    line-height: 1.1rem;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  /* The tick sits over the label and draws itself once the save lands. */
+  .tick {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 24;
+    stroke-dashoffset: 24;
+  }
+  .saved .label { opacity: 0; }
+  .saved .tick {
+    stroke-dashoffset: 0;
+    transition: stroke-dashoffset .45s cubic-bezier(.32, .72, 0, 1) .05s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .saved .tick, .label, .count { transition: none; }
+  }
+</style>

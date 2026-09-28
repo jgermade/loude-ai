@@ -1231,6 +1231,14 @@ The rest follows from that:
   no transforms, so both paths serve the same bytes. No Vite proxy to configure.
 - **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
   keeps existing DOM when the transcript is appended to.
+- **Components**: `crates/luu/ui/components/` holds components that import nothing from the page.
+  Everything arrives as props or slots, everything leaves as `:model` or `$emit`, styles are
+  scoped, and page tokens are read with fallbacks. Three so far, each taking an idea from rare-ui
+  with none of its code: `Segmented` (a pill that slides to the chosen answer), `Rail` (a dot that
+  springs to the chosen section) and `SaveButton` (a count of unsaved changes, and a tick once a
+  save lands). Every segmented choice on the page is a `Segmented`, and the global `.choice` rule is
+  gone. See
+  [`RECORD/2026-09-28.components-of-our-own.completed.md`](RECORD/2026-09-28.components-of-our-own.completed.md).
 - **Virtualization**: no library, and none needed — bind `:each` to a computed window plus two spacer
   elements. `GET /api/sessions/:id/turns?from=&limit=` already puts pagination on the server.
 

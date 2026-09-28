@@ -1,0 +1,108 @@
+<script :setup="{ options = [], model = '', disabled = false, size = '' }">
+  // A segmented control: a few mutually exclusive answers side by side, with a
+  // pill behind the chosen one that slides to the next rather than a fill that
+  // jumps. The idea is rare-ui's `gooey-nav`; the code is not.
+  //
+  // **Self-contained**, like everything in `components/`: it imports nothing
+  // from the page, and its colours are the page's tokens *with fallbacks*, so it
+  // draws the same outside luu. See
+  // `RECORD/2026-09-28.components-of-our-own.completed.md`.
+  //
+  //   <Segmented :options="[{ value: 'a', label: 'A' }, 'b']" :model="x"
+  //              @change="save($event.detail)" />
+  //
+  // An option is a string or `{ value, label, disabled, title }`. The choice goes
+  // back up through `:model` when the tag binds one, and always as `change`.
+
+  $: items = options.map(o => typeof o === "string" ? { value: o, label: o } : o)
+
+  // Where the pill is, in the box's own pixels, or `null` before the first
+  // measurement. `moving` turns the transition on a frame *after* that first
+  // placement, so opening a section does not slide every pill in from the edge.
+  let at = null
+  let moving = false
+
+  const place = () => {
+    const on = $self("button.on")
+    if (!on || !on.offsetWidth) return
+    at = { x: on.offsetLeft, y: on.offsetTop, w: on.offsetWidth, h: on.offsetHeight }
+    if (!moving) requestAnimationFrame(() => { moving = true })
+  }
+
+  const choose = item => {
+    if (disabled || item.disabled || item.value === model) return
+    $updateModel(item.value)
+    $emit("change", item.value)
+  }
+
+  await $mounted()
+  // A font arriving or the row wrapping moves every button without the choice
+  // changing.
+  new ResizeObserver(() => place()).observe($self(".seg"))
+  // Read `model` and `items` so this re-runs when either does, and measure on
+  // the next frame, once the `.on` class has moved.
+  $: (model, items, requestAnimationFrame(place))
+  $: pill = at
+    ? `width:${at.w}px;height:${at.h}px;transform:translate(${at.x}px,${at.y}px)`
+    : "display:none"
+</script>
+
+<div class="seg" :class.small="size === 'small'" :class.moving="moving" role="radiogroup">
+  <span class="pill" :style="pill" aria-hidden="true"></span>
+  <button
+    :each="item in items"
+    :key="String(item.value)"
+    type="button"
+    role="radio"
+    :aria-checked="item.value === model ? 'true' : 'false'"
+    :class.on="item.value === model"
+    :disabled="disabled || item.disabled"
+    :title="item.title"
+    @click="choose(item)">{{ item.label }}</button>
+</div>
+
+<style scoped>
+  .seg {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem;
+  }
+  .pill {
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    left: 0;
+    border-radius: 6px;
+    background: var(--accent, #2f5bbd);
+  }
+  .seg.moving .pill {
+    transition: transform .32s cubic-bezier(.32, .72, 0, 1),
+                width .32s cubic-bezier(.32, .72, 0, 1);
+  }
+  button {
+    background: var(--bg, #f4f5f8);
+    color: var(--dim, #5b6472);
+    border: 1px solid var(--line, #d7dbe2);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+    padding: .2rem .7rem;
+    cursor: pointer;
+    transition: color .2s;
+  }
+  button:hover:not(:disabled) { color: var(--fg, #1a1d23); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.on {
+    background: transparent;
+    border-color: transparent;
+    color: var(--on-accent, #fff);
+  }
+  .small button { font-size: 11px; padding: .1rem .5rem; }
+  @media (prefers-reduced-motion: reduce) {
+    .seg.moving .pill { transition: none; }
+  }
+</style>

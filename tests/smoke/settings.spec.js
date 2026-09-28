@@ -126,13 +126,16 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // The editor below it: this machine's default, which says nothing yet. Unset
   // is not off — it is the code's default, which for this rule is now `once`.
   const editor = page.locator(".modal .settings").nth(1)
-  await expect(editor.locator(".choice").first().locator("button.on")).toHaveText("unset")
+  await expect(editor.locator(".seg").first().locator("button.on")).toHaveText("unset")
 
   // Rule A off, which since the flip is the direction that is a change. It
   // stores nothing, so it is the one rule that moves a running session in both
   // directions, and this is the half that used to be unreachable.
   await editor.locator('button:has-text("always")').click()
+  await expect(page.locator(".modal button.save .count")).toHaveText("1")
   await page.locator(".modal button.save").click()
+  // A save that landed says so on the button, until the next change.
+  await expect(page.locator(".modal button.save.saved")).toBeVisible()
 
   await expect(running.locator("dd").nth(0)).toContainText("always")
   const off = await (await fetch(`${BASE}/api/resend`)).json()

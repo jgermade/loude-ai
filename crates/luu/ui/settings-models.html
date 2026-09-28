@@ -6,6 +6,7 @@
   // `RECORD/2026-09-07.configuring-from-the-browser.completed.md`.
   const { state, saveProviders, loadProviders, refreshSettings } = await import("./store.js")
   const { ui, openStarter } = await import("./ui.js")
+  const SaveButton = await import("./components/save-button.html")
 
   // `config` is a *copy* of the providers file: typing into the server's own
   // answer would make an unsaved change look saved. Rows carry an id because a
@@ -18,10 +19,12 @@
   let typed = ""
   let saving = false
 
-  const toDraft = view => ({
+  // `nextId` is only swapped out by `changes` below, which must not bump
+  // `rowId`: an effect that writes what it reads never settles.
+  const toDraft = (view, nextId = () => ++rowId) => ({
     default: view?.default || "",
     profiles: Object.entries(view?.providers || {}).map(([name, p]) => ({
-      id: ++rowId,
+      id: nextId(),
       name,
       backend: p.backend || "ollama",
       url: p.url || "",
@@ -100,10 +103,23 @@
       declaration = result.declaration
       typed = ""
     }
+    return !!result.ok
   }
 
   $: profileNames = Object.keys(state.providers?.providers || {})
   $: editable = !!state.providers?.editable
+  // How many profiles the draft adds, removes or edits, plus one if the default
+  // moved. Compared as what would be written, so a row with no name, which the
+  // write drops, is not a change.
+  $: changes = (() => {
+    if (!config) return 0
+    const mine = fromDraft(config)
+    const file = fromDraft(toDraft(state.providers, () => 0))
+    const names = new Set([...Object.keys(mine.providers), ...Object.keys(file.providers)])
+    const edited = [...names].filter(name =>
+      JSON.stringify(mine.providers[name]) !== JSON.stringify(file.providers[name])).length
+    return edited + (mine.default !== file.default ? 1 : 0)
+  })()
   $: canDeclare = !!declaration && typed.trim() === declaration.host
   $: windowSource = ({
     flag: "--context-limit",
@@ -275,8 +291,7 @@
 
   <div class="modal-actions" :if="config">
     <button type="button" class="add" :disabled="!editable" @click="addProfile()">+ profile</button>
-    <button type="button" class="save" :disabled="!editable || saving"
-            @click="saveConfig(false)">{{ saving ? "Saving…" : "Save" }}</button>
+    <SaveButton :action="() => saveConfig(false)" :changes="changes" :disabled="!editable" />
   </div>
 </div>
 

@@ -405,27 +405,6 @@ dialog.modal.narrow { width: min(34rem, calc(100vw - 2rem)); }
 }
 .modal-actions .save { margin-left: auto; }
 
-/* A small segmented control: two or three mutually exclusive answers where a
-   `<select>` would hide all but one of them behind a click. */
-.choice { display: flex; gap: .3rem; }
-.choice button {
-  background: var(--bg);
-  color: var(--dim);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  padding: .2rem .7rem;
-  cursor: pointer;
-}
-.choice button:hover { color: var(--fg); }
-.choice button.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-
 /* The file viewer's rows. Global rather than scoped to the viewer for a
    stricter reason than the palette below: `<style scoped>` rewrites
    `.code-rows li` to `.code-rows li[data-jq79="…"]`, and only elements jq79's
