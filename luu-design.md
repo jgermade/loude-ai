@@ -1849,7 +1849,7 @@ for luu's own crates and `warn` for the rest by default), and off with
 and duration (the path only, never the query, where `?token=` travels), the
 sockets opening and closing, each client message by kind, every protocol event
 but `token` by type and a fixed set of fields, where a session sends after a
-switch, and each engine phase. Never a prompt, a token or a tool's output:
+switch, and each engine phase once, when it changes. Never a prompt, a token or a tool's output:
 those belong to the session stream. **The writer never blocks**. Lines cross
 to `tracing-appender`'s own thread and are dropped rather than waited for,
 because a log added to find a freeze must not be able to cause one. **A

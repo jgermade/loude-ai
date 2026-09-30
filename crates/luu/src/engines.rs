@@ -528,6 +528,24 @@ struct Readiness {
     error: Option<String>,
 }
 
+/// Whether a phase is news, which is what the log is told.
+///
+/// `warm` notes `starting` so the page's clock begins at the click, and the
+/// `ensure` it spawns notes `starting` again just before the process starts;
+/// every model call runs `ensure` and notes `ready` on an engine that already
+/// was. Both are the same fact twice, and the log said each one: two `starting`
+/// lines at every `serve` start, read as the engine starting twice, and a
+/// `ready` per call — 47 of them in a day that started the process 8 times.
+/// The readiness table is still written every time; only the line is skipped.
+fn moved(
+    previous: Option<&Readiness>,
+    state: &str,
+    model: &Option<String>,
+    error: &Option<String>,
+) -> bool {
+    previous.is_none_or(|was| was.state != state || &was.model != model || &was.error != error)
+}
+
 /// The states an `ensure` passes through before it ends, in order. The clock
 /// runs across all of them: a person reads *how long since I switched*, not
 /// how long the current phase has taken.
@@ -759,15 +777,17 @@ impl Supervisor {
         from: Option<String>,
         error: Option<String>,
     ) {
-        match &error {
-            Some(error) => {
-                tracing::warn!(target: "luu::engines", engine = name, state, model = model.as_deref(), from = from.as_deref(), error = error.as_str(), "engine")
-            }
-            None => {
-                tracing::info!(target: "luu::engines", engine = name, state, model = model.as_deref(), from = from.as_deref(), "engine")
+        let mut readiness = self.readiness.lock().unwrap_or_else(|e| e.into_inner());
+        if moved(readiness.get(name), state, &model, &error) {
+            match &error {
+                Some(error) => {
+                    tracing::warn!(target: "luu::engines", engine = name, state, model = model.as_deref(), from = from.as_deref(), error = error.as_str(), "engine")
+                }
+                None => {
+                    tracing::info!(target: "luu::engines", engine = name, state, model = model.as_deref(), from = from.as_deref(), "engine")
+                }
             }
         }
-        let mut readiness = self.readiness.lock().unwrap_or_else(|e| e.into_inner());
         // One clock per switch: a phase that follows another of the same
         // `ensure` keeps the time it began. `warm` notes `starting` before the
         // task that runs `ensure` gets to, and the page counts from the click.
@@ -1345,5 +1365,42 @@ mod tests {
 
         supervisor.note("e", "starting", Some("other".into()), None, None);
         assert_eq!(supervisor.readiness("e").unwrap().secs, 0);
+    }
+
+    #[test]
+    fn only_a_phase_that_changes_something_is_news() {
+        let model = Some("ollama:qwen2.5-coder:7b".to_string());
+        let was = |state, error: Option<&str>| Readiness {
+            state,
+            model: model.clone(),
+            from: None,
+            since: Instant::now(),
+            error: error.map(str::to_string),
+        };
+        // The first word about an engine always is.
+        assert!(moved(None, "starting", &model, &None));
+        // `warm`'s `starting`, then `ensure`'s: once.
+        assert!(!moved(
+            Some(&was("starting", None)),
+            "starting",
+            &model,
+            &None
+        ));
+        // A call that finds it answering: silent.
+        assert!(!moved(Some(&was("ready", None)), "ready", &model, &None));
+        assert!(moved(Some(&was("starting", None)), "ready", &model, &None));
+        // Another model, or another reason to have failed, is news.
+        assert!(moved(
+            Some(&was("starting", None)),
+            "starting",
+            &Some("other".into()),
+            &None
+        ));
+        assert!(moved(
+            Some(&was("failed", Some("port busy"))),
+            "failed",
+            &model,
+            &Some("exited".into())
+        ));
     }
 }
