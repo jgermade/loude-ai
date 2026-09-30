@@ -253,6 +253,20 @@ export function watchEngine() {
   poll()
 }
 
+let watchedTurn = null
+
+/// `watchEngine` once per turn, for the page's reactive line. That line runs
+/// on every change to `state`, and a streaming answer changes it once per
+/// token — so calling `watchEngine` from it directly was one `GET /api/engine`
+/// per token, 40 a second at the peak and 1478 in one day's log. The engine a
+/// turn waits on is decided when the turn starts; asking again mid-answer
+/// learns nothing.
+export function watchTurnEngine(turn) {
+  if (turn != null && turn !== watchedTurn) watchEngine()
+  watchedTurn = turn
+  return turn
+}
+
 /// Said by the picker the moment somebody chooses: the model the session is
 /// leaving, for the feedback to name while the new one loads. The server only
 /// knows it when one engine restarts on another model (`from`); when the

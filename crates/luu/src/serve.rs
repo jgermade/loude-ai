@@ -3344,7 +3344,26 @@ fn icon_theme_view(state: &AppRouterState) -> IconThemeView {
 }
 
 async fn get_icon_theme(State(state): State<AppRouterState>) -> Response {
-    Json(icon_theme_view(&state)).into_response()
+    match off_runtime(move || icon_theme_view(&state)).await {
+        Ok(view) => Json(view).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// Filesystem work a handler cannot avoid, on the blocking pool instead of a
+/// runtime worker.
+///
+/// `icon_theme_view` reads `config.toml` and a `package.json` per installed
+/// extension, which is 26 ms on a quiet disk and took 98 s and 147 s on
+/// 2026-09-30 — the only request in flight both times the runtime stopped
+/// turning, with no socket, turn or other request served until it ended. On
+/// the blocking pool the same wait is one slow request. See `RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`.
+async fn off_runtime<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Box<Response>> {
+    tokio::task::spawn_blocking(work).await.map_err(|error| {
+        Box::new((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response())
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -3367,9 +3386,14 @@ async fn put_icon_theme(
         .icon_theme
         .map(|named| named.trim().to_string())
         .filter(|named| !named.is_empty());
-    match apply_icon_theme(&state, named.map(std::path::PathBuf::from)) {
-        Ok(()) => Json(icon_theme_view(&state)).into_response(),
-        Err(response) => *response,
+    let applied = off_runtime(move || {
+        apply_icon_theme(&state, named.map(std::path::PathBuf::from))
+            .map(|()| icon_theme_view(&state))
+    })
+    .await;
+    match applied {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(response)) | Err(response) => *response,
     }
 }
 
@@ -3485,9 +3509,13 @@ async fn import_icon_theme(
         Some(rest) => std::path::Path::new("~").join(rest),
         None => imported,
     };
-    match apply_icon_theme(&state, Some(named)) {
-        Ok(()) => Json(icon_theme_view(&state)).into_response(),
-        Err(response) => *response,
+    let applied = off_runtime(move || {
+        apply_icon_theme(&state, Some(named)).map(|()| icon_theme_view(&state))
+    })
+    .await;
+    match applied {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(response)) | Err(response) => *response,
     }
 }
 

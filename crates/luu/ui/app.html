@@ -9,7 +9,7 @@
   const { workspace, loadRoot, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
     await import("./workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel,
-          watchEngine, inspect, LOADING, openContext } = await import("./ui.js")
+          watchTurnEngine, inspect, LOADING, openContext } = await import("./ui.js")
   const { timing, seconds, speedLabel } = await import("./timing.js")
   const { modelLabel } = await import("./engines.js")
   const { modalOpen } = await import("./modal.js")
@@ -361,7 +361,7 @@
   // that stopped since the last switch, or a switch still loading — so the
   // page asks, rather than drawing an empty answer and saying nothing. See
   // the placeholder in the transcript below.
-  $: engineCheck = state.turn != null ? watchEngine() : null
+  $: engineCheck = watchTurnEngine(state.turn)
   $: engineBusy = !!ui.engine && LOADING.includes(ui.engine.state)
 
   // The context indicator's numbers: what the newest turn's budget says was
@@ -746,7 +746,11 @@
           </div>
         </div>
 
-        <p :if="!entries.length" class="empty">
+        <article :if="state.sending" class="user sending">
+          <div class="text">{{ state.sending }}</div>
+        </article>
+
+        <p :if="!entries.length && !state.sending" class="empty">
           Nothing yet. Send a prompt.
         </p>
       </div>
@@ -1327,6 +1331,7 @@
   /* With no speaker label, a question and its answer read as a pair only if
      they sit closer to each other than to the next pair. */
   article.user { margin-bottom: .45rem; }
+  article.sending { opacity: .6; }
   .cut { font-size: 11px; margin-bottom: .2rem; }
   /* Dimmed, not hidden: it happened, and the model no longer sees it. */
   article.evicted { opacity: .45; }

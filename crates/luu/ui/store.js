@@ -37,6 +37,7 @@ export const state = $reactive({
   messages: [],           // { id, turn, role, text, task, reason, usage, evicted, pruned }
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
+  sending: null,          // a prompt typed here that the server has not answered yet
   prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
   // This turn's tool calls, in order. A call is pushed before it is checked, so
   // one that is still running (or was denied) is visible as itself rather than
@@ -217,6 +218,11 @@ export function apiHeaders() {
 }
 
 function onProtocol(message) {
+  // Whatever the server says after a prompt answers it — `turn_started`, a
+  // refusal, a plan held at the gate — and whichever it is draws its own
+  // thing, so the echo below goes. A token cannot: one only streams in a turn,
+  // and a prompt sent during a turn is refused.
+  if (message.type !== "token") state.sending = null
   switch (message.type) {
     case "hello":
       state.backend = message.backend
@@ -598,6 +604,7 @@ function open(path, onMessage, assign, greet = false) {
   }
   ws.onclose = async () => {
     assign(null)
+    state.sending = null
     state.status = "closed"
 
     // The host said what it speaks and it is not this. Retrying would clear
@@ -835,6 +842,10 @@ export async function connect() {
 export function send(text) {
   if (!socket || socket.readyState !== WebSocket.OPEN || !text.trim()) return
   socket.send(JSON.stringify({ type: "prompt", text }))
+  // On screen now rather than when `turn_started` comes back: before this the
+  // transcript waited on the server, and a server that was slow to answer
+  // looked like a composer that had swallowed what was typed.
+  state.sending = text
   state.prompt = ""
   state.budget = null
   state.tools = []

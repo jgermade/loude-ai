@@ -1308,6 +1308,10 @@ The rest follows from that:
   back from the server, so a reload does not leave it empty. A click opens `context-modal.html`, the same grouped view
   about that turn, with the window's use, the answer's reserve and what the server counted. See
   [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
+  **What is sent is on screen at once**, dimmed, until the server's first answer to it
+  (`turn_started`, a refusal, a plan at the gate) draws the real thing. It does not wait for
+  `turn_started`, because a slow server made that look like a lost message. See
+  [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
 - **Components**: `crates/luu/ui/components/` holds components that import nothing from the page.
   Everything arrives as props or slots, everything leaves as `:model` or `$emit`, styles are
   scoped, and page tokens are read with fallbacks. Three so far, each taking an idea from rare-ui
@@ -1782,7 +1786,8 @@ happening and for how long comes first, because a chat column is narrow and the 
 cut. When the switch moved to *another* engine, the old one was stopped before the answer came
 back and the server has no `from` for it; the page remembers what it left. **A turn that waits
 says so where its answer will go** (`waiting for qwen2.5-coder:14b — loading · 3s`), from the same
-poll, which every turn start triggers.
+poll, which every turn start triggers: once per turn (`watchTurnEngine`), not once per change to
+the page's state, which during a streamed answer is once per token.
 Until 2026-09-29 the switch request waited for the whole load, and with a 14B that was tens of
 seconds of a page that looked frozen. See
 [`RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`](RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md).
@@ -1853,6 +1858,12 @@ than five seconds, every five seconds. It also says when a tick that a tokio
 task bumps every second stops moving, which tells a lock (the watchdog names
 the stuck request) from a blocked runtime (the tick stops). See
 [`RECORD/2026-09-30.a-log-for-serve.completed.md`](RECORD/2026-09-30.a-log-for-serve.completed.md).
+**A handler's unavoidable filesystem work runs on the blocking pool**
+(`off_runtime`), not on a runtime worker. The icon-theme routes read a
+`package.json` per installed extension, and on 2026-09-30 one such read took
+147 s and served nothing else meanwhile. On the pool the same wait is one slow
+request. See
+[`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
 
 ## Persistence
 
