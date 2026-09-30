@@ -362,13 +362,21 @@ async fn json_server(routes: Vec<(&'static str, &'static str)>) -> SocketAddr {
                 let read = socket.read(&mut buf).await.unwrap_or(0);
                 let head = String::from_utf8_lossy(&buf[..read]).to_string();
                 let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
+                // `Connection: close`, because this answers one request per
+                // socket and then shuts it. Without the header the client may
+                // pool the 404 from `/props` and send `/v1/models` down a
+                // socket this end already closed, and the vLLM case read
+                // `None` in two runs of sixty.
                 let response = match routes.iter().find(|(p, _)| *p == path) {
                     Some((_, body)) => format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                         body.len(),
                         body
                     ),
-                    None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string(),
+                    None => {
+                        "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                            .to_string()
+                    }
                 };
                 let _ = socket.write_all(response.as_bytes()).await;
                 let _ = socket.shutdown().await;

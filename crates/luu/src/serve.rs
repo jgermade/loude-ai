@@ -3344,10 +3344,7 @@ fn icon_theme_view(state: &AppRouterState) -> IconThemeView {
 }
 
 async fn get_icon_theme(State(state): State<AppRouterState>) -> Response {
-    match off_runtime(move || icon_theme_view(&state)).await {
-        Ok(view) => Json(view).into_response(),
-        Err(response) => *response,
-    }
+    Json(blocking(move || icon_theme_view(&state)).await).into_response()
 }
 
 /// Filesystem work a handler cannot avoid, on the blocking pool instead of a
@@ -3358,12 +3355,47 @@ async fn get_icon_theme(State(state): State<AppRouterState>) -> Response {
 /// 2026-09-30 — the only request in flight both times the runtime stopped
 /// turning, with no socket, turn or other request served until it ended. On
 /// the blocking pool the same wait is one slow request. See `RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`.
-async fn off_runtime<T: Send + 'static>(
-    work: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, Box<Response>> {
-    tokio::task::spawn_blocking(work).await.map_err(|error| {
-        Box::new((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response())
-    })
+///
+/// A panic in `work` is resumed here, so it ends the request exactly as it
+/// did when the same code ran inline.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(value) => value,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => panic!("the blocking pool is shutting down: {error}"),
+    }
+}
+
+/// `Config::load`, [`blocking`]. The file is a few hundred bytes, and it is
+/// on the same disk that took 147 s to read a `package.json` — every read of
+/// it a handler makes goes through here.
+async fn load_config()
+-> Result<(crate::provider::Config, Option<PathBuf>), crate::provider::ConfigError> {
+    blocking(crate::provider::Config::load).await
+}
+
+/// `Config::path_for_writing`, [`blocking`]: it asks the disk which state
+/// directory exists.
+async fn config_path() -> Option<PathBuf> {
+    blocking(crate::provider::Config::path_for_writing).await
+}
+
+/// The file a settings view names: the one that loaded, or where a save
+/// would write one.
+async fn shown_path(loaded: Option<PathBuf>) -> Option<String> {
+    let path = match loaded {
+        Some(path) => Some(path),
+        None => config_path().await,
+    };
+    path.map(|path| path.display().to_string())
+}
+
+/// `Config::write`, [`blocking`].
+async fn write_config(
+    config: crate::provider::Config,
+    path: PathBuf,
+) -> Result<(), crate::provider::ConfigError> {
+    blocking(move || config.write(&path)).await
 }
 
 #[derive(serde::Deserialize)]
@@ -3386,14 +3418,14 @@ async fn put_icon_theme(
         .icon_theme
         .map(|named| named.trim().to_string())
         .filter(|named| !named.is_empty());
-    let applied = off_runtime(move || {
+    let applied = blocking(move || {
         apply_icon_theme(&state, named.map(std::path::PathBuf::from))
             .map(|()| icon_theme_view(&state))
     })
     .await;
     match applied {
-        Ok(Ok(view)) => Json(view).into_response(),
-        Ok(Err(response)) | Err(response) => *response,
+        Ok(view) => Json(view).into_response(),
+        Err(response) => *response,
     }
 }
 
@@ -3459,7 +3491,7 @@ async fn import_icon_theme(
         )
             .into_response();
     }
-    let Some(folder) = icon_theme_folder() else {
+    let Some(folder) = blocking(icon_theme_folder).await else {
         return (
             StatusCode::CONFLICT,
             "this machine has no state directory yet, so there is nowhere to import into",
@@ -3509,13 +3541,12 @@ async fn import_icon_theme(
         Some(rest) => std::path::Path::new("~").join(rest),
         None => imported,
     };
-    let applied = off_runtime(move || {
-        apply_icon_theme(&state, Some(named)).map(|()| icon_theme_view(&state))
-    })
-    .await;
+    let applied =
+        blocking(move || apply_icon_theme(&state, Some(named)).map(|()| icon_theme_view(&state)))
+            .await;
     match applied {
-        Ok(Ok(view)) => Json(view).into_response(),
-        Ok(Err(response)) | Err(response) => *response,
+        Ok(view) => Json(view).into_response(),
+        Err(response) => *response,
     }
 }
 
@@ -3646,13 +3677,54 @@ const KINDS: [crate::provider::EngineKind; 3] = [
 ];
 
 async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::provider::ConfigError> {
-    let (config, path) = crate::provider::Config::load()?;
+    let (config, path) = load_config().await?;
     let supervisor = &state.app.engines;
+    // Everything this view asks the disk, in one trip to the pool: which
+    // binary each engine resolves to, what this machine has installed, and
+    // luu's own copies.
+    let listed = config.engines().clone();
+    let (mut resolved, found, root, managed) = blocking(move || {
+        let resolved: std::collections::BTreeMap<String, Result<PathBuf, String>> = listed
+            .iter()
+            .map(|(name, engine)| (name.clone(), crate::engines::resolve_binary(engine)))
+            .collect();
+        let found: std::collections::BTreeMap<&'static str, Vec<String>> = KINDS
+            .iter()
+            .map(|kind| {
+                let found = crate::engines::discover(*kind)
+                    .into_iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                (kind.as_str(), found)
+            })
+            .collect();
+        let root = crate::engines::root();
+        let managed: std::collections::BTreeMap<&'static str, Vec<String>> = KINDS
+            .iter()
+            .map(|kind| {
+                let mut copies: Vec<String> = root
+                    .as_ref()
+                    .and_then(|root| std::fs::read_dir(root.join(kind.as_str())).ok())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|e| e.path().is_dir())
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .filter(|name| !name.starts_with('.'))
+                    .collect();
+                copies.sort();
+                (kind.as_str(), copies)
+            })
+            .collect();
+        (resolved, found, root, managed)
+    })
+    .await;
     let mut engines = std::collections::BTreeMap::new();
     for (name, engine) in config.engines() {
-        let (resolved, problem) = match crate::engines::resolve_binary(engine) {
-            Ok(path) => (Some(path.display().to_string()), None),
-            Err(problem) => (None, Some(problem)),
+        let (resolved, problem) = match resolved.remove(name) {
+            Some(Ok(path)) => (Some(path.display().to_string()), None),
+            Some(Err(problem)) => (None, Some(problem)),
+            None => (None, None),
         };
         engines.insert(
             name.clone(),
@@ -3673,11 +3745,8 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
             },
         );
     }
-    let root = crate::engines::root();
     Ok(EnginesView {
-        path: path
-            .or_else(crate::provider::Config::path_for_writing)
-            .map(|path| path.display().to_string()),
+        path: shown_path(path).await,
         editable: state.providers_editable,
         refused: (!state.providers_editable).then(|| {
             "this server is bound off loopback, and an engine is a process started on this \
@@ -3685,34 +3754,9 @@ async fn engines_view(state: &AppRouterState) -> Result<EnginesView, crate::prov
                 .to_string()
         }),
         engines,
-        found: KINDS
-            .iter()
-            .map(|kind| {
-                let found = crate::engines::discover(*kind)
-                    .into_iter()
-                    .map(|p| p.display().to_string())
-                    .collect();
-                (kind.as_str(), found)
-            })
-            .collect(),
+        found,
         pinned: KINDS.iter().map(|k| (k.as_str(), k.pinned())).collect(),
-        managed: KINDS
-            .iter()
-            .map(|kind| {
-                let mut copies: Vec<String> = root
-                    .as_ref()
-                    .and_then(|root| std::fs::read_dir(root.join(kind.as_str())).ok())
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .filter(|e| e.path().is_dir())
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .filter(|name| !name.starts_with('.'))
-                    .collect();
-                copies.sort();
-                (kind.as_str(), copies)
-            })
-            .collect(),
+        managed,
         root: root.map(|root| root.display().to_string()),
         installs: supervisor.installs(),
     })
@@ -3808,14 +3852,14 @@ async fn put_engines(
     if let Err(refused) = engines_allowed(&state, &headers) {
         return *refused;
     }
-    let Some(path) = crate::provider::Config::path_for_writing() else {
+    let Some(path) = config_path().await else {
         return (
             StatusCode::CONFLICT,
             "this machine has no state directory yet, so there is nowhere to write config.toml",
         )
             .into_response();
     };
-    let current = match crate::provider::Config::load() {
+    let current = match load_config().await {
         Ok((config, _)) => config,
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     };
@@ -3854,7 +3898,7 @@ async fn put_engines(
         .filter(|name| !asked.engines.contains_key(*name))
         .cloned()
         .collect();
-    if let Err(error) = current.with_engines(asked.engines).write(&path) {
+    if let Err(error) = write_config(current.with_engines(asked.engines), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     for name in removed {
@@ -3877,7 +3921,7 @@ async fn start_engine(
     if let Err(refused) = engines_allowed(&state, &headers) {
         return *refused;
     }
-    let engine = match crate::provider::Config::load() {
+    let engine = match load_config().await {
         Ok((config, _)) => config.engines().get(&name).cloned(),
         Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
     };
@@ -3973,7 +4017,7 @@ struct ProvidersView {
 async fn providers_view(
     state: &AppRouterState,
 ) -> Result<ProvidersView, crate::provider::ConfigError> {
-    let (config, path) = crate::provider::Config::load()?;
+    let (config, path) = load_config().await?;
     let (running, follows) = {
         let destination = state.app.destination().await;
         (
@@ -3982,9 +4026,7 @@ async fn providers_view(
         )
     };
     Ok(ProvidersView {
-        path: path
-            .or_else(crate::provider::Config::path_for_writing)
-            .map(|path| path.display().to_string()),
+        path: shown_path(path).await,
         editable: state.providers_editable,
         refused: match state.providers_editable {
             true => None,
@@ -4073,7 +4115,7 @@ async fn get_provider_models(
     Path(name): Path<String>,
 ) -> Response {
     let name = bare(&name);
-    let (config, path) = match crate::provider::Config::load() {
+    let (config, path) = match load_config().await {
         Ok(loaded) => loaded,
         Err(error) => {
             return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
@@ -4226,7 +4268,7 @@ async fn put_providers(
         )
             .into_response();
     }
-    let Some(path) = crate::provider::Config::path_for_writing() else {
+    let Some(path) = config_path().await else {
         return (
             StatusCode::CONFLICT,
             "this machine has no state directory yet, so there is nowhere to write config.toml. \
@@ -4238,13 +4280,14 @@ async fn put_providers(
     // edit to the providers: the page writes one table and must not delete the
     // other. A file that will not load is not a reason to refuse the write
     // either — the writer checks that itself, with the loader's own rules.
-    let current = crate::provider::Config::load()
+    let current = load_config()
+        .await
         .map(|(config, _)| config)
         .unwrap_or_default();
     let config = current.from_parts(edit.default, edit.providers);
     // Checked by the loader that will read it back, so the rule a remote
     // default has to declare itself is enforced here by being the same rule.
-    if let Err(error) = config.write(&path) {
+    if let Err(error) = write_config(config.clone(), path).await {
         let declaration = match &error {
             crate::provider::ConfigError::UndeclaredRemoteDefault { name, url, .. } => {
                 Some(Declaration {
@@ -4330,15 +4373,8 @@ fn learn_window(app: Arc<App>) {
 /// does not use: a session that moved elsewhere should not leave a model
 /// loaded in memory until `serve` exits. See [`crate::engines::Supervisor::stop_others`].
 async fn release_engines(app: &App, profile: Option<&str>) {
-    let keep = profile.and_then(|profile| {
-        crate::provider::Config::load()
-            .ok()?
-            .0
-            .profiles()
-            .get(profile)?
-            .engine
-            .clone()
-    });
+    let config = load_config().await.ok().map(|(config, _)| config);
+    let keep = profile.and_then(|profile| config?.profiles().get(profile)?.engine.clone());
     app.engines.stop_others(keep.as_deref()).await;
 }
 
@@ -4408,14 +4444,12 @@ impl RunningResend {
 async fn resend_view(state: &AppRouterState, waiting: Vec<String>) -> ResendView {
     // A file that will not load is not a reason to refuse to say what the live
     // session is under: that half is in memory and always answerable.
-    let (file, path) = match crate::provider::Config::load() {
+    let (file, path) = match load_config().await {
         Ok((config, path)) => (config.resend().unwrap_or_default(), path),
         Err(_) => (Default::default(), None),
     };
     ResendView {
-        path: path
-            .or_else(crate::provider::Config::path_for_writing)
-            .map(|path| path.display().to_string()),
+        path: shown_path(path).await,
         editable: state.providers_editable,
         refused: match state.providers_editable {
             true => None,
@@ -4550,7 +4584,7 @@ async fn put_resend(
         )
             .into_response();
     }
-    let Some(path) = crate::provider::Config::path_for_writing() else {
+    let Some(path) = config_path().await else {
         return (
             StatusCode::CONFLICT,
             "this machine has no state directory yet, so there is nowhere to write config.toml. \
@@ -4560,10 +4594,11 @@ async fn put_resend(
     };
     // Built from the file as it is on disk, for the reason the providers writer
     // is: the page writes one table and must not delete the rest.
-    let current = crate::provider::Config::load()
+    let current = load_config()
+        .await
         .map(|(config, _)| config)
         .unwrap_or_default();
-    if let Err(error) = current.with_resend(asked).write(&path) {
+    if let Err(error) = write_config(current.with_resend(asked), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
 
@@ -4636,14 +4671,12 @@ impl RunningAuthority {
 }
 
 async fn authority_view(state: &AppRouterState) -> AuthorityView {
-    let (file, path) = match crate::provider::Config::load() {
+    let (file, path) = match load_config().await {
         Ok((config, path)) => (config.authority().cloned().unwrap_or_default(), path),
         Err(_) => (Default::default(), None),
     };
     AuthorityView {
-        path: path
-            .or_else(crate::provider::Config::path_for_writing)
-            .map(|path| path.display().to_string()),
+        path: shown_path(path).await,
         editable: state.providers_editable,
         refused: match state.providers_editable {
             true => None,
@@ -4682,7 +4715,7 @@ async fn put_authority(
         )
             .into_response();
     }
-    let Some(path) = crate::provider::Config::path_for_writing() else {
+    let Some(path) = config_path().await else {
         return (
             StatusCode::CONFLICT,
             "this machine has no state directory yet, so there is nowhere to write config.toml. \
@@ -4690,10 +4723,11 @@ async fn put_authority(
         )
             .into_response();
     };
-    let current = crate::provider::Config::load()
+    let current = load_config()
+        .await
         .map(|(config, _)| config)
         .unwrap_or_default();
-    if let Err(error) = current.with_authority(asked.clone()).write(&path) {
+    if let Err(error) = write_config(current.with_authority(asked.clone()), path).await {
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
 
@@ -4860,7 +4894,8 @@ impl NewSession {
 /// says the defaults: it is already reported where the providers are, and a
 /// machine with an unreadable config is not a machine that chose `always`.
 async fn machine_resend() -> crate::provider::Resend {
-    crate::provider::Config::load()
+    load_config()
+        .await
         .map(|(config, _)| config.resend().unwrap_or_default())
         .unwrap_or_default()
 }
@@ -4868,7 +4903,8 @@ async fn machine_resend() -> crate::provider::Resend {
 /// This machine's `[authority]` table, [`machine_resend`]'s reason exactly,
 /// one table along.
 async fn machine_authority() -> crate::provider::AuthorityNotes {
-    crate::provider::Config::load()
+    load_config()
+        .await
         .map(|(config, _)| config.authority().cloned().unwrap_or_default())
         .unwrap_or_default()
 }
@@ -5016,7 +5052,8 @@ async fn destination_for(
     asked: &NewSession,
     editable: bool,
 ) -> Result<Destination, (StatusCode, String)> {
-    let (config, path) = crate::provider::Config::load()
+    let (config, path) = load_config()
+        .await
         .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()))?;
     let resolved = crate::provider::resolve(
         &config,

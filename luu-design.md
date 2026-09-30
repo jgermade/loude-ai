@@ -1859,10 +1859,12 @@ task bumps every second stops moving, which tells a lock (the watchdog names
 the stuck request) from a blocked runtime (the tick stops). See
 [`RECORD/2026-09-30.a-log-for-serve.completed.md`](RECORD/2026-09-30.a-log-for-serve.completed.md).
 **A handler's unavoidable filesystem work runs on the blocking pool**
-(`off_runtime`), not on a runtime worker. The icon-theme routes read a
-`package.json` per installed extension, and on 2026-09-30 one such read took
-147 s and served nothing else meanwhile. On the pool the same wait is one slow
-request. See
+(`blocking`), not on a runtime worker. That includes every read and write of
+`config.toml` (`load_config`, `config_path`, `write_config`), the icon-theme
+routes, and what `/api/engines` asks the disk. On 2026-09-30 a read of a
+`package.json` per installed extension took 147 s, and nothing else was
+served while it ran. On the pool the same wait is one slow request. The
+session store's SQLite writes are the exception still on the runtime. See
 [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
 
 ## Persistence
