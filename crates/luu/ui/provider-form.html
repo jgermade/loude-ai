@@ -9,9 +9,11 @@
   // thrown away: `added` hands the new name back and the table merges it into
   // its draft. `taken` is every name the table holds, saved or not.
   const { state, saveProviders } = await import("./store.js")
-  const { asModal } = await import("./modal.js")
+  const { asModal, closing } = await import("./modal.js")
 
-  asModal("provider-dialog", { close: () => close?.() })
+  // Through `closing`, so it leaves animated however it is dismissed.
+  const dismiss = () => closing("provider-dialog", () => close?.())
+  asModal("provider-dialog", { close: dismiss })
 
   // What each backend is when nothing says otherwise, as a placeholder rather
   // than a value: the server fills the same default in, and a URL the person
@@ -32,6 +34,7 @@
   let model = ""
   let contextLimit = ""
   let keyFile = ""
+  let toolCalls = ""
   let makeDefault = false
   let saving = false
   let error = null
@@ -51,6 +54,7 @@
     ...(model.trim() ? { model: model.trim() } : {}),
     ...(String(contextLimit).trim() ? { "context-limit": Number(contextLimit) } : {}),
     ...(backend === "openai" && keyFile.trim() ? { "key-file": keyFile.trim() } : {}),
+    ...(backend !== "mock" && toolCalls === "native" ? { "tool-calls": "native" } : {}),
     ...(remote ? { remote: true } : {}),
   })
 
@@ -65,7 +69,7 @@
     saving = false
     if (result?.ok) {
       added?.(trimmed, makeDefault)
-      close?.()
+      dismiss()
       return
     }
     // Asked for the host: keep the form, and show the question inside it.
@@ -79,10 +83,10 @@
   }
 </script>
 
-<dialog id="provider-dialog" class="modal narrow" @click.self="close?.()">
+<dialog id="provider-dialog" class="modal narrow" @click.self="dismiss()">
   <header class="modal-head">
     <strong>Add a provider</strong>
-    <button type="button" class="link" @click="close?.()">close</button>
+    <button type="button" class="link" @click="dismiss()">close</button>
   </header>
   <section class="modal-body">
     <dl class="settings form">
@@ -96,7 +100,7 @@
 
       <dt>Backend</dt>
       <dd>
-        <select :value="backend" @change="backend = $event.target.value, declaration = null">
+        <select class="backend" :value="backend" @change="backend = $event.target.value, declaration = null">
           <option :each="b in BACKENDS" :key="b.value" :value="b.value">{{ b.label }}</option>
         </select>
       </dd>
@@ -122,6 +126,19 @@
         <input class="w-num" :value="contextLimit" placeholder="—" inputmode="numeric"
                @input="contextLimit = $event.target.value">
         <span class="dim">tokens, the context the server was started with</span>
+      </dd>
+
+      <dt :if="backend !== 'mock'">Tool calls</dt>
+      <dd :if="backend !== 'mock'">
+        <select class="tool-calls" :value="toolCalls" @change="toolCalls = $event.target.value">
+          <option value="">fenced — the tools as text in our prompt</option>
+          <option value="native">native — the server's tools field and its own tool prompt</option>
+        </select>
+      </dd>
+      <dd :if="backend !== 'mock'" class="note">
+        Native needs a server that takes <code>tools</code>: llama-server with
+        its chat template, or Ollama with a model that declares tool support.
+        A server that does not refuses the turn and says so.
       </dd>
 
       <dt :if="backend === 'openai'">Key file</dt>
@@ -157,7 +174,7 @@
                @input="typed = $event.target.value">
       </div>
       <div class="modal-actions">
-        <button type="button" @click="close?.()">Cancel</button>
+        <button type="button" @click="dismiss()">Cancel</button>
         <button type="button" class="save" :disabled="!canAdd" @click="add()">
           {{ saving ? "Adding…" : (declaration ? "Confirm and add" : "Add provider") }}
         </button>

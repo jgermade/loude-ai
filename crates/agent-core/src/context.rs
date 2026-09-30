@@ -682,6 +682,12 @@ pub struct Context {
     /// and counted as its own bucket, because "the system block grew" is not an
     /// answer to why the window is full.
     tools: String,
+    /// Whether `tools` travels in the request's own `tools` field rather than
+    /// in the system message — the native transport. Then it is counted here,
+    /// as the specs' JSON, because that is what is sent, and left out of
+    /// [`Self::system_message`], because the server's template renders it.
+    /// See `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    tools_native: bool,
     /// The repository outline, rendered once. Last of the cached prefix, which
     /// is where blocks are ordered by how often they are *rewritten*: the
     /// system block is a constant, the tools change when the tool set does, and
@@ -785,6 +791,7 @@ impl Context {
         Self {
             system: system.into(),
             tools: String::new(),
+            tools_native: false,
             map: String::new(),
             turns: Vec::new(),
             floor: 0,
@@ -801,6 +808,16 @@ impl Context {
     /// see [`crate::tools::Tools::definitions`].
     pub fn with_tools(mut self, tools: impl Into<String>) -> Self {
         self.tools = tools.into();
+        self.tools_native = false;
+        self
+    }
+
+    /// The tools under the native transport: `specs` is their JSON as the
+    /// request sends it, counted in the `tools` bucket and never rendered into
+    /// the system message. See [`Self::tools_native`].
+    pub fn with_native_tools(mut self, specs: impl Into<String>) -> Self {
+        self.tools = specs.into();
+        self.tools_native = true;
         self
     }
 
@@ -986,6 +1003,10 @@ impl Context {
             context: Self {
                 system: system.into(),
                 tools: tools.into(),
+                // The caller's to set with `with_native_tools`: which transport
+                // a resumed session sends under is its destination's, and the
+                // view does not say.
+                tools_native: false,
                 map: map.into(),
                 turns,
                 floor,
@@ -1026,7 +1047,10 @@ impl Context {
     /// here exactly as opening a job already changes the turns below.
     fn system_message(&self) -> String {
         let mut text = self.system.clone();
-        for block in [&self.tools, &self.map] {
+        // Under the native transport the server's template renders the tools,
+        // with the tool prompt the model was trained on; ours stays out.
+        let tools = (!self.tools_native).then_some(&self.tools);
+        for block in tools.into_iter().chain([&self.map]) {
             if !block.is_empty() {
                 text.push_str("\n\n");
                 text.push_str(block);
@@ -2742,6 +2766,39 @@ mod tests {
         assert_eq!(selection.evicted, 3);
         assert_eq!(selection.messages.len(), 2, "system and the prompt");
         assert_eq!(selection.messages[1].content, "a very long question indeed");
+    }
+
+    /// Under the native transport the tools are counted — the specs' JSON is
+    /// what the request sends — and never rendered: the server's template does
+    /// that. See `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    #[test]
+    fn native_tools_are_counted_and_not_rendered() {
+        let counter = WordCounter::default();
+        let budget = Budget::new(8192, 512, Eviction::Turn);
+        let fenced = Context::new("system prompt here")
+            .with_tools("# Tools\nread_file")
+            .with_map("# Repository map\nsrc/lib.rs")
+            .select("one", &[], budget, &counter);
+        let native = Context::new("system prompt here")
+            .with_native_tools(r#"[{"type":"function","function":{"name":"read_file"}}]"#)
+            .with_map("# Repository map\nsrc/lib.rs")
+            .select("one", &[], budget, &counter);
+
+        assert!(fenced.messages[0].content.contains("# Tools"));
+        assert!(!native.messages[0].content.contains("read_file"));
+        assert_eq!(
+            native.messages[0].content, "system prompt here\n\n# Repository map\nsrc/lib.rs",
+            "the map still follows the system text"
+        );
+        let tools = |selection: &Selection| {
+            selection
+                .buckets
+                .iter()
+                .find(|bucket| bucket.name == "tools")
+                .expect("the tools bucket")
+                .tokens
+        };
+        assert!(tools(&native) > 0, "what is sent is counted");
     }
 
     #[test]

@@ -29,7 +29,11 @@
   // is what says so, the seam `modal.js` waits on for the same reason — jq79
   // has no unmount hook a timer could be cleared from.
   const tick = async () => {
-    if (!document.getElementById("engines-pane")) return
+    const pane = document.getElementById("engines-pane")
+    if (!pane) return
+    // Mounted with the other sections and hidden behind them while another
+    // is chosen: kept ticking, but not asking the server for what nobody sees.
+    if (pane.closest(".section:not(.on)")) return setTimeout(tick, 2000)
     const result = await loadEngines()
     if (result.ok) view = result.view
     setTimeout(tick, 2000)

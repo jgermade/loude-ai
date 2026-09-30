@@ -42,6 +42,7 @@ fn read_prompts(path: &PathBuf) -> Vec<String> {
 
 async fn text_of(backend: &dyn Backend, prompt: &str) -> String {
     let request = CompletionRequest {
+        tools: Vec::new(),
         model: "mock".into(),
         messages: vec![Message::user(prompt)],
         context_limit: None,

@@ -1,0 +1,37 @@
+<script :setup>
+  // What a session is rendered under, in one section: the three resend rules
+  // and the two authority notes. They were two sections of the rail, and they
+  // are one question — what a session sends beyond what was asked — which is
+  // also what they share on the wire: both are the session's own choice, kept
+  // beside the destination and recorded in the stream's header. Each half is
+  // still its own component, with its own save, because each writes its own
+  // table of `config.toml`.
+  const SettingsResend = await import("./settings-resend.html")
+  const SettingsAuthority = await import("./settings-authority.html")
+</script>
+
+<section class="part" id="sessions-resend">
+  <h2>Resend</h2>
+  <SettingsResend />
+</section>
+
+<section class="part" id="sessions-authority">
+  <h2>Authority</h2>
+  <SettingsAuthority />
+</section>
+
+<style scoped>
+  .part + .part {
+    margin-top: 1.6rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--line);
+  }
+  h2 {
+    margin: 0 0 .4rem;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+</style>

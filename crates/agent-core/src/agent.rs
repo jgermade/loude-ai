@@ -156,6 +156,7 @@ pub async fn run_agent_turn(
         temperature,
         seed,
         constraint,
+        tools: specs,
     } = request;
     let mut steps: Vec<ToolStep> = Vec::new();
     let mut usage: Option<Usage> = None;
@@ -190,6 +191,7 @@ pub async fn run_agent_turn(
         let outcome = run_turn(
             backend,
             CompletionRequest {
+                tools: specs.clone(),
                 model: model.clone(),
                 messages: messages.clone(),
                 // Every call of the turn budgets against the same window, so
@@ -254,6 +256,7 @@ pub async fn run_agent_turn(
             let retried = run_turn(
                 backend,
                 CompletionRequest {
+                    tools: specs.clone(),
                     model: model.clone(),
                     messages: messages.clone(),
                     context_limit,
@@ -546,6 +549,7 @@ mod tests {
         let outcome = run_agent_turn(
             &backend,
             CompletionRequest {
+                tools: Vec::new(),
                 model: "scripted".into(),
                 messages: vec![Message::user("what is in notes.txt?")],
                 context_limit: None,
@@ -604,6 +608,7 @@ mod tests {
         let outcome = run_agent_turn(
             &backend,
             CompletionRequest {
+                tools: Vec::new(),
                 model: "scripted".into(),
                 messages: vec![Message::user("read the fifo")],
                 context_limit: None,
@@ -881,6 +886,7 @@ mod tests {
         let outcome = run_agent_turn(
             &backend,
             CompletionRequest {
+                tools: Vec::new(),
                 model: "scripted".into(),
                 messages: vec![Message::user("list the directory")],
                 context_limit: None,

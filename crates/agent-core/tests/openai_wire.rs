@@ -126,6 +126,7 @@ async fn round_trip(request: CompletionRequest) -> (String, serde_json::Value, V
 
 fn request() -> CompletionRequest {
     CompletionRequest {
+        tools: Vec::new(),
         model: "qwen2.5-coder-7b".into(),
         messages: vec![Message::system("you are luu"), Message::user("hola")],
         context_limit: None,
@@ -254,4 +255,161 @@ async fn a_server_that_reports_no_usage_says_none_rather_than_zero() {
     };
     assert_eq!(*stop, StopReason::Stop);
     assert_eq!(*usage, None, "zero would read as an empty prompt");
+}
+
+/// A reply whose call the server parsed: named, then its arguments in two
+/// fragments, then the finish. See `RECORD/2026-09-30.native-tool-calls.completed.md`.
+const SSE_WITH_A_PARSED_CALL: &str = concat!(
+    "data: {\"choices\":[{\"delta\":{\"content\":\"Reading.\"},\"index\":0}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"pa\"}}]},\"index\":0}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\": \\\"README.md\\\"}\"}}]},\"index\":0,\"finish_reason\":\"tool_calls\"}]}\n\n",
+    "data: [DONE]\n\n",
+);
+
+/// **Native, out:** the tools go in the request's own field, and a step the
+/// history carries as `assistant(call) · user([name] result)` goes as
+/// `tool_calls` and a `tool` message. **Native, in:** a call the server parsed
+/// comes back up as the fenced text `parse_call` reads, after the prose.
+#[tokio::test]
+async fn native_tool_calls_travel_in_the_api_s_own_fields() {
+    use agent_core::backend::ToolSpec;
+    let (_, body, chunks) = round_trip_with(
+        SSE_WITH_A_PARSED_CALL,
+        OpenAi::new,
+        CompletionRequest {
+            tools: vec![ToolSpec {
+                name: "read_file".into(),
+                description: "Read a file.".into(),
+                parameters: serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+            }],
+            messages: vec![
+                Message::system("you are luu"),
+                Message::user("read the other one"),
+                Message::assistant(
+                    "Sure.\n```json\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.md\"}}\n```",
+                ),
+                Message::user("[read_file] ok\nA"),
+                Message::assistant("It says A."),
+                Message::user("and README.md?"),
+            ],
+            ..request()
+        },
+    )
+    .await;
+
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["function"]["name"], "read_file");
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages[2]["role"], "assistant");
+    assert_eq!(messages[2]["content"], "Sure.");
+    assert_eq!(
+        messages[2]["tool_calls"][0]["function"]["name"],
+        "read_file"
+    );
+    assert_eq!(
+        messages[2]["tool_calls"][0]["function"]["arguments"], "{\"path\":\"a.md\"}",
+        "a JSON string on this API, not an object"
+    );
+    assert_eq!(messages[3]["role"], "tool");
+    assert_eq!(
+        messages[3]["tool_call_id"],
+        messages[2]["tool_calls"][0]["id"]
+    );
+    assert!(
+        !body["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("# Tools"),
+        "the system text is the caller's, and carries no fenced block: {body}"
+    );
+
+    let text: String = chunks
+        .iter()
+        .filter_map(|chunk| match chunk {
+            Chunk::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text,
+        "Reading.\n\n```tool\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"README.md\"}}\n```"
+    );
+    let call = agent_core::tools::parse_call(&text).expect("the loop reads it");
+    assert_eq!(call.arguments["path"], "README.md");
+    assert!(matches!(chunks.last(), Some(Chunk::Done { .. })));
+}
+
+/// And the fenced transport sends exactly what it always did: no `tools` field.
+#[tokio::test]
+async fn the_fenced_transport_sends_no_tools_field() {
+    let (_, body, _) = round_trip(request()).await;
+    assert!(body.get("tools").is_none(), "{body}");
+}
+
+/// A server that answers a few paths with JSON and 404 to the rest, for as
+/// many requests as come — what `window()` asks is two paths, in order.
+async fn json_server(routes: Vec<(&'static str, &'static str)>) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binding");
+    let address = listener.local_addr().expect("the bound address");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let routes = routes.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let read = socket.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
+                let response = match routes.iter().find(|(p, _)| *p == path) {
+                    Some((_, body)) => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    ),
+                    None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string(),
+                };
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    address
+}
+
+/// The window the server says it serves: `llama-server`'s `/props` (beside
+/// `/v1`, not under it), then vLLM's `max_model_len` on the listing, and
+/// `None` from a server that says neither — not an error. See
+/// `RECORD/2026-09-30.the-window-the-server-says.completed.md`.
+#[tokio::test]
+async fn the_window_is_read_off_the_server_where_it_says() {
+    let llama = json_server(vec![(
+        "/props",
+        r#"{"default_generation_settings":{"n_ctx":32768},"total_slots":4}"#,
+    )])
+    .await;
+    let window = OpenAi::new(format!("http://{llama}/v1"))
+        .window()
+        .await
+        .unwrap();
+    assert_eq!(window, Some(32768));
+
+    let vllm = json_server(vec![(
+        "/v1/models",
+        r#"{"data":[{"id":"qwen","max_model_len":16384}]}"#,
+    )])
+    .await;
+    let window = OpenAi::new(format!("http://{vllm}/v1"))
+        .window()
+        .await
+        .unwrap();
+    assert_eq!(window, Some(16384));
+
+    let silent = json_server(vec![("/v1/models", r#"{"data":[{"id":"qwen"}]}"#)]).await;
+    let window = OpenAi::new(format!("http://{silent}/v1"))
+        .window()
+        .await
+        .unwrap();
+    assert_eq!(window, None);
 }

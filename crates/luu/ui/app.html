@@ -8,8 +8,10 @@
   const { prefs, setPane, setInspector, setConfirm } = await import("./prefs.js")
   const { workspace, loadRoot, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
     await import("./workspace.js")
-  const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel } =
-    await import("./ui.js")
+  const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel,
+          watchEngine, inspect, LOADING, openContext } = await import("./ui.js")
+  const { timing, seconds, speedLabel } = await import("./timing.js")
+  const { modelLabel } = await import("./engines.js")
   const { modalOpen } = await import("./modal.js")
   const Segmented = await import("./components/segmented.html")
   const Dropup = await import("./components/dropup.html")
@@ -50,6 +52,10 @@
   const SettingsModal = await import("./settings-modal.html")
   const ModelPicker = await import("./model-picker.html")
   const SessionStarter = await import("./session-starter.html")
+  const ToolCall = await import("./tool-call.html")
+  const TurnInspect = await import("./turn-inspect.html")
+  const ContextModal = await import("./context-modal.html")
+  const { segments } = await import("./segments.js")
 
   connect()
 
@@ -332,7 +338,47 @@
   $: prose = proposed
     ? (proposed.source ? proposed.source === "prose" : !declares)
     : false
-  $: entries = foldTranscript(state.messages, state.jobs || state.tasks, expanded)
+  // An assistant reply as prose and tool calls rather than as the ```tool
+  // blocks the model typed — see `segments.js`. The turn running now reads
+  // its calls off `state.tools`; every other turn off the history, which is
+  // where `keepTurn` and a reload both put them.
+  // The three arguments after the list are unused but read on purpose: they
+  // are what make `$:` run again when a call lands or a turn is kept.
+  const withParts = (list, _tools, _history, _turn) => list.map(entry =>
+    entry.kind === "message" && entry.message.role === "assistant"
+      ? { ...entry, ...partsOf(entry.message) }
+      : entry)
+  const partsOf = message => {
+    const live = message.turn != null && message.turn === state.turn && !message.reason
+    const tools = live
+      ? state.tools
+      : state.history.find(kept => kept.turn === message.turn)?.tools || []
+    const parts = segments(message.text || "", tools, live).map((part, i) => ({ ...part, i, live }))
+    return { parts, live, timing: timing(message, tools) }
+  }
+
+  // A turn that starts may be the one that has to wait for an engine — one
+  // that stopped since the last switch, or a switch still loading — so the
+  // page asks, rather than drawing an empty answer and saying nothing. See
+  // the placeholder in the transcript below.
+  $: engineCheck = state.turn != null ? watchEngine() : null
+  $: engineBusy = !!ui.engine && LOADING.includes(ui.engine.state)
+
+  // The context indicator's numbers: what the newest turn's budget says was
+  // sent, bucket by bucket, the answer's reserve left out.
+  $: contextBuckets = (state.budget?.buckets || []).filter(b => b.tokens > 0 && b.name !== "reserve")
+  $: contextSent = contextBuckets.reduce((sum, b) => sum + b.tokens, 0)
+  // Of the window, where the window is known — a percentage of an unknown is
+  // not one, so the indicator says so instead of showing zero.
+  // The window: the newest turn's own where it was budgeted against one, and
+  // the session's otherwise — which is where a window the server said, learned
+  // after that turn was built, shows up. See
+  // `RECORD/2026-09-30.the-window-the-server-says.completed.md`.
+  $: contextWindow = state.budget?.limit || state.settings?.window || null
+  $: contextPercent = contextWindow ? Math.round((contextSent / contextWindow) * 100) : null
+  const short = n => n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`
+
+  $: entries = withParts(foldTranscript(state.messages, state.jobs || state.tasks, expanded), state.tools, state.history, state.turn)
 
   // The content column's foot: the open tab's own facts. They were a head, and
   // the head is tabs now — `path`, `language` and `cut at 512 KB` are what a
@@ -597,12 +643,16 @@
       <div :if="!noProviders" class="transcript">
         <div :each="entry in entries" :key="entry.id">
           <article :if="entry.kind === 'message'" :class="entry.message.role" :class.evicted="entry.message.evicted">
-            <div class="who">
-              {{ entry.message.role }}
+            <!-- No speaker label: the user's text is in the accent colour and an
+                 answer has its meta line, so the role was a word on every
+                 message saying what the page already shows. What stays is the
+                 line that says something only some messages have: that the
+                 prompt no longer carries them. -->
+            <div :if="entry.message.evicted || entry.message.pruned" class="cut">
               <!-- Kept and marked, never removed: the prompt no longer carries
                    this and the transcript still has to be able to say so. -->
               <span :if="entry.message.evicted" class="gone">
-                · out of the window since turn {{ entry.message.evicted }}
+                out of the window since turn {{ entry.message.evicted }}
               </span>
               <!-- The other cut: this turn is still asked and still answered,
                    and what left the prompt is its code. Not struck through for
@@ -610,17 +660,58 @@
                    afterwards evicted whole — there the stronger fact is the
                    true one. -->
               <span :if="entry.message.pruned && !entry.message.evicted" class="cited">
-                · code out of the prompt since turn {{ entry.message.pruned }}
+                code out of the prompt since turn {{ entry.message.pruned }}
               </span>
             </div>
-            <div class="text">{{ entry.message.text }}</div>
-            <div :if="entry.message.reason" class="meta">
-              <span :class.warn="entry.message.reason !== 'stop'">{{ entry.message.reason }}</span>
-              <span :if="entry.message.usage">
-                {{ entry.message.usage.prompt_tokens }} prompt / {{ entry.message.usage.completion_tokens }} completion
-              </span>
-              <span :if="entry.message.reason && !entry.message.usage" class="dim">usage unknown</span>
+            <div :if="!entry.parts" class="text">{{ entry.message.text }}</div>
+            <div :if="entry.parts" class="parts">
+              <div :each="part in entry.parts" :key="part.i">
+                <div :if="part.kind === 'text'" class="text">{{ part.text }}</div>
+                <ToolCall :if="part.kind === 'tool'" :part="part" :live="part.live" />
+              </div>
             </div>
+            <!-- Where the answer will go, while there is none yet: waiting for
+                 an engine to load the model, or for the model itself. The
+                 server holds the turn either way; this says which. -->
+            <div :if="entry.live && !entry.parts.length" class="waiting" aria-live="polite">
+              <span class="dot"></span>
+              <span :if="engineBusy">
+                waiting for {{ modelLabel(ui.engine.model) || ui.engine.name }} —
+                {{ ui.engine.state === "stopping" ? "stopping the one before it" : ui.engine.state === "downloading" ? "downloading the engine" : "loading" }}
+                · {{ ui.engine.secs }}s
+              </span>
+              <span :if="!engineBusy">waiting for the model…</span>
+            </div>
+
+            <!-- The turn's facts, and the way into everything behind them: the
+                 prompt it was sent, the budget, the raw answer. Speed is over
+                 the writing and the wait before it is its own number — see
+                 `timing.js`. -->
+            <button :if="entry.message.reason" type="button" class="meta"
+                    title="Inspect the context this answer was given, and the answer"
+                    @click="inspect(entry.message.turn)">
+              <!-- `speed · → sent ← received · 🕑 first token → last token`, faded
+                   until hovered. How it ended only when that is news: `stop`
+                   is every answer. -->
+              <span :if="speedLabel(entry.timing)" class="speed">{{ speedLabel(entry.timing) }}</span>
+              <span :if="speedLabel(entry.timing)" class="sep">·</span>
+              <span :if="entry.message.reason !== 'stop'" class="warn">{{ entry.message.reason }}</span>
+              <span :if="entry.message.usage" class="flow"
+                    title="Tokens sent to the model, and tokens it sent back">
+                <span class="sym out">→</span>{{ entry.message.usage.prompt_tokens }}
+                <span class="sym in">←</span>{{ entry.message.usage.completion_tokens }}
+              </span>
+              <span :if="!entry.message.usage" class="dim">usage unknown</span>
+              <span :if="entry.timing.first != null || entry.timing.total != null" class="sep">·</span>
+              <span :if="entry.timing.first != null || entry.timing.total != null" class="flow"
+                    title="From the turn starting: to the first token (a model loading included), and to the last">
+                <svg class="ic clock"><use href="#i-clock"/></svg>
+                {{ entry.timing.first != null ? seconds(entry.timing.first) : "—" }}
+                <span class="sym then">→</span>
+                {{ entry.timing.total != null ? seconds(entry.timing.total) : "—" }}
+              </span>
+
+            </button>
           </article>
 
           <!-- A closed job, as the model now sees it: one summary where its
@@ -816,6 +907,21 @@
          typed a prompt. -->
     <footer class="col-foot chat-foot">
       <form class="composer" @submit.prevent="submit()">
+        <!-- The file open in the content column, named in the prompt.
+             **Naming, not fusing**: `--fragment` reads a file through the
+             sandbox and puts its bytes in the turn, and the `prompt` message
+             has no field for that — adding one is a protocol version, which is
+             the pass after this one. What this does is put the path where the
+             model can ask for it with `read_file`, which is the thing the
+             person clicking already meant. See the record's *Still open*. -->
+        <button type="button" class="clip"
+                :attrs="{ title: picked
+                  ? `Name ${picked.path} in the prompt`
+                  : 'Open a file in the content column first',
+                  disabled: replaying || noProviders || !picked }"
+                @click="attach()">
+          <svg class="ic"><use href="#i-clip"/></svg>
+        </button>
         <input
           :value="draft"
           @input="draft = $event.target.value"
@@ -857,20 +963,25 @@
           </option>
         </select>
 
-        <!-- The file open in the content column, named in the prompt.
-             **Naming, not fusing**: `--fragment` reads a file through the
-             sandbox and puts its bytes in the turn, and the `prompt` message
-             has no field for that — adding one is a protocol version, which is
-             the pass after this one. What this does is put the path where the
-             model can ask for it with `read_file`, which is the thing the
-             person clicking already meant. See the record's *Still open*. -->
-        <button type="button" class="clip"
-                :attrs="{ title: picked
-                  ? `Name ${picked.path} in the prompt`
-                  : 'Open a file in the content column first',
-                  disabled: replaying || noProviders || !picked }"
-                @click="attach()">
-          <svg class="ic"><use href="#i-clip"/></svg>
+        <!-- How full the window is, as of the newest turn: the buckets as a
+             bar in the legend's colours, and the count against the window.
+             Opens what it is made of. See `context-modal.html`. -->
+        <button type="button" class="ctx" :disabled="!state.budget"
+                :attrs="{ title: state.budget
+                  ? (contextWindow
+                      ? `${contextSent} of ${contextWindow} tokens sent last turn${state.settings?.window_from === 'server' ? ' (the window is what the server says it serves)' : ''} — what they are`
+                      : `${contextSent} tokens sent last turn, of a window luu does not know: set the profile's context-limit`)
+                  : 'Nothing sent yet' }"
+                @click="openContext()">
+          <span class="ctx-bar">
+            <span :each="b in contextBuckets" :key="b.name"
+                  :attrs="{ style: `flex-grow:${b.tokens};background:var(--b-${b.name}, var(--dim))` }"></span>
+            <span :if="contextWindow" class="ctx-free"
+                  :attrs="{ style: `flex-grow:${Math.max(0, contextWindow - contextSent)}` }"></span>
+          </span>
+          <span class="ctx-count"
+                :class.warn="contextPercent !== null && contextPercent >= 80"
+                :class.bad="contextPercent !== null && contextPercent >= 95">{{ state.budget ? short(contextSent) : "—" }}<span class="dim"> / {{ contextWindow ? short(contextWindow) : "—" }}</span></span>
         </button>
       </div>
     </footer>
@@ -883,6 +994,8 @@
 <FolderPicker :if="workspace.picker.open" />
 <SettingsModal :if="state.settingsOpen" />
 <SessionStarter :if="ui.starter" />
+<TurnInspect :if="ui.inspecting != null" />
+<ContextModal :if="ui.contextOpen" />
 
 <!-- The shell's own styles, and nothing else's. `scoped` rewrites every
      selector below to also match `[data-jq79="…"]`, the attribute jq79 stamps
@@ -1211,14 +1324,57 @@
     margin-bottom: .2rem;
   }
   article.user .text { color: var(--accent); }
+  /* With no speaker label, a question and its answer read as a pair only if
+     they sit closer to each other than to the next pair. */
+  article.user { margin-bottom: .45rem; }
+  .cut { font-size: 11px; margin-bottom: .2rem; }
   /* Dimmed, not hidden: it happened, and the model no longer sees it. */
   article.evicted { opacity: .45; }
   article.evicted .text { text-decoration: line-through solid color-mix(in srgb, currentColor 35%, transparent); }
   .gone { color: var(--warn); text-transform: none; letter-spacing: 0; }
   .cited { color: var(--dim); text-transform: none; letter-spacing: 0; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .meta { margin-top: .3rem; font-size: 12px; color: var(--dim); display: flex; gap: .6rem; }
+  .meta {
+    margin-top: .3rem;
+    font: inherit;
+    font-size: 12px;
+    color: var(--dim);
+    display: flex;
+    flex-wrap: wrap;
+    gap: .15rem .6rem;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: .1rem .35rem;
+    margin-left: -.35rem;
+    text-align: left;
+    cursor: pointer;
+  }
+  /* Faded at rest — it is about the answer, not part of it — and whole on
+     hover, together with its symbols' colours. */
+  .meta { opacity: .6; transition: opacity .15s, border-color .15s, background .15s; }
+  .meta:hover, .meta:focus-visible { opacity: 1; border-color: var(--line); background: var(--sunken); }
   .meta .warn { color: var(--warn); }
+  .meta .speed { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .meta .flow { display: inline-flex; align-items: center; gap: .3rem; font-variant-numeric: tabular-nums; }
+  .meta .sep { opacity: .5; }
+  .meta .clock { width: 12px; height: 12px; }
+  /* Quiet at rest, like the rest of the line; on hover the symbols take their
+     colour — what went out is the user's colour, what came back the answers'
+     own, the wait is amber — which is also the hint that the line opens. */
+  .meta .sym { font-weight: 600; }
+  .meta .sym.then { font-weight: 400; }
+  .meta .sym, .meta .clock { transition: color .15s; }
+  .meta:hover .clock, .meta:focus-visible .clock { color: var(--warn); }
+  .meta:hover .sym.out, .meta:focus-visible .sym.out { color: var(--accent); }
+  .meta:hover .sym.in, .meta:focus-visible .sym.in { color: var(--b-history); }
+  .waiting { display: flex; align-items: center; gap: .45rem; font-size: 12px; color: var(--dim); }
+  .waiting .dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--accent); animation: waiting 1s ease-in-out infinite;
+  }
+  @keyframes waiting { 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .waiting .dot { animation: none; } }
 
   /* ---- the chat's foot: two rows --------------------------------------- */
   .chat-foot {
@@ -1246,7 +1402,6 @@
     padding: 0 .45rem;
   }
   .clip {
-    margin-left: auto;
     flex: none;
     background: none;
     border: 0;
@@ -1257,7 +1412,39 @@
     padding: .25rem;
     cursor: pointer;
   }
-  .clip:hover { color: var(--fg); background: var(--bg); }
+  .clip:hover:not(:disabled) { color: var(--fg); background: var(--bg); }
+  .clip:disabled { opacity: .45; cursor: default; }
+  /* The context indicator: right of the options row, where the clip was. */
+  .ctx {
+    margin-left: auto;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--dim);
+    font: inherit;
+    font-size: 11px;
+    padding: .15rem .4rem;
+    cursor: pointer;
+  }
+  .ctx:hover:not(:disabled) { border-color: var(--line); color: var(--fg); background: var(--bg); }
+  .ctx:disabled { cursor: default; opacity: .6; }
+  .ctx-bar {
+    display: flex;
+    width: 56px;
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--sunken);
+  }
+  .ctx-bar span { min-width: 1px; }
+  .ctx-free { background: var(--sunken); }
+  .ctx-count { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ctx-count.warn { color: var(--warn); }
+  .ctx-count.bad { color: var(--bad); }
   .fixtures {
     background: var(--bg);
     color: inherit;

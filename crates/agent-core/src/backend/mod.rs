@@ -11,6 +11,7 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 
 pub mod mock;
+pub mod native;
 pub mod ollama;
 pub mod openai;
 
@@ -52,12 +53,22 @@ impl Message {
     }
 }
 
+/// One tool as the API's `tools` field spells it: a name, a line, and a JSON
+/// Schema for the arguments. The same three things [`crate::tools::Tool`]
+/// declares, so there is no second definition of a tool's shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
 /// What the core asks a backend for. Deliberately not a prompt string: the
 /// stable prefix (system text, and later the tool definitions) has to stay
 /// byte-identical across calls for the prompt cache to be worth anything, so
 /// the backend assembles it the same way every time rather than each caller
 /// formatting its own.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompletionRequest {
     pub model: String,
     pub messages: Vec<Message>,
@@ -83,6 +94,16 @@ pub struct CompletionRequest {
     /// case: every recording made before this field existed sent nothing,
     /// and this is what "nothing" still means.
     pub constraint: Option<Constraint>,
+    /// The tools, sent the **native** way: in the API's own `tools` field,
+    /// where the server's chat template renders them with the tool prompt the
+    /// model was trained on. Empty is the fenced transport — the definitions
+    /// are text in the system message and the call is a ```` ```tool ````
+    /// block — which is what every recording made before this field was.
+    ///
+    /// Under native, the history above the backend is unchanged and the
+    /// backend converts it: see [`native`]. See
+    /// `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    pub tools: Vec<ToolSpec>,
 }
 
 /// What a reply must satisfy, independent of which field any one server
@@ -176,6 +197,15 @@ pub trait Backend: Send + Sync {
     /// actually pulled rather than typing one from memory.
     fn models(&self) -> BackendFuture<'_, Vec<String>> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// The window this destination is serving, when it can say. `None` is
+    /// *cannot say*, not an error, for `models`' own reason, and the default.
+    /// Asked only where nothing declared one: a flag or a profile's
+    /// `context-limit` wins. See
+    /// `RECORD/2026-09-30.the-window-the-server-says.completed.md`.
+    fn window(&self) -> BackendFuture<'_, Option<u32>> {
+        Box::pin(async { Ok(None) })
     }
 
     /// What to tell a caller **once**, before it measures anything, about a

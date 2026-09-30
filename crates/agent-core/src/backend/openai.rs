@@ -26,7 +26,7 @@ use serde::Deserialize;
 
 use super::{
     Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Constraint,
-    Message, StopReason, Usage,
+    StopReason, Usage,
 };
 
 /// `llama-server`'s default. Not a claim that it is the likeliest server, just
@@ -106,7 +106,13 @@ fn host_of(base_url: &str) -> String {
 #[derive(serde::Serialize)]
 struct Body<'a> {
     model: &'a str,
-    messages: &'a [Message],
+    /// The messages as they are under the fenced transport, or converted by
+    /// [`super::native::messages`] under the native one.
+    messages: serde_json::Value,
+    /// Absent under the fenced transport, which is what every request before
+    /// it sent. See `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
     stream: bool,
     /// **Always sent.** Without it these servers stream no usage at all, and a
     /// backend that then reported zero would be claiming the server saw an
@@ -174,6 +180,27 @@ struct Choice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    /// A call the server parsed out of the model's reply, in pieces: the
+    /// first delta for an `index` names it, the ones after carry fragments of
+    /// its arguments' JSON string.
+    #[serde(default)]
+    tool_calls: Vec<DeltaCall>,
+}
+
+#[derive(Deserialize)]
+struct DeltaCall {
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    function: Option<DeltaFunction>,
+}
+
+#[derive(Deserialize)]
+struct DeltaFunction {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -200,6 +227,8 @@ struct ApiError {
 #[derive(Debug, PartialEq, Eq)]
 enum Parsed {
     Text(String),
+    /// Pieces of calls: `(index, name, arguments fragment)`.
+    Calls(Vec<(usize, Option<String>, Option<String>)>),
     Stop(StopReason),
     Usage(Usage),
     /// A keep-alive, an empty delta, or the role-only first event.
@@ -217,12 +246,35 @@ fn parse_event(payload: &[u8]) -> Result<Parsed, BackendError> {
     }
 
     if let Some(choice) = event.choices.first() {
+        // Before the stop reason, because a server may send the last fragment
+        // of a call on the same event as `finish_reason`, and the stop is
+        // implied by `[DONE]` anyway where it is lost this way.
+        if !choice.delta.tool_calls.is_empty() {
+            return Ok(Parsed::Calls(
+                choice
+                    .delta
+                    .tool_calls
+                    .iter()
+                    .map(|call| {
+                        let function = call.function.as_ref();
+                        (
+                            call.index,
+                            function.and_then(|f| f.name.clone()),
+                            function.and_then(|f| f.arguments.clone()),
+                        )
+                    })
+                    .collect(),
+            ));
+        }
         if let Some(reason) = &choice.finish_reason {
             return Ok(Parsed::Stop(match reason.as_str() {
                 "stop" => StopReason::Stop,
+                // A reply that ends in a call the server parsed ended the way
+                // a reply with a fenced call does: normally. The call itself
+                // is what the loop reads next.
+                "tool_calls" => StopReason::Stop,
                 "length" => StopReason::Length,
-                // `tool_calls`, `content_filter`, or something this server
-                // invented. Reported as itself rather than guessed at.
+                // `content_filter`, or something this server invented. Reported as itself rather than guessed at.
                 _ => StopReason::Other,
             }));
         }
@@ -302,6 +354,53 @@ impl Backend for OpenAi {
         })
     }
 
+    /// `llama-server`'s `GET /props` (`n_ctx`, the window it was started with),
+    /// then the models listing's `max_model_len` (vLLM). A server that answers
+    /// neither says nothing, which is `None`. `/props` lives beside `/v1`, not
+    /// under it.
+    fn window(&self) -> BackendFuture<'_, Option<u32>> {
+        let root = self.base_url.trim_end_matches("/v1").to_string();
+        let models = format!("{}/models", self.base_url);
+        let http = self.http.clone();
+        let api_key = self.api_key.clone();
+        Box::pin(async move {
+            let get = |url: String| {
+                let mut request = http.get(url).timeout(super::LIST_TIMEOUT);
+                if let Some(key) = &api_key {
+                    request = request.bearer_auth(key);
+                }
+                request
+            };
+            let json = |response: reqwest::Response| async move {
+                match response.status().is_success() {
+                    true => response.json::<serde_json::Value>().await.ok(),
+                    false => None,
+                }
+            };
+            let n = |value: Option<&serde_json::Value>| {
+                value
+                    .and_then(serde_json::Value::as_u64)
+                    .filter(|n| *n > 0)
+                    .and_then(|n| u32::try_from(n).ok())
+            };
+            if let Ok(response) = get(format!("{root}/props")).send().await
+                && let Some(props) = json(response).await
+                && let Some(window) = n(props
+                    .pointer("/default_generation_settings/n_ctx")
+                    .or_else(|| props.get("n_ctx")))
+            {
+                return Ok(Some(window));
+            }
+            if let Ok(response) = get(models).send().await
+                && let Some(listing) = json(response).await
+                && let Some(window) = n(listing.pointer("/data/0/max_model_len"))
+            {
+                return Ok(Some(window));
+            }
+            Ok(None)
+        })
+    }
+
     /// `response_format` is what the OpenAI-shaped spec itself documents, and
     /// every server behind this backend that claims compatibility at all
     /// tends to agree on it. `grammar` is the opposite: measured, on this
@@ -343,9 +442,19 @@ impl Backend for OpenAi {
                 Some(Constraint::Grammar(grammar)) => (None, Some(grammar.as_str())),
                 None => (None, None),
             };
+            let native = !request.tools.is_empty();
+            let messages = match native {
+                true => serde_json::to_value(super::native::messages(
+                    &request.messages,
+                    super::native::Arguments::String,
+                )),
+                false => serde_json::to_value(&request.messages),
+            }
+            .map_err(|e| BackendError::Malformed(e.to_string()))?;
             let mut post = http.post(&url).json(&Body {
                 model: &request.model,
-                messages: &request.messages,
+                messages,
+                tools: native.then(|| super::native::tools(&request.tools)),
                 stream: true,
                 stream_options: StreamOptions { include_usage: true },
                 temperature: request.temperature,
@@ -377,6 +486,10 @@ impl Backend for OpenAi {
             let mut stop: Option<StopReason> = None;
             let mut usage: Option<Usage> = None;
             let mut done = false;
+            // Calls the server parsed, assembled across deltas and handed up
+            // as text once the reply is over — see `super::native`.
+            let mut calls = super::native::Calls::default();
+            let mut texted = false;
 
             while let Some(bytes) = body.next().await {
                 let bytes = bytes.map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -399,7 +512,15 @@ impl Backend for OpenAi {
                         continue;
                     }
                     match parse_event(payload)? {
-                        Parsed::Text(text) => yield Chunk::Text(text),
+                        Parsed::Text(text) => {
+                            texted = true;
+                            yield Chunk::Text(text)
+                        }
+                        Parsed::Calls(pieces) => {
+                            for (index, name, arguments) in pieces {
+                                calls.push(index, name.as_deref(), arguments.as_deref());
+                            }
+                        }
                         Parsed::Stop(reason) => stop = Some(reason),
                         Parsed::Usage(reported) => usage = Some(reported),
                         Parsed::Nothing => {}
@@ -420,6 +541,10 @@ impl Backend for OpenAi {
                     return;
                 }
             };
+            for call in calls.finish() {
+                yield Chunk::Text(super::native::fence(&call, texted));
+                texted = true;
+            }
             yield Chunk::Done { stop, usage };
         })
     }
@@ -428,6 +553,7 @@ impl Backend for OpenAi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::Message;
 
     #[test]
     fn a_text_delta_is_text_and_an_empty_one_is_nothing() {
@@ -450,10 +576,35 @@ mod tests {
             Parsed::Stop(StopReason::Length)
         );
 
-        // Not guessed at: a `tool_calls` finish is a different thing from a
-        // model that stopped, and reading it as `Stop` would hide it.
+        // A `tool_calls` finish was `Other` while nothing read the call: then
+        // it was a reply whose point had been lost, and `Stop` would have hidden
+        // that. Since the native transport the call comes up as text — see
+        // `a_call_in_pieces_is_read` — so it ended the way a fenced call does.
         let tools = br#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#;
-        assert_eq!(parse_event(tools).unwrap(), Parsed::Stop(StopReason::Other));
+        assert_eq!(parse_event(tools).unwrap(), Parsed::Stop(StopReason::Stop));
+
+        let filtered = br#"{"choices":[{"delta":{},"finish_reason":"content_filter"}]}"#;
+        assert_eq!(
+            parse_event(filtered).unwrap(),
+            Parsed::Stop(StopReason::Other)
+        );
+    }
+
+    /// The OpenAI API's shape for a call the server parsed: named on the first
+    /// delta for its index, arguments in fragments after — and the last
+    /// fragment may share its event with the finish.
+    #[test]
+    fn a_call_in_pieces_is_read() {
+        let first = br#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"read_file","arguments":""}}]}}]}"#;
+        let last = br#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"a\"}"}}]},"finish_reason":"tool_calls"}]}"#;
+        assert_eq!(
+            parse_event(first).unwrap(),
+            Parsed::Calls(vec![(0, Some("read_file".into()), Some(String::new()))])
+        );
+        assert_eq!(
+            parse_event(last).unwrap(),
+            Parsed::Calls(vec![(0, None, Some("{\"path\":\"a\"}".into()))])
+        );
     }
 
     #[test]
@@ -496,7 +647,8 @@ mod tests {
         let messages = [Message::user("hola")];
         let body = serde_json::to_value(Body {
             model: "qwen2.5-coder-7b",
-            messages: &messages,
+            messages: serde_json::to_value(messages).unwrap(),
+            tools: None,
             stream: true,
             stream_options: StreamOptions {
                 include_usage: true,
@@ -521,7 +673,8 @@ mod tests {
         let messages = [Message::user("hola")];
         let body = serde_json::to_value(Body {
             model: "qwen2.5-coder-7b",
-            messages: &messages,
+            messages: serde_json::to_value(messages).unwrap(),
+            tools: None,
             stream: true,
             stream_options: StreamOptions {
                 include_usage: true,

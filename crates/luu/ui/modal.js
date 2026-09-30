@@ -57,9 +57,12 @@ export function asModal(id, { close, locked = () => false }, frames = 120) {
     if (dialog.open) return
 
     // ESC — and anything else the browser counts as a dismissal — fires
-    // `cancel` first, and `cancel` can be refused.
+    // `cancel` first, and `cancel` can be refused. It always is, now: the
+    // browser would close the dialog at once, and the page's own close function
+    // is what plays the closing animation before it unmounts. See [`closing`].
     dialog.addEventListener("cancel", event => {
-      if (locked()) event.preventDefault()
+      event.preventDefault()
+      if (!locked()) close()
     })
 
     // Whatever closed it, the page's own state is what decides what is on
@@ -71,6 +74,24 @@ export function asModal(id, { close, locked = () => false }, frames = 120) {
 
     dialog.showModal()
   })
+}
+
+/// How long a modal takes to leave; `app.css`'s `modal-out` is the same.
+const CLOSE_MS = 140
+
+/// Plays the closing animation of the `<dialog>` with that id, then calls
+/// `done` — the page's own close, which unmounts it. Every modal's close
+/// function goes through this, so a close button, a click on the backdrop and
+/// ESC all leave the same way. Immediate where there is nothing to animate:
+/// no such dialog, one the browser already closed, or reduced motion. A second
+/// call while it is leaving is ignored rather than closing twice.
+export function closing(id, done) {
+  const dialog = document.getElementById(id)
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  if (!dialog || !dialog.open || still) return done()
+  if (dialog.classList.contains("closing")) return
+  dialog.classList.add("closing")
+  setTimeout(done, CLOSE_MS)
 }
 
 /// Is any modal on screen? What the page's ESC handler asks before doing

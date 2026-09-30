@@ -17,17 +17,103 @@
   const SettingsGeneral = await import("./settings-general.html")
   const SettingsModels = await import("./settings-models.html")
   const SettingsEngines = await import("./settings-engines.html")
-  const SettingsResend = await import("./settings-resend.html")
-  const SettingsAuthority = await import("./settings-authority.html")
+  const SettingsSessions = await import("./settings-sessions.html")
   const Rail = await import("./components/rail.html")
 
   const SECTIONS = [
+    // Engines before Models: a provider can name an engine, so the thing it
+    // names comes first. Resend and Authority are one section, Sessions —
+    // see `settings-sessions.html`.
     { value: "general", label: "General", icon: "i-sliders" },
-    { value: "models", label: "Models", icon: "i-server" },
     { value: "engines", label: "Engines", icon: "i-chip" },
-    { value: "resend", label: "Resend", icon: "i-repeat" },
-    { value: "authority", label: "Authority", icon: "i-chat" },
+    { value: "models", label: "Models", icon: "i-server" },
+    { value: "sessions", label: "Sessions", icon: "i-repeat" },
   ]
+
+  // **A change of section is a transition, not a swap, and its end is known
+  // before it starts.** The section chosen is mounted at once but invisible,
+  // and loads what it loads; once its height has settled (unchanged for 90ms,
+  // or 700ms at the most) the pane's height goes from the old section's to
+  // that one's while the two cross-fade — one motion, to a height already
+  // measured. What it replaced was a fade out, a swap, a measurement, and a
+  // second jump when the new section's data landed.
+  //
+  // Mounted per visit rather than all at once, so a section is never stale: a
+  // provider added from Engines is in Models the next time Models is opened,
+  // and nothing hidden goes on polling.
+  //
+  // `shown` is on screen, `next` is being prepared, `leaving` is fading out.
+  // `height` is the stage's, measured by a ResizeObserver — the stage is as
+  // tall as `shown`, since the other two are laid out on top of it — plus the
+  // pane's padding, capped at what the window leaves the dialog.
+  let shown = ui.section
+  let next = null
+  let leaving = null
+  let height = null
+  const FADE_MS = 240
+
+  const mounted = name => name === shown || name === next || name === leaving
+  const phase = name => name === shown ? "on" : name === leaving ? "leaving" : "prep"
+  const wrapper = name => $self(`.stage > [data-section="${name}"]`)
+  // The height a section settles at once it has loaded, polled per frame.
+  const settle = name => new Promise(resolve => {
+    const started = performance.now()
+    let last = -1
+    let quietSince = null
+    const check = now => {
+      const el = wrapper(name)
+      const h = el ? el.offsetHeight : 0
+      if (h > 0 && h === last) quietSince = quietSince ?? now
+      else quietSince = null
+      last = h
+      if ((quietSince !== null && now - quietSince >= 90) || now - started >= 700) return resolve(h)
+      requestAnimationFrame(check)
+    }
+    requestAnimationFrame(check)
+  })
+
+  // A closure rather than store fields: the `$:` below must read `ui.section`
+  // and nothing it writes, or writing it would run it again.
+  const switchTo = (() => {
+    let current = ui.section
+    let token = 0
+    return async target => {
+      if (target === current) return
+      current = target
+      const mine = ++token
+      if (target === shown) {
+        next = null
+        return
+      }
+      next = target
+      await settle(target)
+      if (mine !== token) return
+      leaving = shown
+      shown = target
+      next = null
+      const pane = $self(".pane")
+      if (pane) pane.scrollTop = 0
+      setTimeout(() => { if (mine === token) leaving = null }, FADE_MS)
+    }
+  })()
+  $: switchTo(ui.section)
+
+  const measure = () => {
+    const stage = $self(".stage")
+    const pane = $self(".pane")
+    const head = $self(".modal-head")
+    if (!stage || !pane || !head) return
+    const style = getComputedStyle(pane)
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+    // What `max-height: calc(100vh - 6rem)` leaves the pane under the head.
+    const room = window.innerHeight - 96 - head.offsetHeight - 2
+    height = Math.min(stage.offsetHeight + padding, room)
+  }
+
+  await $mounted()
+  new ResizeObserver(() => measure()).observe($self(".stage"))
+  window.addEventListener("resize", measure)
+  $: paneStyle = height === null ? "" : `height:${height}px`
 </script>
 
 <!-- `@click.self` is the backdrop: a click that lands on the dialog itself
@@ -54,12 +140,17 @@
       </Rail>
     </div>
 
-    <section class="modal-body pane">
-      <SettingsGeneral :if="ui.section === 'general'" />
-      <SettingsModels :if="ui.section === 'models'" />
-      <SettingsEngines :if="ui.section === 'engines'" />
-      <SettingsResend :if="ui.section === 'resend'" />
-      <SettingsAuthority :if="ui.section === 'authority'" />
+    <section class="modal-body pane" :style="paneStyle">
+      <div class="stage">
+        <div :if="mounted('general')" class="section" data-section="general" :class="phase('general')"
+             :attrs="{ 'aria-hidden': String(shown !== 'general') }"><SettingsGeneral /></div>
+        <div :if="mounted('engines')" class="section" data-section="engines" :class="phase('engines')"
+             :attrs="{ 'aria-hidden': String(shown !== 'engines') }"><SettingsEngines /></div>
+        <div :if="mounted('models')" class="section" data-section="models" :class="phase('models')"
+             :attrs="{ 'aria-hidden': String(shown !== 'models') }"><SettingsModels /></div>
+        <div :if="mounted('sessions')" class="section" data-section="sessions" :class="phase('sessions')"
+             :attrs="{ 'aria-hidden': String(shown !== 'sessions') }"><SettingsSessions /></div>
+      </div>
     </section>
   </div>
 </dialog>
@@ -78,5 +169,39 @@
     background: var(--raised);
     overflow-y: auto;
   }
-  .pane { min-width: 0; }
+  .pane {
+    min-width: 0;
+    box-sizing: border-box;
+    transition: height .26s cubic-bezier(.2, .8, .2, 1);
+  }
+  /* One section in the flow, which is what the pane scrolls; the others laid
+     out on top of it, invisible and inert, so each one's height is always
+     known. The chosen one fades in as the one it replaces fades out. */
+  .stage { position: relative; }
+  .section {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  /* Being prepared: laid out, loading, measured, and not seen. */
+  .section.prep { transition: none; }
+  .section.leaving {
+    visibility: visible;
+    opacity: 0;
+    transition: opacity .16s ease-out;
+  }
+  .section.on {
+    position: relative;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity .22s ease-in .06s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pane, .section, .section.on, .section.leaving { transition: none; }
+  }
 </style>

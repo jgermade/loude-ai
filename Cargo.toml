@@ -48,6 +48,12 @@ sha2 = "0.11"
 thiserror = "2"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 tokio-tungstenite = "0.30"
+# `serve`'s log: `tracing` is already in the tree through axum and hyper; these
+# two are the formatter with its `LUU_LOG` filter, and a file writer that never
+# blocks. See RECORD/2026-09-30.a-log-for-serve.completed.md.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+tracing-appender = "0.2"
 tree-sitter = "0.27"
 tree-sitter-rust = "0.24"
 tree-sitter-highlight = "0.27"

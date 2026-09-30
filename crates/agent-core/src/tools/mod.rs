@@ -283,6 +283,31 @@ impl Tools {
             .map(AsRef::as_ref)
     }
 
+    /// The tools as the native transport sends them, in the order
+    /// [`Self::definitions`] renders them — the same three facts each tool
+    /// declares, so there is no second definition of a tool's shape.
+    pub fn specs(&self) -> Vec<crate::backend::ToolSpec> {
+        self.tools
+            .iter()
+            .map(|tool| crate::backend::ToolSpec {
+                name: tool.name().to_string(),
+                description: tool.description().to_string(),
+                parameters: tool.parameters(),
+            })
+            .collect()
+    }
+
+    /// What the native transport sends in the request's `tools` field, as the
+    /// string the context counts in its `tools` bucket. Empty when there are
+    /// no tools, like [`Self::definitions`].
+    pub fn native_definitions(&self) -> String {
+        if self.tools.is_empty() {
+            return String::new();
+        }
+        serde_json::to_string(&crate::backend::native::tools(&self.specs()))
+            .expect("a schema built from json! always serializes")
+    }
+
     /// The block appended to the system text. Byte-stable across calls, across
     /// processes, and across the order the tools were declared in.
     pub fn definitions(&self) -> String {
@@ -369,11 +394,36 @@ needed, answer in plain text and do not emit a block.
 /// for, and a bare JSON object, because a 7B that has never seen a tool API
 /// drops the fence about a third of the time and refusing that would be
 /// measuring the fence rather than the loop.
+///
+/// **And a ```` ```json ```` fence**, which is where a model given its own
+/// trained tool prompt — the native transport, where the server's template
+/// renders the tools — puts the call when it does not write the template's
+/// tags: `qwen2.5-coder:7b` did so on every call it made, measured. The bare
+/// scan already found the object inside it; naming the fence is what lets the
+/// page and the native history treat the block as one unit. See
+/// `RECORD/2026-09-30.native-tool-calls.completed.md`.
 pub fn parse_call(text: &str) -> Option<ToolCall> {
-    fenced(text, "tool")
-        .and_then(|body| serde_json::from_str::<ToolCall>(body).ok())
-        .or_else(|| bare_object(text))
-        .filter(|call| !call.name.is_empty())
+    split_call(text).map(|(_, call)| call)
+}
+
+/// The fences a call may arrive under: ours, then the one a model trained on a
+/// native tool prompt writes instead of its template's tags.
+pub const CALL_FENCES: [&str; 2] = ["tool", "json"];
+
+/// [`parse_call`], plus what the reply said **before** the call — the prose
+/// half of an assistant message whose call the native transport sends as
+/// `tool_calls`. Whatever follows the call is not kept: a call ends a reply,
+/// and text after it is the model writing its own result
+/// ([`CallVerdict::ContinuedPastFence`]), which the history should not tell it
+/// was said.
+pub fn split_call(text: &str) -> Option<(String, ToolCall)> {
+    let fenced = CALL_FENCES.iter().find_map(|tag| {
+        let (open, body, _) = fenced_bounds(text, tag)?;
+        let call = serde_json::from_str::<ToolCall>(body).ok()?;
+        Some((open, call))
+    });
+    let (start, call) = fenced.or_else(|| bare_object_at(text))?;
+    (!call.name.is_empty()).then(|| (text[..start].trim_end().to_string(), call))
 }
 
 /// Where a reply landed against the tool-call format, for a probe that
@@ -402,10 +452,14 @@ pub enum CallVerdict {
 /// misnamed fence against — the caller's, because this function has no
 /// [`Tools`] of its own and should not need one to be tested.
 pub fn score_call(text: &str, tool_names: &[&str]) -> CallVerdict {
-    if let Some((body, close_end)) = fenced_span(text, "tool")
-        && serde_json::from_str::<ToolCall>(body)
-            .ok()
-            .is_some_and(|call: ToolCall| !call.name.is_empty())
+    if let Some((_, close_end)) = CALL_FENCES
+        .iter()
+        .filter_map(|tag| fenced_span(text, tag))
+        .find(|(body, _)| {
+            serde_json::from_str::<ToolCall>(body)
+                .ok()
+                .is_some_and(|call: ToolCall| !call.name.is_empty())
+        })
     {
         return match text[close_end..].trim().is_empty() {
             true => CallVerdict::Parsed,
@@ -436,6 +490,11 @@ pub(crate) fn fenced<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
 /// fence — for a caller that cares what came *after* the block, which
 /// `fenced` itself never needs to.
 fn fenced_span<'a>(text: &'a str, tag: &str) -> Option<(&'a str, usize)> {
+    fenced_bounds(text, tag).map(|(_, body, close_end)| (body, close_end))
+}
+
+/// Like [`fenced_span`], plus where the opening fence starts.
+fn fenced_bounds<'a>(text: &'a str, tag: &str) -> Option<(usize, &'a str, usize)> {
     let fence = format!("```{tag}");
     let open = text.find(&fence)?;
     let rest = &text[open + fence.len()..];
@@ -446,12 +505,17 @@ fn fenced_span<'a>(text: &'a str, tag: &str) -> Option<(&'a str, usize)> {
     let close = body_region.find("```")?;
     let body = body_region[..close].trim();
     let close_end = open + fence.len() + skipped + close + "```".len();
-    Some((body, close_end))
+    Some((open, body, close_end))
 }
 
 /// The first `{…}` that parses as a call. Scanned from every `{` rather than
 /// from the first, because models like to open with prose containing braces.
 fn bare_object(text: &str) -> Option<ToolCall> {
+    bare_object_at(text).map(|(_, call)| call)
+}
+
+/// [`bare_object`], and where the object starts.
+fn bare_object_at(text: &str) -> Option<(usize, ToolCall)> {
     let bytes = text.as_bytes();
     for (start, _) in text
         .char_indices()
@@ -459,7 +523,7 @@ fn bare_object(text: &str) -> Option<ToolCall> {
     {
         let mut stream = serde_json::Deserializer::from_str(&text[start..]).into_iter::<ToolCall>();
         if let Some(Ok(call)) = stream.next() {
-            return Some(call);
+            return Some((start, call));
         }
     }
     None

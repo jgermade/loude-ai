@@ -127,6 +127,13 @@ struct Destination {
     /// What a draft or a plan is told about itself, this session's own choice
     /// of it. See `crate::provider::AuthorityNotes`.
     authority: crate::provider::AuthorityNotes,
+    /// The engine luu starts for this destination, when it names one: warmed
+    /// once the session is pointed here, and waited on by `backend` itself.
+    engine: Option<(String, crate::provider::Engine)>,
+    /// How tool calls travel to it. Decides how a session's context renders
+    /// its tools and what each request carries — see
+    /// `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    tool_calls: crate::provider::ToolCalls,
 }
 
 impl Destination {
@@ -150,6 +157,34 @@ impl Destination {
                 ..self.settings.clone()
             },
             authority: self.authority.clone(),
+            engine: self.engine.clone(),
+            tool_calls: self.tool_calls,
+        }
+    }
+
+    /// The same destination with the window its server said it serves: the
+    /// budget has a limit from here on, the page is told where it came from,
+    /// and the caveat that the window is only the server's drops, because the
+    /// server just said.
+    fn windowed(&self, window: u32) -> Self {
+        let budget = Budget {
+            limit: Some(window),
+            ..self.budget
+        };
+        Self {
+            backend: self.backend.clone(),
+            model: self.model.clone(),
+            budget,
+            counter: self.counter.clone(),
+            settings: Settings {
+                window: Some(window),
+                window_from: crate::provider::WindowFrom::Server,
+                window_caveat: None,
+                ..self.settings.clone()
+            },
+            authority: self.authority.clone(),
+            engine: self.engine.clone(),
+            tool_calls: self.tool_calls,
         }
     }
 
@@ -167,6 +202,8 @@ impl Destination {
                 ..self.settings.clone()
             },
             authority,
+            engine: self.engine.clone(),
+            tool_calls: self.tool_calls,
         }
     }
 }
@@ -213,6 +250,9 @@ struct App {
     /// copies. Children of this process — see [`Serving::run`] for how they
     /// stop with it, and `crate::engines` for the rest.
     engines: Arc<crate::engines::Supervisor>,
+    /// The requests being answered right now, for the log's watchdog. See
+    /// `crate::log`.
+    inflight: Arc<crate::log::InFlight>,
     /// Pinned sampling, forwarded to every call the same way `budget` is.
     /// `None` leaves it to the server's own default.
     temperature: Option<f32>,
@@ -413,6 +453,9 @@ pub struct Settings {
     /// idle, empty live session at once, and a new session that names no
     /// provider reads the file again rather than inheriting. See
     /// [`crate::provider::Resolved::named`].
+    /// How tool calls travel to this destination: `fenced` or `native`. See
+    /// `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    tool_calls: crate::provider::ToolCalls,
     follows_default: bool,
 }
 
@@ -454,6 +497,7 @@ impl Settings {
             counter_warning,
             unconfigured: provider.unconfigured(),
             follows_default: !provider.named,
+            tool_calls: provider.tool_calls,
             ..self.clone()
         }
     }
@@ -626,6 +670,7 @@ impl App {
                     counter.id(),
                     Some(agency.posture(None)),
                     &authority,
+                    provider.tool_calls,
                     started_at,
                 )
                 .await?,
@@ -686,6 +731,7 @@ impl App {
             store: store.as_ref().map(|path| path.display().to_string()),
             unconfigured: provider.unconfigured(),
             follows_default: !provider.named,
+            tool_calls: provider.tool_calls,
         };
         // One `Arc` for the field and the header both: the posture line is a
         // fact about this agency, and building it after the move would need a
@@ -722,6 +768,10 @@ impl App {
                 counter,
                 settings,
                 authority: authority.clone(),
+                // `serve` sets it, where there is a supervisor to start one:
+                // see [`Serving::run`]'s own warm-up.
+                engine: None,
+                tool_calls: provider.tool_calls,
             })),
             tokenizer,
             approvers,
@@ -732,8 +782,8 @@ impl App {
                 next_turn: 1,
                 current: None,
                 cancel: None,
-                context: AgentContext::new(SYSTEM)
-                    .with_tools(agency.definitions())
+                context: agency
+                    .with_tools(AgentContext::new(SYSTEM), provider.tool_calls)
                     .with_map(&map_rendered),
                 prefix: PrefixTracker::default(),
                 pending: None,
@@ -748,6 +798,7 @@ impl App {
             postures_path,
             icons: std::sync::RwLock::new(icons),
             engines: Arc::default(),
+            inflight: Arc::default(),
             temperature,
             seed,
             constraint,
@@ -764,6 +815,10 @@ impl App {
                 view.repeat = Some(budget.repeat);
                 view.prune = Some(budget.prune);
                 view.results = Some(budget.results);
+                view.tool_calls = provider
+                    .tool_calls
+                    .native()
+                    .then(|| provider.tool_calls.as_str().to_string());
                 view
             }),
             session_started_at: Mutex::new(started_at),
@@ -780,6 +835,7 @@ impl App {
                 counter_id,
                 Some(agency.posture(None)),
                 &authority,
+                provider.tool_calls,
                 started_at,
             )]),
         }))
@@ -805,6 +861,9 @@ impl App {
 
     /// Publishes one event to every client and to the record, in that order.
     async fn publish(&self, event: Event) {
+        if let Event::Protocol(message) = &event {
+            log_event(message);
+        }
         if let Some(recorder) = &self.recorder {
             recorder.write(&event);
         }
@@ -1104,15 +1163,30 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
 
     // The profile this server resolved names an engine: started now, in the
     // background, so the first turn is not the one that waits for a model to
-    // load. A failure is said here and again by the turn that meets it.
+    // load — and if it is, it waits on this rather than meeting a closed port,
+    // because the backend is wrapped the way every switch wraps it. A failure
+    // is said here and again by the turn that meets it.
     if let Some((name, engine)) = starts {
-        let supervisor = app.engines.clone();
-        tokio::spawn(async move {
-            if let Err(error) = supervisor.ensure(&name, &engine).await {
-                eprintln!("engine {name}: {error}");
-            }
+        let mut destination = app.destination.write().await;
+        let current = destination.as_ref();
+        *destination = Arc::new(Destination {
+            backend: Arc::new(crate::engines::Started::new(
+                current.backend.clone(),
+                app.engines.clone(),
+                name.clone(),
+                engine.clone(),
+            )),
+            model: current.model.clone(),
+            budget: current.budget,
+            counter: current.counter.clone(),
+            settings: current.settings.clone(),
+            authority: current.authority.clone(),
+            engine: Some((name.clone(), engine.clone())),
+            tool_calls: current.tool_calls,
         });
+        app.engines.warm(&name, &engine);
     }
+    learn_window(app.clone());
 
     // Two halves, because they are two surfaces. `/ws` is authority and
     // `/api/*` is this session's prompts and source — both behind the token
@@ -1197,6 +1271,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // providers route: see [`engines_allowed`].
         .route("/api/models", get(get_models))
         .route("/api/engines", get(get_engines).put(put_engines))
+        .route("/api/engine", get(live_engine))
         .route("/api/engines/install", post(install_engine))
         .route("/api/engines/{name}/start", post(start_engine))
         .route("/api/engines/{name}/stop", post(stop_engine))
@@ -1218,7 +1293,15 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             // session ends — a larger authority than approving one job, and
             // not one a bearer token should carry.
             providers_editable: address.ip().is_loopback(),
-        });
+        })
+        // Outermost, so it sees every request — the guarded half, the page's
+        // own files, and a request the token check refused — and the time it
+        // took is the time the client waited. See `crate::log`.
+        .layer(middleware::from_fn_with_state(
+            app.inflight.clone(),
+            crate::log::requests,
+        ));
+    crate::log::Watchdog::start(app.inflight.clone());
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -1355,12 +1438,64 @@ struct TokenQuery {
     token: Option<String>,
 }
 
+/// One protocol event in the log: its type and the few fields that say where a
+/// session was when something went wrong — the turn, the job, how a turn
+/// ended, which tool, what was refused, the error. Never a prompt, a token or a
+/// tool's output: those are the session stream's, not a file kept for a week.
+/// `token` is skipped outright, one line per word being no log at all. See
+/// `crate::log`.
+fn log_event(message: &ServerMessage) {
+    if matches!(message, ServerMessage::Token { .. }) {
+        return;
+    }
+    let Ok(value) = serde_json::to_value(message) else {
+        return;
+    };
+    let field = |key: &str| {
+        value.get(key).and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        })
+    };
+    let kind = field("type").unwrap_or_default();
+    let (turn, job, reason, name) = (field("turn"), field("job"), field("reason"), field("name"));
+    match kind.as_str() {
+        "failed" | "refused" => tracing::warn!(
+            target: "luu::session",
+            event = kind,
+            turn,
+            request = field("request"),
+            reason,
+            detail = field("detail").or_else(|| field("message")),
+            "session",
+        ),
+        _ => {
+            tracing::info!(target: "luu::session", event = kind, turn, job, reason, tool = name, "session")
+        }
+    }
+}
+
+/// Sockets opened since `serve` started, so the log can pair an open with its
+/// close. See `crate::log`.
+static SOCKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 async fn protocol_socket(ws: WebSocketUpgrade, State(state): State<AppRouterState>) -> Response {
-    ws.on_upgrade(move |socket| run_protocol_socket(socket, state))
+    ws.on_upgrade(move |socket| async move {
+        let id = SOCKETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        tracing::info!(target: "luu::ws", socket = id, channel = "protocol", "open");
+        run_protocol_socket(socket, state).await;
+        tracing::info!(target: "luu::ws", socket = id, channel = "protocol", "closed");
+    })
 }
 
 async fn trace_socket(ws: WebSocketUpgrade, State(state): State<AppRouterState>) -> Response {
-    ws.on_upgrade(move |socket| run_trace_socket(socket, state.app))
+    ws.on_upgrade(move |socket| async move {
+        let id = SOCKETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        tracing::info!(target: "luu::ws", socket = id, channel = "trace", "open");
+        run_trace_socket(socket, state.app).await;
+        tracing::info!(target: "luu::ws", socket = id, channel = "trace", "closed");
+    })
 }
 
 /// The trace channel is send-only: it explains the agent, it never drives it.
@@ -1444,8 +1579,21 @@ async fn run_protocol_socket(socket: WebSocket, state: AppRouterState) {
                     Ok(message) => message,
                     // Unparseable input from one client must not take the
                     // server down for the others.
-                    Err(_) => continue,
+                    Err(error) => {
+                        tracing::warn!(target: "luu::ws", %error, "a client message that does not parse");
+                        continue;
+                    }
                 };
+                // What was asked, by kind only: the prompt itself belongs in
+                // the session stream, not in a file kept for a week.
+                tracing::info!(
+                    target: "luu::ws",
+                    kind = serde_json::to_value(&message)
+                        .ok()
+                        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string))
+                        .unwrap_or_default(),
+                    "client message",
+                );
                 match &message {
                     ClientMessage::Hello { protocol, format } => {
                         if let Err(detail) = handshake(*protocol, *format) {
@@ -2741,6 +2889,9 @@ async fn begin_turn(
         turn,
         cancel_rx,
         CompletionRequest {
+            // Under `native`, the tools travel here and the server's template
+            // renders them; under `fenced` they are already in the system text.
+            tools: agency.specs(sending.tool_calls),
             model: sending.model.clone(),
             messages: selection.messages,
             // The window we budgeted against, sent so the server serves it. The
@@ -3591,6 +3742,25 @@ async fn get_models() -> Response {
     Json(Catalog { models, roots }).into_response()
 }
 
+/// The live session's engine, and whether it has loaded the model the session
+/// is on — what the chat head polls after a switch, since the switch itself no
+/// longer waits for it. `null` when the destination names no engine.
+#[derive(serde::Serialize)]
+struct LiveEngine {
+    name: String,
+    #[serde(flatten)]
+    readiness: Option<crate::engines::ReadinessView>,
+}
+
+async fn live_engine(State(state): State<AppRouterState>) -> Response {
+    let sending = state.app.destination().await;
+    Json(sending.engine.as_ref().map(|(name, _)| LiveEngine {
+        name: name.clone(),
+        readiness: state.app.engines.readiness(name),
+    }))
+    .into_response()
+}
+
 async fn get_engines(State(state): State<AppRouterState>) -> Response {
     engines_answer(&state).await
 }
@@ -4072,6 +4242,62 @@ async fn put_providers(
     }
 }
 
+/// Asks the live session's destination which window it serves, in the
+/// background, where nothing declared one — and takes the answer if the session
+/// is still pointed there when it comes. An engine may still be loading, and
+/// the engine's backend waits for it before asking.
+///
+/// Taking it is a mid-session change like any other: the destination gets the
+/// window, and the stream gains a header carrying it, because two stretches of
+/// one session under different windows are not comparable and only a header
+/// says where the second began. See
+/// `RECORD/2026-09-30.the-window-the-server-says.completed.md`.
+fn learn_window(app: Arc<App>) {
+    tokio::spawn(async move {
+        let asked = app.destination().await;
+        if asked.budget.limit.is_some() {
+            return;
+        }
+        let window = match asked.backend.window().await {
+            Ok(Some(window)) => window,
+            _ => return,
+        };
+        let sending = {
+            let mut destination = app.destination.write().await;
+            // Moved while the server was answering: the answer was about the
+            // destination this session has left.
+            if !Arc::ptr_eq(&destination, &asked) {
+                return;
+            }
+            let sending = Arc::new(asked.windowed(window));
+            *destination = sending.clone();
+            sending
+        };
+        tracing::info!(
+            target: "luu::session",
+            window,
+            profile = sending.settings.profile.as_deref(),
+            model = sending.model.as_str(),
+            "the server says its window",
+        );
+        let posture = app.agency().await.posture(app.posture.lock().await.clone());
+        let started_at = app.view.lock().await.started_at;
+        if app.store.is_some() {
+            app.stream.lock().await.push(crate::session::header(
+                sending.backend.name(),
+                &sending.model,
+                sending.budget,
+                sending.counter.id(),
+                Some(posture),
+                &sending.authority,
+                sending.tool_calls,
+                started_at,
+            ));
+        }
+        app.checkpoint().await;
+    });
+}
+
 /// Stops the engines this server started that the live session's destination
 /// does not use: a session that moved elsewhere should not leave a model
 /// loaded in memory until `serve` exits. See [`crate::engines::Supervisor::stop_others`].
@@ -4465,6 +4691,10 @@ async fn put_authority(
             let mut view = app.view.lock().await;
             view.authority_draft = sending.authority.draft_note();
             view.authority_plan = sending.authority.plan_note();
+            view.tool_calls = sending
+                .tool_calls
+                .native()
+                .then(|| sending.tool_calls.as_str().to_string());
         }
         app.checkpoint().await;
     }
@@ -4726,7 +4956,12 @@ fn retarget_header(
             == (
                 sending.authority.draft_note(),
                 sending.authority.plan_note(),
-            );
+            )
+        // And the transport, a sixth: a session whose tools moved from the
+        // system text to the request's own field is rendering under something
+        // else, the same fact a rule moving is. `None` reads as fenced, which
+        // is what every stream before `record::FORMAT` 19 was.
+        && view.tool_calls.as_deref().unwrap_or("fenced") == sending.tool_calls.as_str();
     match same {
         true => None,
         false => Some(crate::session::header(
@@ -4736,6 +4971,7 @@ fn retarget_header(
             counter,
             Some(posture),
             &sending.authority,
+            sending.tool_calls,
             view.started_at,
         )),
     }
@@ -4792,18 +5028,26 @@ async fn destination_for(
     {
         resolved.model = model.to_string();
     }
-    // A profile that names an engine is one luu starts: before the backend is
-    // built, and waited for, so the session this creates is one that can
-    // send — on the model it asked for, which for a llama.cpp engine may mean
-    // restarting it on another. After the model override for that reason.
-    if let Some((name, engine)) = crate::engines::for_run(&resolved) {
-        app.engines
-            .ensure(&name, &engine)
-            .await
-            .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error))?;
-    }
+    // A profile that names an engine is one luu starts, on the model asked
+    // for — which for a llama.cpp engine may mean restarting it on another.
+    // **Not waited for here**: loading a 14B takes tens of seconds, and a
+    // request that held the page for all of them was a page that looked
+    // frozen. The backend is wrapped so every call waits for the engine, and
+    // the caller warms it once the session is pointed there. After the model
+    // override for that reason. See
+    // `RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`.
+    let engine = crate::engines::for_run(&resolved);
     let backend = crate::backend_for(&resolved)
         .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, format!("{error:#}")))?;
+    let backend: Box<dyn Backend> = match &engine {
+        Some((name, engine)) => Box::new(crate::engines::Started::new(
+            backend.into(),
+            app.engines.clone(),
+            name.clone(),
+            engine.clone(),
+        )),
+        None => backend,
+    };
     // Written back through the same function the CLI uses, so the page, the
     // header and the turn all name the model the same way.
     resolved.model = crate::model_for(backend.as_ref(), resolved.model);
@@ -4826,6 +5070,8 @@ async fn destination_for(
         budget,
         counter,
         settings,
+        engine,
+        tool_calls: resolved.tool_calls,
         // Neither the destination's nor the process's, `budget`'s own reason
         // one field up: kept from the session that is being pointed elsewhere.
         authority: current.authority.clone(),
@@ -4900,7 +5146,20 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         Err((status, message)) => return (status, message).into_response(),
     };
     *app.destination.write().await = sending.clone();
+    tracing::info!(
+        target: "luu::session",
+        profile = sending.settings.profile.as_deref(),
+        model = sending.model.as_str(),
+        backend = sending.backend.name(),
+        tool_calls = sending.tool_calls.as_str(),
+        "the live session now sends here",
+    );
     release_engines(app, sending.settings.profile.as_deref()).await;
+    // Loaded behind the answer rather than inside it — see `destination_for`.
+    if let Some((name, engine)) = &sending.engine {
+        app.engines.warm(name, engine);
+    }
+    learn_window(app.clone());
     // The previous posture is ended rather than dropped: the thing being ended
     // may be a container, and `kill_on_drop` would get to it eventually. Skipped
     // when the resolver handed back the one already in place, which is what a
@@ -4929,6 +5188,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         sending.counter.id(),
         Some(posture.clone()),
         &sending.authority,
+        sending.tool_calls,
         started_at,
     )];
     // And the `--record` file gets the same line, which until now it did not:
@@ -4943,6 +5203,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
             sending.counter.id(),
             Some(posture.clone()),
             &sending.authority,
+            sending.tool_calls,
             started_at,
         );
     }
@@ -4952,8 +5213,10 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         session.next_turn = 1;
         session.current = None;
         session.cancel = None;
-        session.context = AgentContext::new(SYSTEM)
-            .with_tools(app.agency().await.definitions())
+        session.context = app
+            .agency()
+            .await
+            .with_tools(AgentContext::new(SYSTEM), sending.tool_calls)
             .with_map(&app.map_rendered);
         session.prefix = PrefixTracker::default();
         session.pending = None;
@@ -4968,6 +5231,10 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         view.repeat = Some(sending.budget.repeat);
         view.prune = Some(sending.budget.prune);
         view.results = Some(sending.budget.results);
+        view.tool_calls = sending
+            .tool_calls
+            .native()
+            .then(|| sending.tool_calls.as_str().to_string());
         let mut s = view.summary();
         s.id = new_id.clone();
         s
@@ -5143,11 +5410,26 @@ async fn resume_session(
             one.turn, one.spec, one.why,
         );
     }
-    let resumed_context = resumed.context;
+    // The store rebuilt it with the fenced block; the destination it resumes
+    // on decides which transport the tools actually travel under.
+    let resumed_context = agency.with_tools(resumed.context, sending.tool_calls);
 
     // After the fold is rebuilt and before anything runs on it.
     *app.destination.write().await = sending.clone();
+    tracing::info!(
+        target: "luu::session",
+        profile = sending.settings.profile.as_deref(),
+        model = sending.model.as_str(),
+        backend = sending.backend.name(),
+        tool_calls = sending.tool_calls.as_str(),
+        "the live session now sends here",
+    );
     release_engines(app, sending.settings.profile.as_deref()).await;
+    // Loaded behind the answer rather than inside it — see `destination_for`.
+    if let Some((name, engine)) = &sending.engine {
+        app.engines.warm(name, engine);
+    }
+    learn_window(app.clone());
     // The posture the session keeps, which is its own. A no-op when the body
     // named nothing — the resolver hands back the agency already in place, so
     // the pointers are equal and nothing is ended.
@@ -5187,6 +5469,7 @@ async fn resume_session(
             sending.counter.id(),
             Some(posture.clone()),
             &sending.authority,
+            sending.tool_calls,
             loaded_view.started_at,
         );
     }
@@ -5262,6 +5545,12 @@ async fn resume_session(
             live_view.repeat = Some(sending.budget.repeat);
             live_view.prune = Some(sending.budget.prune);
             live_view.results = Some(sending.budget.results);
+            live_view.authority_draft = sending.authority.draft_note();
+            live_view.authority_plan = sending.authority.plan_note();
+            live_view.tool_calls = sending
+                .tool_calls
+                .native()
+                .then(|| sending.tool_calls.as_str().to_string());
         }
         *view = live_view;
         let mut s = view.summary();
@@ -5547,9 +5836,12 @@ mod tests {
                     store: None,
                     unconfigured: true,
                     follows_default: true,
+                    tool_calls: crate::provider::ToolCalls::Fenced,
                     authority: crate::provider::AuthorityNotes::default(),
                 },
                 authority: crate::provider::AuthorityNotes::default(),
+                engine: None,
+                tool_calls: crate::provider::ToolCalls::Fenced,
             })),
             tokenizer: None,
             session: Mutex::new(Session {
@@ -5573,6 +5865,7 @@ mod tests {
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             engines: Arc::default(),
+            inflight: Arc::default(),
             temperature: None,
             seed: None,
             constraint: None,
@@ -5689,9 +5982,12 @@ mod tests {
                 store: None,
                 unconfigured: false,
                 follows_default: false,
+                tool_calls: crate::provider::ToolCalls::Fenced,
                 authority: crate::provider::AuthorityNotes::default(),
             },
             authority: crate::provider::AuthorityNotes::default(),
+            engine: None,
+            tool_calls: crate::provider::ToolCalls::Fenced,
         }
     }
 

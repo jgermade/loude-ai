@@ -350,6 +350,85 @@ pub fn for_run(resolved: &crate::provider::Resolved) -> Option<(String, Engine)>
     Some((name, engine))
 }
 
+/// A backend on an engine luu starts, which makes sure the engine is up — on
+/// the model asked for — before every call it sends.
+///
+/// This is what lets a switch answer at once: the session is pointed at the
+/// new destination straight away, [`Supervisor::warm`] loads it in the
+/// background, and a turn sent before it is done waits here rather than
+/// meeting a closed port. Once it answers, `ensure` is one health probe.
+pub struct Started {
+    inner: Arc<dyn agent_core::backend::Backend>,
+    supervisor: Arc<Supervisor>,
+    name: String,
+    engine: Engine,
+}
+
+impl Started {
+    pub fn new(
+        inner: Arc<dyn agent_core::backend::Backend>,
+        supervisor: Arc<Supervisor>,
+        name: String,
+        engine: Engine,
+    ) -> Self {
+        Self {
+            inner,
+            supervisor,
+            name,
+            engine,
+        }
+    }
+}
+
+impl agent_core::backend::Backend for Started {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn stream(
+        &self,
+        request: agent_core::backend::CompletionRequest,
+    ) -> agent_core::backend::ChunkStream<'_> {
+        use agent_core::backend::{BackendError, ChunkStream};
+        use futures_util::StreamExt;
+        Box::pin(
+            futures_util::stream::once(async move {
+                match self.supervisor.ensure(&self.name, &self.engine).await {
+                    Ok(()) => self.inner.stream(request),
+                    Err(error) => Box::pin(futures_util::stream::iter([Err(
+                        BackendError::Transport(error),
+                    )])) as ChunkStream<'_>,
+                }
+            })
+            .flatten(),
+        )
+    }
+
+    fn models(&self) -> agent_core::backend::BackendFuture<'_, Vec<String>> {
+        self.inner.models()
+    }
+
+    /// Asked of the engine once it is up — a window read off a server still
+    /// loading is no window at all.
+    fn window(&self) -> agent_core::backend::BackendFuture<'_, Option<u32>> {
+        Box::pin(async move {
+            if self
+                .supervisor
+                .ensure(&self.name, &self.engine)
+                .await
+                .is_err()
+            {
+                return Ok(None);
+            }
+            self.inner.window().await
+        })
+    }
+
+    fn constrain_caveat(&self, constraint: &agent_core::backend::Constraint) -> Option<String> {
+        self.inner.constrain_caveat(constraint)
+    }
+}
+
 // ---- its life -------------------------------------------------------------
 
 /// What the page is told about one engine.
@@ -429,6 +508,48 @@ pub struct Install {
 pub struct Supervisor {
     slots: Mutex<BTreeMap<String, Slot>>,
     installs: std::sync::Mutex<BTreeMap<String, Install>>,
+    /// One [`Supervisor::ensure`] at a time per engine. A switch warms the
+    /// engine in the background and the first turn waits on the same engine;
+    /// without this the two raced to stop and start it, and the loser could
+    /// stop the model the winner had just loaded.
+    ensuring: std::sync::Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
+    /// What the last `ensure` of each engine came to, for the page to read
+    /// while it waits instead of waiting inside a request.
+    readiness: std::sync::Mutex<BTreeMap<String, Readiness>>,
+}
+
+/// Where one engine's last [`Supervisor::ensure`] stands.
+#[derive(Debug, Clone)]
+struct Readiness {
+    state: &'static str,
+    model: Option<String>,
+    from: Option<String>,
+    since: Instant,
+    error: Option<String>,
+}
+
+/// The states an `ensure` passes through before it ends, in order. The clock
+/// runs across all of them: a person reads *how long since I switched*, not
+/// how long the current phase has taken.
+const IN_PROGRESS: [&str; 3] = ["stopping", "downloading", "starting"];
+
+/// [`Readiness`] as the page reads it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadinessView {
+    /// `stopping` (the engine is being restarted off `from`), `downloading`
+    /// (luu's own copy), `starting` (loading `model`), then `ready` or
+    /// `failed`.
+    pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The model a `stopping` engine was running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Since the `ensure` began, across its phases; since the end for a
+    /// `ready` or a `failed`.
+    pub secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 fn http() -> reqwest::Client {
@@ -536,6 +657,7 @@ impl Supervisor {
         let mut child = command
             .spawn()
             .map_err(|error| format!("starting {}: {error}", binary.display()))?;
+        tracing::info!(target: "luu::engines", engine = name, pid = child.id(), binary = %binary.display(), model = engine.model.as_deref(), "engine process started");
         {
             let mut log = slot.log.lock().unwrap_or_else(|e| e.into_inner());
             log.clear();
@@ -575,7 +697,109 @@ impl Supervisor {
     ///   one — llama-server holds one model, and the session asked for this;
     /// - a server something else runs on the port is used as it is: it is not
     ///   luu's to restart.
+    ///
+    /// One at a time per engine: a second caller waits for the first and then
+    /// finds it answering. Its outcome is kept for [`Supervisor::readiness`].
     pub async fn ensure(self: &Arc<Self>, name: &str, engine: &Engine) -> Result<(), String> {
+        let gate = self
+            .ensuring
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(name.to_string())
+            .or_default()
+            .clone();
+        let _held = gate.lock().await;
+        let outcome = self.ensure_now(name, engine).await;
+        match &outcome {
+            Ok(()) => self.note(name, "ready", engine.model.clone(), None, None),
+            Err(error) => self.note(
+                name,
+                "failed",
+                engine.model.clone(),
+                None,
+                Some(error.clone()),
+            ),
+        }
+        outcome
+    }
+
+    /// [`Supervisor::ensure`] in the background: what a session switching to
+    /// this engine starts, so the switch answers at once and the page reads
+    /// the load from [`Supervisor::readiness`]. The first turn calls `ensure`
+    /// itself — see [`Started`] — and waits on this one rather than racing it.
+    pub fn warm(self: &Arc<Self>, name: &str, engine: &Engine) {
+        self.note(name, "starting", engine.model.clone(), None, None);
+        let this = self.clone();
+        let (name, engine) = (name.to_string(), engine.clone());
+        tokio::spawn(async move {
+            if let Err(error) = this.ensure(&name, &engine).await {
+                eprintln!("engine {name}: {error}");
+            }
+        });
+    }
+
+    /// Where the last `ensure` of `name` stands, or `None` if nothing has
+    /// asked for it since `serve` started.
+    pub fn readiness(&self, name: &str) -> Option<ReadinessView> {
+        let readiness = self.readiness.lock().unwrap_or_else(|e| e.into_inner());
+        readiness.get(name).map(|r| ReadinessView {
+            state: r.state,
+            model: r.model.clone(),
+            from: r.from.clone(),
+            secs: r.since.elapsed().as_secs(),
+            error: r.error.clone(),
+        })
+    }
+
+    fn note(
+        &self,
+        name: &str,
+        state: &'static str,
+        model: Option<String>,
+        from: Option<String>,
+        error: Option<String>,
+    ) {
+        match &error {
+            Some(error) => {
+                tracing::warn!(target: "luu::engines", engine = name, state, model = model.as_deref(), from = from.as_deref(), error = error.as_str(), "engine")
+            }
+            None => {
+                tracing::info!(target: "luu::engines", engine = name, state, model = model.as_deref(), from = from.as_deref(), "engine")
+            }
+        }
+        let mut readiness = self.readiness.lock().unwrap_or_else(|e| e.into_inner());
+        // One clock per switch: a phase that follows another of the same
+        // `ensure` keeps the time it began. `warm` notes `starting` before the
+        // task that runs `ensure` gets to, and the page counts from the click.
+        let since = match readiness.get(name) {
+            Some(r)
+                if IN_PROGRESS.contains(&state)
+                    && IN_PROGRESS.contains(&r.state)
+                    && r.model == model =>
+            {
+                r.since
+            }
+            _ => Instant::now(),
+        };
+        let from = from.or_else(|| {
+            readiness
+                .get(name)
+                .filter(|r| IN_PROGRESS.contains(&state) && r.model == model)
+                .and_then(|r| r.from.clone())
+        });
+        readiness.insert(
+            name.to_string(),
+            Readiness {
+                state,
+                model,
+                from,
+                since,
+                error,
+            },
+        );
+    }
+
+    async fn ensure_now(self: &Arc<Self>, name: &str, engine: &Engine) -> Result<(), String> {
         let port = engine.port.unwrap_or(engine.kind.default_port());
         let ours = {
             let mut slots = self.slots.lock().await;
@@ -585,6 +809,7 @@ impl Supervisor {
         };
         match ours {
             Some(model) if model != engine.model && engine.kind != EngineKind::Ollama => {
+                self.note(name, "stopping", engine.model.clone(), model, None);
                 self.stop(name).await;
             }
             _ => {
@@ -594,8 +819,10 @@ impl Supervisor {
             }
         }
         if engine.binary.as_deref() == Some("managed") && resolve_binary(engine).is_err() {
+            self.note(name, "downloading", engine.model.clone(), None, None);
             self.install_and_wait(engine).await?;
         }
+        self.note(name, "starting", engine.model.clone(), None, None);
         self.start(name, engine).await?;
         let limit = Duration::from_secs(engine.ready_timeout.unwrap_or(DEFAULT_READY_SECS));
         let began = Instant::now();
@@ -631,6 +858,7 @@ impl Supervisor {
         if let Some(slot) = slots.get_mut(name)
             && let Some(mut running) = slot.running.take()
         {
+            tracing::info!(target: "luu::engines", engine = name, pid = running.child.id(), "engine process stopped");
             let _ = running.child.kill().await;
             slot.exit = Some("stopped from luu".into());
         }
@@ -647,6 +875,7 @@ impl Supervisor {
                 continue;
             }
             if let Some(mut running) = slot.running.take() {
+                tracing::info!(target: "luu::engines", engine = name.as_str(), pid = running.child.id(), "engine process stopped: no session sends to it");
                 let _ = running.child.kill().await;
                 slot.exit = Some("stopped: no session sends to it".into());
             }
@@ -1036,5 +1265,85 @@ mod tests {
             root.join("llama/b1-vulkan")
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A switch warms the engine and answers; the turn that follows waits on
+    /// the same `ensure` inside the backend, and an engine that cannot start
+    /// reaches it as a transport error rather than as a request that hung.
+    /// Port 9 on loopback: nothing answers the discard port on a dev machine.
+    #[tokio::test]
+    async fn a_warm_engine_is_waited_on_by_the_backend_and_says_why_it_failed() {
+        use agent_core::backend::{Backend, CompletionRequest};
+        use futures_util::StreamExt;
+
+        let supervisor = Arc::new(Supervisor::default());
+        let engine = Engine {
+            kind: EngineKind::Llama,
+            binary: Some("/nonexistent/llama-server".into()),
+            port: Some(9),
+            model: Some("ollama:qwen2.5-coder:7b".into()),
+            ..Default::default()
+        };
+        supervisor.warm("gone", &engine);
+        // Loading from the moment of the click, before the task runs.
+        assert_eq!(supervisor.readiness("gone").unwrap().state, "starting");
+
+        let backend = Started::new(
+            Arc::new(agent_core::backend::mock::Mock::default()),
+            supervisor.clone(),
+            "gone".into(),
+            engine,
+        );
+        let first = backend
+            .stream(CompletionRequest {
+                tools: Vec::new(),
+                model: "mock".into(),
+                messages: Vec::new(),
+                context_limit: None,
+                temperature: None,
+                seed: None,
+                constraint: None,
+            })
+            .next()
+            .await;
+        let error = match first {
+            Some(Err(error)) => error.to_string(),
+            other => panic!("expected the engine's failure, got {other:?}"),
+        };
+        assert!(error.contains("not an executable file"), "{error}");
+
+        let readiness = supervisor.readiness("gone").unwrap();
+        assert_eq!(readiness.state, "failed");
+        assert!(readiness.error.unwrap().contains("not an executable file"));
+        assert!(supervisor.readiness("never-asked").is_none());
+    }
+
+    /// A restart reads as one switch: `stopping` names what it was running,
+    /// `starting` still names it, and the clock does not restart between them.
+    /// A new switch — another model — starts a clock of its own.
+    #[test]
+    fn the_phases_of_one_switch_share_a_clock_and_remember_what_was_stopped() {
+        let supervisor = Supervisor::default();
+        let to = Some("ollama:gemma3:12b".to_string());
+        supervisor.note(
+            "e",
+            "stopping",
+            to.clone(),
+            Some("ollama:qwen2.5-coder:7b".into()),
+            None,
+        );
+        std::thread::sleep(Duration::from_millis(1100));
+        supervisor.note("e", "starting", to.clone(), None, None);
+        let starting = supervisor.readiness("e").unwrap();
+        assert_eq!(starting.state, "starting");
+        assert_eq!(starting.from.as_deref(), Some("ollama:qwen2.5-coder:7b"));
+        assert_eq!(starting.secs, 1);
+
+        supervisor.note("e", "ready", to, None, None);
+        let ready = supervisor.readiness("e").unwrap();
+        assert_eq!((ready.state, ready.from, ready.secs), ("ready", None, 0));
+
+        supervisor.note("e", "starting", Some("other".into()), None, None);
+        assert_eq!(supervisor.readiness("e").unwrap().secs, 0);
     }
 }

@@ -1,0 +1,77 @@
+<script :setup>
+  // The context as it stands: what the newest turn sent, opened from the
+  // indicator beside the composer. The same view as a turn's own Context tab
+  // (`context-view.html`), about the one turn somebody about to type is
+  // adding to — so "how full is it, and with what" has an answer before the
+  // next prompt rather than after it. Nothing is fetched: it is the budget
+  // and the prompt the trace channel last sent. See
+  // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
+  const { state } = await import("./store.js")
+  const { closeContext } = await import("./ui.js")
+  const { asModal } = await import("./modal.js")
+  const ContextView = await import("./context-view.html")
+
+  asModal("context-dialog", { close: closeContext })
+
+  // `state.budget` is read where it is used, never copied into this
+  // component's store: `$: budget = state.budget` put one store's object in
+  // another's, and jq79 woke the effect that read it a hundred times in a row
+  // — the loop the smoke suite caught intermittently. See
+  // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
+  $: sent = (state.budget?.buckets || []).filter(b => b.name !== "reserve").reduce((sum, b) => sum + b.tokens, 0)
+  $: reserve = (state.budget?.buckets || []).find(b => b.name === "reserve")?.tokens || 0
+  // The turn's own window, or the session's where that turn had none.
+  $: limit = state.budget?.limit || state.settings?.window || null
+  $: percent = limit ? Math.round((sent / limit) * 100) : null
+  $: turn = state.history.length ? state.history[state.history.length - 1].turn : null
+  $: asked = [...state.messages].reverse().find(m => m.role === "user")?.text || ""
+  $: notes = [state.settings?.authority?.draft?.text, state.settings?.authority?.plan?.text].filter(Boolean)
+</script>
+
+<dialog id="context-dialog" class="modal wide" @click.self="closeContext()">
+  <header class="modal-head">
+    <strong>Context</strong>
+    <span :if="turn !== null" class="dim">as of turn {{ turn }}</span>
+    <button type="button" class="link" @click="closeContext()">close</button>
+  </header>
+
+  <div :if="state.budget" class="facts">
+    <div><span class="k">context</span><b :class.warn="percent !== null && percent >= 80">{{ sent }} / {{ limit || "—" }}</b></div>
+    <div :if="state.settings?.window_from === 'server'"
+         :attrs="{ title: 'Nothing declared a window, so luu asked the server which it serves' }">
+      <span class="k">window from</span><b>the server</b>
+    </div>
+    <div :if="reserve"><span class="k">kept for the answer</span><b>{{ reserve }}</b></div>
+    <div :if="state.budget.backendPrompt"
+         :attrs="{ title: 'What the server counted. The difference from ours is the chat template, and under native tool calls the tools it rendered.' }">
+      <span class="k">the server counted</span><b>{{ state.budget.backendPrompt }}</b>
+    </div>
+  </div>
+
+  <section class="modal-body">
+    <p :if="!state.budget" class="dim">
+      Nothing has been sent in this session yet. The context is measured when a
+      turn is built, so it is here from the first prompt on.
+    </p>
+    <ContextView :if="state.budget" :prompt="state.prompt || ''" :budget="state.budget"
+                 :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
+                 :window="state.settings?.window || null" />
+  </section>
+</dialog>
+
+<style scoped>
+  .modal.wide { width: min(64rem, calc(100vw - 2rem)); }
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem 1.4rem;
+    padding: .7rem 1rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+  }
+  .facts div { display: flex; flex-direction: column; gap: .1rem; }
+  .k { color: var(--dim); font-size: 11px; }
+  .facts b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .warn { color: var(--warn); }
+  .dim { color: var(--dim); }
+</style>

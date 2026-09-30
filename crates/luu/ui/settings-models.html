@@ -39,6 +39,9 @@
       // starts is written by Settings → Engines, and a table that dropped it
       // would unlink the two the first time somebody saved a URL.
       engine: p.engine || "",
+      // How tool calls travel: "" (fenced, the default — written as nothing)
+      // or "native". See `RECORD/2026-09-30.native-tool-calls.completed.md`.
+      toolCalls: p["tool-calls"] === "native" ? "native" : "",
     })),
   })
 
@@ -53,6 +56,7 @@
         ...(p.keyFile.trim() ? { "key-file": p.keyFile.trim() } : {}),
         ...(p.remote ? { remote: true } : {}),
         ...(p.engine ? { engine: p.engine } : {}),
+        ...(p.toolCalls === "native" ? { "tool-calls": "native" } : {}),
       }]),
     ),
   })
@@ -259,7 +263,7 @@
   <thead>
     <tr>
       <th>Default</th><th>Name</th><th>Backend</th><th>URL</th>
-      <th>Model</th><th>Window</th><th>Key file</th><th></th>
+      <th>Model</th><th>Window</th><th>Key file</th><th>Tool calls</th><th></th>
     </tr>
   </thead>
   <tbody>
@@ -271,7 +275,7 @@
       </td>
       <td>mock</td>
       <td>mock</td>
-      <td colspan="4" class="dim">
+      <td colspan="5" class="dim">
         built in — what a run with no default falls back to. It answers in
         sentences and sends nowhere.
       </td>
@@ -308,6 +312,17 @@
                placeholder="~/.luu/that.key"
                title="A path. Never the key itself: a key in this file is a key in every backup."
                @input="edit(row.id, 'keyFile', $event.target.value)">
+      </td>
+      <!-- Fenced writes nothing, so a file that never said stays byte-for-byte
+           what it was. Native is the server's own `tools` field, rendered with
+           the tool prompt the model was trained on. -->
+      <td>
+        <select :value="row.toolCalls" :disabled="!editable || row.backend === 'mock'"
+                title="fenced: the tools as text in our system prompt, a ```tool block back. native: the server's tools field and its own tool prompt."
+                @change="edit(row.id, 'toolCalls', $event.target.value)">
+          <option value="">fenced</option>
+          <option value="native">native</option>
+        </select>
       </td>
       <td>
         <span :if="row.name && row.name === state.providers?.running" class="tag"

@@ -109,6 +109,39 @@ pub struct Profile {
     /// `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// How a call travels: `fenced` (the default, and every recording made
+    /// before this key) or `native`, the server's own `tools` field. A fact
+    /// about the server beside the URL, because it is the server's template
+    /// that renders the tools and the server that has to accept the field.
+    /// See `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<ToolCalls>,
+}
+
+/// The two tool transports. See [`Profile::tool_calls`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolCalls {
+    /// Definitions as text in the system message, a call as a ```` ```tool ````
+    /// block the model types.
+    #[default]
+    Fenced,
+    /// The API's `tools` field: the server's template renders them with the
+    /// tool prompt the model was trained on.
+    Native,
+}
+
+impl ToolCalls {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fenced => "fenced",
+            Self::Native => "native",
+        }
+    }
+
+    pub fn native(self) -> bool {
+        self == Self::Native
+    }
 }
 
 /// `[engine.<name>]`: a model server luu is allowed to start, as a child of
@@ -732,6 +765,8 @@ pub struct Flags<'a> {
     pub api_key_file: Option<&'a Path>,
     /// 0 is the CLI's "unknown window", which is also its "not set".
     pub context_limit: u32,
+    /// `--tool-calls`, over the profile's `tool-calls`.
+    pub tool_calls: Option<ToolCalls>,
 }
 
 /// Where the window a run budgets against came from.
@@ -744,6 +779,10 @@ pub struct Flags<'a> {
 pub enum WindowFrom {
     Flag,
     Profile,
+    /// Nothing declared one and the server said which it serves — see
+    /// `Backend::window` and
+    /// `RECORD/2026-09-30.the-window-the-server-says.completed.md`.
+    Server,
     Unset,
 }
 
@@ -780,6 +819,8 @@ pub struct Resolved {
     pub destination_from: DestinationFrom,
     /// The engine this profile starts, and its table, when it names one.
     pub engine: Option<(String, Engine)>,
+    /// How tool calls travel to and from this destination.
+    pub tool_calls: ToolCalls,
     /// Whether anybody *chose* this: `-p`, or any flag at all, or a provider
     /// picked for a session. A destination nobody chose is the file's default
     /// (or the mock with no default), and it follows the file when the file
@@ -802,6 +843,7 @@ impl Resolved {
             profile: None,
             destination_from: DestinationFrom::Default,
             engine: None,
+            tool_calls: ToolCalls::Fenced,
             named: false,
         }
     }
@@ -828,9 +870,15 @@ impl Resolved {
             true => "",
             false => " (remote)",
         };
+        // Only when it is not the default, so every line printed before the
+        // key existed reads the same.
+        let tools = match self.tool_calls {
+            ToolCalls::Native => ", tool calls native",
+            ToolCalls::Fenced => "",
+        };
         Some(match &self.profile {
-            Some(name) => format!("provider: {name} → {destination}{remote}"),
-            None => format!("provider: {destination}{remote}"),
+            Some(name) => format!("provider: {name} → {destination}{remote}{tools}"),
+            None => format!("provider: {destination}{remote}{tools}"),
         })
     }
 }
@@ -929,6 +977,9 @@ pub fn resolve(
                 .and_then(|engine| Some((engine.clone(), config.engines.get(engine)?.clone()))),
             false => None,
         },
+        // The flag over the profile, and fenced where neither says: the
+        // transport every earlier recording was made under.
+        tool_calls: flags.tool_calls.or(profile.tool_calls).unwrap_or_default(),
         profile: name,
         // A flag beats the file here exactly as it does field by field above,
         // and the mock is a destination when somebody typed it.
@@ -942,7 +993,8 @@ pub fn resolve(
             || flags.ollama_url.is_some()
             || flags.openai_url.is_some()
             || flags.api_key_file.is_some()
-            || flags.context_limit != 0,
+            || flags.context_limit != 0
+            || flags.tool_calls.is_some(),
     })
 }
 
