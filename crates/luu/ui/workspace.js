@@ -11,6 +11,7 @@
 
 import { $reactive } from "./vendor/jq79.js"
 import { apiHeaders } from "./store.js"
+import { closing } from "./modal.js"
 import { setPane } from "./prefs.js"
 
 export const workspace = $reactive({
@@ -134,7 +135,7 @@ export function closePicker() {
   // A first visit has nothing behind it to go back to, so the only way out of a
   // forced picker is choosing.
   if (workspace.picker.forced) return
-  workspace.picker = { open: false, forced: false, at: "" }
+  closing("folder-dialog", () => { workspace.picker = { open: false, forced: false, at: "" } })
 }
 
 export function browseTo(path) {

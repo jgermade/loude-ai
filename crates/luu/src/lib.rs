@@ -37,6 +37,7 @@ pub mod engines;
 pub mod export;
 pub mod highlight;
 pub mod icons;
+pub mod log;
 pub mod models;
 pub mod provider;
 pub mod secret;
@@ -257,6 +258,12 @@ enum Command {
         #[arg(long, conflicts_with = "store")]
         no_store: bool,
 
+        /// Write no log. By default `serve` keeps one in the state directory,
+        /// `logs/serve.YYYY-MM-DD.log`, seven days of it, filtered by
+        /// `LUU_LOG` (`LUU_LOG=debug`). See `crate::log`.
+        #[arg(long)]
+        no_log: bool,
+
         /// A destination named in the state directory's `config.toml`, as
         /// `[provider.<name>]`: the backend, the URL, the model and the key
         /// written down once instead of retyped per run. The flags below
@@ -296,6 +303,12 @@ enum Command {
         /// auth token's always was and this one never was.
         #[arg(long, value_name = "PATH")]
         api_key_file: Option<std::path::PathBuf>,
+
+        /// How tool calls travel: `fenced` (definitions in the system text, a
+        /// ```` ```tool ```` block back) or `native` (the server's `tools`
+        /// field and its own tool prompt). Over the profile's `tool-calls`.
+        #[arg(long, value_enum, value_name = "HOW")]
+        tool_calls: Option<provider::ToolCalls>,
 
         #[arg(long, default_value_t = 25)]
         mock_delay_ms: u64,
@@ -495,6 +508,12 @@ enum Command {
         /// server wants.
         #[arg(long, value_name = "PATH")]
         api_key_file: Option<std::path::PathBuf>,
+
+        /// How tool calls travel: `fenced` (definitions in the system text, a
+        /// ```` ```tool ```` block back) or `native` (the server's `tools`
+        /// field and its own tool prompt). Over the profile's `tool-calls`.
+        #[arg(long, value_enum, value_name = "HOW")]
+        tool_calls: Option<provider::ToolCalls>,
 
         #[arg(long, default_value_t = 25)]
         mock_delay_ms: u64,
@@ -696,6 +715,12 @@ enum Command {
         /// auth token's always was and this one never was.
         #[arg(long, value_name = "PATH")]
         api_key_file: Option<std::path::PathBuf>,
+
+        /// How tool calls travel: `fenced` (definitions in the system text, a
+        /// ```` ```tool ```` block back) or `native` (the server's `tools`
+        /// field and its own tool prompt). Over the profile's `tool-calls`.
+        #[arg(long, value_enum, value_name = "HOW")]
+        tool_calls: Option<provider::ToolCalls>,
 
         /// Milliseconds between mock tokens, for exercising slow generation.
         #[arg(long, default_value_t = 25)]
@@ -1392,6 +1417,7 @@ struct ModelArgs<'a> {
     ollama_url: Option<&'a str>,
     openai_url: Option<&'a str>,
     api_key_file: Option<&'a std::path::Path>,
+    tool_calls: Option<provider::ToolCalls>,
     /// What this run budgets against, and 0 for "nothing said" — in which case
     /// the profile's own `context-limit` answers, because on the OpenAI API the
     /// window is a fact about the server and nowhere else.
@@ -1428,6 +1454,26 @@ async fn engine_for(
     Ok(Some(supervisor))
 }
 
+/// The window the server says it serves, where nothing declared one — asked
+/// once, before the first turn, and said. A flag or a profile's
+/// `context-limit` wins and nothing is asked. `serve` asks the same question
+/// in the background per session instead; see `serve::learn_window` and
+/// `RECORD/2026-09-30.the-window-the-server-says.completed.md`.
+async fn with_server_window(
+    mut resolved: provider::Resolved,
+    backend: &dyn Backend,
+) -> provider::Resolved {
+    if resolved.context_limit > 0 {
+        return resolved;
+    }
+    if let Ok(Some(window)) = backend.window().await {
+        eprintln!("window: {window}, from the server");
+        resolved.context_limit = window;
+        resolved.window_from = provider::WindowFrom::Server;
+    }
+    resolved
+}
+
 fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resolved)> {
     let (config, path) = provider::Config::load()?;
     let resolved = provider::resolve(
@@ -1441,6 +1487,7 @@ fn destination(args: ModelArgs<'_>) -> Result<(Box<dyn Backend>, provider::Resol
             openai_url: args.openai_url,
             api_key_file: args.api_key_file,
             context_limit: args.context_limit,
+            tool_calls: args.tool_calls,
         },
     )?;
     // Before anything is sent, and on every run that has somewhere to send to.
@@ -2093,6 +2140,7 @@ pub async fn run() -> Result<()> {
         auth_token_file,
         store,
         no_store,
+        no_log,
         sandbox_args,
         provider,
         backend,
@@ -2100,6 +2148,7 @@ pub async fn run() -> Result<()> {
         ollama_url,
         openai_url,
         api_key_file,
+        tool_calls,
         mock_delay_ms,
         mock_replies,
         mock_cycle,
@@ -2125,6 +2174,27 @@ pub async fn run() -> Result<()> {
         constrain,
     } = command
     {
+        // First, so everything after it — the engine starting, the listener
+        // binding — is in it. Held for the life of `serve`: dropping it is what
+        // flushes the writer's thread. See `crate::log`.
+        let _log = match (no_log, crate::config::dir()) {
+            (true, _) => None,
+            (false, None) => {
+                eprintln!("log — none: there is no state directory to keep one in");
+                None
+            }
+            (false, Some(dir)) => match crate::log::open(&dir) {
+                Ok(log) => {
+                    eprintln!("log — {}/serve.<date>.log", log.dir.display());
+                    tracing::info!(target: "luu::serve", version = env!("CARGO_PKG_VERSION"), "serve starting");
+                    Some(log)
+                }
+                Err(error) => {
+                    eprintln!("warning: no log: {error:#}");
+                    None
+                }
+            },
+        };
         let (backend, resolved) = destination(ModelArgs {
             provider: provider.as_deref(),
             backend,
@@ -2132,6 +2202,7 @@ pub async fn run() -> Result<()> {
             ollama_url: ollama_url.as_deref(),
             openai_url: openai_url.as_deref(),
             api_key_file: api_key_file.as_deref(),
+            tool_calls,
             context_limit,
             mock_delay_ms,
             mock_replies,
@@ -2280,6 +2351,7 @@ pub async fn run() -> Result<()> {
         ollama_url,
         openai_url,
         api_key_file,
+        tool_calls,
         mock_delay_ms,
         mock_replies,
         mock_cycle,
@@ -2312,6 +2384,7 @@ pub async fn run() -> Result<()> {
             ollama_url: ollama_url.as_deref(),
             openai_url: openai_url.as_deref(),
             api_key_file: api_key_file.as_deref(),
+            tool_calls,
             context_limit,
             mock_delay_ms,
             mock_replies,
@@ -2319,6 +2392,7 @@ pub async fn run() -> Result<()> {
         })?;
         // Held for as long as the protocol runs, and stopped with it.
         let _engine = engine_for(&resolved).await?;
+        let resolved = with_server_window(resolved, backend.as_ref()).await;
         let model = resolved.model.clone();
         let context_limit = resolved.context_limit;
         let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
@@ -2393,6 +2467,7 @@ pub async fn run() -> Result<()> {
         ollama_url,
         openai_url,
         api_key_file,
+        tool_calls,
         mock_delay_ms,
         mock_replies,
         mock_cycle,
@@ -2443,6 +2518,7 @@ pub async fn run() -> Result<()> {
         ollama_url: ollama_url.as_deref(),
         openai_url: openai_url.as_deref(),
         api_key_file: api_key_file.as_deref(),
+        tool_calls,
         context_limit,
         mock_delay_ms,
         mock_replies,
@@ -2450,6 +2526,7 @@ pub async fn run() -> Result<()> {
     })?;
     // Held until the run ends: dropping it stops the server it started.
     let _engine = engine_for(&resolved).await?;
+    let resolved = with_server_window(resolved, backend.as_ref()).await;
     let model = resolved.model.clone();
     let context_limit = resolved.context_limit;
     let (counter, warning) = counter_for(&model, tokenizer.as_deref())?;
@@ -2483,6 +2560,7 @@ pub async fn run() -> Result<()> {
                 // there is nothing here to tell a model about. See
                 // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
                 &crate::provider::AuthorityNotes::default(),
+                resolved.tool_calls,
                 started_at,
             )
             .await?,
@@ -2513,8 +2591,9 @@ pub async fn run() -> Result<()> {
             map.tokens,
         );
     }
-    let mut context = AgentContext::new(SYSTEM)
-        .with_tools(agency.definitions())
+    let tool_calls = resolved.tool_calls;
+    let mut context = agency
+        .with_tools(AgentContext::new(SYSTEM), tool_calls)
         .with_map(map.render());
     // Built once, before the first turn — a constraint compiled per call
     // would cost the compile every turn for a value that is the same every
@@ -2866,6 +2945,7 @@ pub async fn run() -> Result<()> {
         }
 
         let request = CompletionRequest {
+            tools: agency.specs(tool_calls),
             model: model.clone(),
             messages: selection.messages,
             // The window we budgeted against, sent so the server serves it.

@@ -182,7 +182,14 @@ use crate::trace::TraceMessage;
 /// nothing under this authority*, which a hand-written `[authority]` table
 /// naming a position but no `text` already means before it ever reaches the
 /// wire. See `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
-pub const FORMAT: u32 = 18;
+///
+/// **19 carries `tool_calls`**, written only as `"native"`: a run whose tools
+/// travelled in the request's own `tools` field, rendered by the server's
+/// template, is not the same arm as one whose tools were text in our system
+/// message. Absent means fenced, in this format and in every one before it,
+/// which is what every earlier stream was. See
+/// `RECORD/2026-09-30.native-tool-calls.completed.md`.
+pub const FORMAT: u32 = 19;
 
 /// The posture a session ran under, as a recording names it.
 ///
@@ -305,6 +312,10 @@ pub enum RecordLine {
         /// The same, for a plan. See `authority_draft`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authority_plan: Option<AuthorityNote>,
+        /// `"native"` when the tools travelled in the request's `tools` field;
+        /// absent for the fenced transport. See [`FORMAT`] 19.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_calls: Option<String>,
         /// Unix milliseconds. Every later line is relative to this.
         started_at: u64,
     },
@@ -339,6 +350,7 @@ mod tests {
             results: Some(Results::Cited),
             authority_draft: None,
             authority_plan: None,
+            tool_calls: None,
             started_at: 1_700_000_000_000,
         };
         let token = RecordLine::Protocol {
@@ -430,6 +442,7 @@ mod tests {
             results: Some(results),
             authority_draft: None,
             authority_plan: None,
+            tool_calls: None,
             started_at: 1_700_000_000_000,
         };
         let arms =

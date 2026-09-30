@@ -13,13 +13,14 @@
 //    .d.ts; the templates stay untyped. Nothing here should need a DOM node.
 
 import { $reactive } from "./vendor/jq79.js"
+import { closing } from "./modal.js"
 
 // What this client speaks, sent on connect so a host that speaks something else
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
 const PROTOCOL = 8
-const FORMAT = 18
+const FORMAT = 19
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -254,7 +255,10 @@ function onProtocol(message) {
       // group without replaying the lifecycle to work out what was open.
       const turnJob = message.job ?? message.task ?? null
       state.messages.push({ id: nextId++, turn: message.turn, role: "user", text: message.prompt, job: turnJob, task: turnJob, reason: null, usage: null, evicted: null, pruned: null })
-      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", job: turnJob, task: turnJob, reason: null, usage: null, evicted: null, pruned: null })
+      // `startedAt`, `firstAt` and `endedAt` are this page's clock for a live
+      // turn and the stream's `at_ms` for a stored one — two clocks, but a
+      // speed is a difference, so either answers it. See `turnSpeed`.
+      state.messages.push({ id: nextId++, turn: message.turn, role: "assistant", text: "", job: turnJob, task: turnJob, reason: null, usage: null, evicted: null, pruned: null, startedAt: Date.now(), firstAt: null, endedAt: null })
       state.tools = []
       state.extraCalls = []
       // The two cuts describe something that *happened*, so they belong to the
@@ -440,13 +444,16 @@ function onProtocol(message) {
       break
     }
 
-    case "token":
+    case "token": {
+      const last = state.messages[state.messages.length - 1]
+      if (last?.role === "assistant" && last.firstAt == null) replaceLast({ firstAt: Date.now() })
       appendToken(message.text)
       break
+    }
 
     case "ended":
       flush()
-      replaceLast({ reason: message.reason, usage: message.usage })
+      replaceLast({ reason: message.reason, usage: message.usage, endedAt: Date.now() })
       keepTurn(message.turn ?? state.turn, { reason: message.reason, usage: message.usage })
       // The gap between this and what we counted is the chat template, applied
       // where we cannot see it. Reassigned rather than mutated: the panel reads
@@ -456,6 +463,10 @@ function onProtocol(message) {
       }
       state.turn = null
       state.status = idle()
+      // A window the server said is learned in the background, after the
+      // session starts; the end of a turn is when the page asks again, so the
+      // context indicator is not left reading `/ —` over a window luu knows.
+      refreshSettings()
       break
 
     // Pushed and then replaced rather than mutated: jq79 does not wake an
@@ -490,6 +501,7 @@ function onProtocol(message) {
 
     case "failed":
       flush()
+      replaceLast({ endedAt: Date.now() })
       // A turn that failed is activity worth reading afterwards — often the
       // most worth reading — so it is kept like any other.
       keepTurn(message.turn ?? state.turn, { reason: "failed", error: message.message })
@@ -500,8 +512,21 @@ function onProtocol(message) {
   }
 }
 
+/// A trace line for a turn this page has already kept. The trace is its own
+/// socket, so its lines can land after the protocol's `ended` — against the
+/// mock at no delay they do — and `keepTurn` had copied whatever the previous
+/// turn left. The kept turn is patched rather than left saying it was never
+/// sent anything.
+function patchKept(turn, patch) {
+  if (turn == null || !state.history.some(entry => entry.turn === turn)) return
+  state.history = state.history.map(entry => entry.turn === turn ? { ...entry, ...patch } : entry)
+}
+
 function onTrace(message) {
-  if (message.type === "prompt") state.prompt = message.text
+  if (message.type === "prompt") {
+    state.prompt = message.text
+    patchKept(message.turn, { prompt: message.text })
+  }
   // Absent on the first turn of a session: there is no previous prompt, so the
   // panel says so rather than drawing 0%.
   if (message.type === "prefix_reuse") {
@@ -542,6 +567,7 @@ function onTrace(message) {
       buckets: message.buckets,
       backendPrompt: null,
     }
+    patchKept(message.turn, { budget: state.budget })
   }
 }
 
@@ -1041,7 +1067,7 @@ export async function saveAuthority(body) {
 }
 
 export function closeSettings() {
-  state.settingsOpen = false
+  closing("settings-dialog", () => { state.settingsOpen = false })
 }
 
 /// Just the read-only half, for after something changed it.
@@ -1154,10 +1180,15 @@ export async function refreshLiveSession() {
           text: t.text || "",
           job: t.job,
           task: t.job,
-          reason: null,
+          // Kept rather than dropped, so a reloaded turn has the same meta
+          // line — and the same way into its inspection — as a live one.
+          reason: t.reason ?? null,
           usage: t.usage || null,
           evicted: t.evicted_by ?? null,
           pruned: t.pruned_by ?? null,
+          startedAt: t.started_at_ms ?? null,
+          firstAt: t.first_token_at_ms ?? null,
+          endedAt: t.ended_at_ms ?? null,
         })
       }
     }
@@ -1166,6 +1197,21 @@ export async function refreshLiveSession() {
     // existed. The API answers with it on the same request the transcript is
     // built from, and it used to be dropped on the floor here.
     state.history = (view.turns || []).map(fromStored)
+    // And *the newest turn* as the live one, which is what the page reads for
+    // "how full is the window": the context indicator, its modal and the
+    // inspector's live panel. Those fields are otherwise filled only by trace
+    // lines as a turn happens, so after a reload — or a resume — they stayed
+    // empty over a session that had turns, and the indicator was disabled
+    // with "nothing sent yet".
+    const newest = state.history[state.history.length - 1]
+    if (newest) {
+      state.budget = newest.budget
+        ? { ...newest.budget, backendPrompt: newest.usage?.prompt_tokens ?? null }
+        : null
+      state.prompt = newest.prompt || ""
+      state.prefix = newest.prefix
+      state.extraCalls = newest.extraCalls || []
+    }
     nextId = id
   } catch {
     // Ignore fetch failure

@@ -1,0 +1,157 @@
+<script :setup="{ prompt = '', budget = null, asked = '', extraCalls = [], notes = [], window = null }">
+  // What a prompt was made of, grouped by what each piece *is* — the system
+  // text, the tools, the map, the folded jobs, the earlier exchanges, this
+  // turn's code, its question — each in its bucket's colour and under its
+  // bucket's count. Shared by the turn modal and the context modal, which ask
+  // the same question about two different turns.
+  //
+  // **No scroll inside a block unless asked for.** A block that fits is shown
+  // whole. One too large to read at a glance is shown clipped, with a fade,
+  // and two ways into the rest: *show all* (the whole of it, inline) and
+  // *scroll* (a box of its own, for a thousand lines of a file somebody wants
+  // to look through without losing their place in the modal). See
+  // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
+  const { paint, group, split } = await import("./prompt-parts.js")
+
+  // Above either of these, a group starts clipped.
+  const BIG_LINES = 24
+  const BIG_CHARS = 2400
+
+  // Group name → "all" | "scroll"; absent is the default (clipped if big).
+  let modes = {}
+  const mode = (name, value) => { modes = { ...modes, [name]: value } }
+
+  $: groups = group(paint(split(prompt || ""), asked || "", notes || []))
+    .map(g => {
+      const text = g.entries.map(e => e.text).join("\n")
+      return {
+        ...g,
+        tokens: (budget?.buckets || []).find(b => b.name === g.bucket)?.tokens ?? null,
+        big: text.split("\n").length > BIG_LINES || text.length > BIG_CHARS,
+        // Who said it matters where there is more than one speaker.
+        roles: new Set(g.entries.map(e => e.role)).size > 1 || ["history", "summaries"].includes(g.bucket),
+      }
+    })
+  $: buckets = (budget?.buckets || []).filter(b => b.tokens > 0)
+  $: sent = buckets.filter(b => b.name !== "reserve").reduce((sum, b) => sum + b.tokens, 0)
+  // The tools bucket with no tools text in the prompt: the native transport,
+  // where the server's template renders them where this page cannot see.
+  $: nativeTools = (() => {
+    const tools = buckets.find(b => b.name === "tools")?.tokens || 0
+    return tools && !groups.some(g => g.bucket === "tools") ? tools : 0
+  })()
+</script>
+
+<div class="context">
+  <div :if="buckets.length" class="budget">
+    <div class="bar">
+      <span :each="b in buckets" :key="b.name"
+            :attrs="{ style: `flex-grow:${b.tokens};background:var(--b-${b.name}, var(--dim))`, title: `${b.name}: ${b.tokens}` }"></span>
+    </div>
+    <ul class="legend">
+      <li :each="b in buckets" :key="b.name">
+        <span class="swatch" :attrs="{ style: `background:var(--b-${b.name}, var(--dim))` }"></span>
+        {{ b.name }} <b>{{ b.tokens }}</b>
+      </li>
+    </ul>
+    <p class="dim small">
+      {{ sent }} / {{ budget?.limit || window || "—" }} tokens<span :if="!budget?.limit && window"> — this turn was built before the window was known; it is the session's</span><span :if="!budget?.limit && !window"> — luu does not know this window: set the profile's context-limit</span><span :if="budget?.counter?.kind === 'approximate'"> · counted approximately (chars/4)</span>
+    </p>
+  </div>
+
+  <p :if="!groups.length" class="dim">
+    Nothing exact to show: this turn was recorded without the prompt it was sent,
+    because the trace channel was not on.
+  </p>
+
+  <section :each="g in groups" :key="g.bucket" class="group" :attrs="{ 'data-bucket': g.bucket }">
+    <header>
+      <span class="swatch" :attrs="{ style: `background:var(--b-${g.bucket}, var(--dim))` }"></span>
+      <b :class="'b-' + g.bucket">{{ g.bucket }}</b>
+      <span :if="g.tokens !== null" class="dim">{{ g.tokens }} tokens</span>
+      <span class="grow"></span>
+      <button :if="g.big && !modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, 'all')">show all</button>
+      <button :if="g.big && !modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, 'scroll')">scroll</button>
+      <button :if="g.big && modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, null)">collapse</button>
+    </header>
+    <div class="body" :class="g.big ? (modes[g.bucket] || 'clip') : 'all'">
+      <div :each="e, i in g.entries" :key="i" class="entry">
+        <div :if="g.roles" class="role" :class="e.role">{{ e.role }}</div>
+        <pre :class="'b-' + g.bucket">{{ e.text }}</pre>
+      </div>
+    </div>
+  </section>
+
+  <p :if="nativeTools" class="note">
+    <span class="swatch" style="background:var(--b-tools)"></span>
+    <b>tools {{ nativeTools }}</b> — sent in the request's own <code>tools</code>
+    field, not in this text. The server's chat template renders them into the
+    prompt with the tool prompt the model was trained on, which is why the
+    server's prompt count is higher than the sum of the text above.
+  </p>
+  <p :if="extraCalls?.length" class="dim small">
+    This is the first call of the turn. The tool round trips after it sent
+    {{ extraCalls.reduce((sum, c) => sum + c.prompt_tokens, 0) }} tokens more,
+    in {{ extraCalls.length }} further call(s).
+  </p>
+</div>
+
+<style scoped>
+  .budget { margin-bottom: 1rem; }
+  .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--sunken); }
+  .bar span { min-width: 2px; }
+  .legend { list-style: none; display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin: .5rem 0 .3rem; padding: 0; font-size: 12px; }
+  .legend li { display: flex; align-items: center; gap: .35rem; }
+  .swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+  .dim { color: var(--dim); }
+  .small { font-size: 11px; }
+  .grow { flex: 1; }
+  .group {
+    margin-bottom: .8rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--sunken);
+  }
+  .group header {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    padding: .35rem .65rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+  }
+  .group header .link { font-size: 11px; }
+  .body { padding: .45rem .65rem; }
+  /* Clipped: the first lines, fading out — no scroll bar until asked for. */
+  .body.clip {
+    max-height: 17rem;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 75%, transparent);
+    mask-image: linear-gradient(to bottom, #000 75%, transparent);
+  }
+  .body.scroll { max-height: 30rem; overflow: auto; }
+  .entry + .entry { margin-top: .5rem; padding-top: .5rem; border-top: 1px dashed var(--line); }
+  .role { font-size: 11px; color: var(--dim); margin-bottom: .15rem; }
+  /* The card is the box: the page's own `pre` draws another inside it. */
+  pre {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    max-height: none;
+    overflow: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+  }
+  .note { font-size: 12px; color: var(--dim); display: flex; gap: .45rem; align-items: baseline; margin: 0 0 .9rem; }
+  .note b { color: var(--b-tools); white-space: nowrap; }
+  /* The legend's colours, on the text they count. */
+  .b-system { color: var(--b-system); }
+  .b-tools { color: var(--b-tools); }
+  .b-map { color: var(--b-map); }
+  .b-summaries { color: var(--b-summaries); }
+  .b-history { color: var(--b-history); }
+  .b-code { color: var(--b-code); }
+  .b-prompt { color: var(--b-prompt); }
+</style>

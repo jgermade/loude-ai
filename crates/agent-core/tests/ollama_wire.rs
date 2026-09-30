@@ -100,6 +100,7 @@ async fn round_trip(request: CompletionRequest) -> (serde_json::Value, Vec<Chunk
 
 fn request() -> CompletionRequest {
     CompletionRequest {
+        tools: Vec::new(),
         model: "qwen2.5-coder:7b".into(),
         messages: vec![Message::system("you are luu"), Message::user("hola")],
         context_limit: None,

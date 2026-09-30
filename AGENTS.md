@@ -107,6 +107,11 @@ cargo run --bin luu -- chat "hola" --backend openai \
 # and the run says where it is sending before it sends.
 cargo run --bin luu -- chat "hola" -p workstation
 cargo run --bin luu -- chat "hola" -p workstation -m qwen2.5-coder:14b
+# and how its tool calls travel: `fenced` (the default — definitions as text
+# in our system prompt, a ```tool block back) or `native` (the server's own
+# `tools` field, rendered by its chat template with the tool prompt the model
+# was trained on). `tool-calls = "native"` on a profile says it once.
+cargo run --bin luu -- chat "read AGENTS.md" -p workstation --tool-calls native
 # The profile `default` names must carry `remote = true` when its URL is not
 # this machine — a LAN box included — or the file does not load: with no `-p`,
 # nobody typed the destination. Naming it is typing it, so every other profile
@@ -117,6 +122,11 @@ cargo run --bin luu -- serve                          # the debug UI on 127.0.0.
 # `--no-store` turns it off. The first run asks where that directory goes —
 # ~/.luu or ~/.config/luu — and LUU_HOME answers it without being asked.
 cargo run --bin luu -- serve --no-store
+# and a log of what the server did, in the state directory: every request as a
+# start and an end, the sockets, the turns, the engines, and a watchdog naming
+# whatever is still waiting after five seconds. `LUU_LOG=debug` for more,
+# `--no-log` for none. Prompts and output are never in it.
+tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # The page is three columns, each with a 40px head and foot: an inspector
 # (files, git, the context panel), the content, and the chat. Below 1260px it is
 # two, and the second column toggles between content and chat from its own head.
@@ -127,7 +137,7 @@ cargo run --bin luu -- serve --no-store
 # On a first visit it asks which folder to look at: a subdirectory of the one
 # `serve` was started in, which is the ceiling and is not negotiable from the
 # browser. Settings has sections down the side — General (theme, editor, layout,
-# files, folder), Models, Engines, Resend and Authority — and everything in
+# files, folder), Engines, Models, and Sessions (resend and authority) — and everything in
 # General a person can *change* is kept in `localStorage`, because it is a fact
 # about the screen rather than about the run. Files is the exception and is read-only: it names the icon theme that
 # drew the tree, or says the two shapes are a fallback and names the key below

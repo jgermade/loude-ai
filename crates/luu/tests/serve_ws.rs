@@ -127,7 +127,16 @@ async fn server_with_policy(
 /// A server that requires a bearer token, with the token in a file only its
 /// owner can read — which is what `resolve` insists on.
 async fn server_guarded(token: &str) -> (String, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("luu-serve-auth-{}", std::process::id()));
+    // One directory per call and not per process: two guarded servers in one
+    // test binary run in parallel, and with a shared path one could read the
+    // file while the other had just truncated it to write — "the auth token
+    // file … is empty", one run in three.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "luu-serve-auth-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ));
     std::fs::create_dir_all(&dir).expect("a scratch directory");
     let path = dir.join("token");
     std::fs::write(&path, token).expect("writing the token");

@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::{
     Backend, BackendError, BackendFuture, Chunk, ChunkStream, CompletionRequest, Constraint,
-    Message, StopReason, Usage,
+    StopReason, Usage,
 };
 
 pub struct Ollama {
@@ -32,7 +32,13 @@ impl Default for Ollama {
 #[derive(serde::Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
-    messages: &'a [Message],
+    /// As they are under the fenced transport, or converted by
+    /// [`super::native::messages`] under the native one.
+    messages: serde_json::Value,
+    /// Absent under the fenced transport. See
+    /// `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
     stream: bool,
     /// Omitted entirely when the window is unknown, so the server keeps its own
     /// default rather than being told a number we made up.
@@ -97,11 +103,22 @@ struct ChatChunk {
 struct ChunkMessage {
     #[serde(default)]
     content: String,
+    /// Calls Ollama parsed out of the reply, whole — this API does not stream
+    /// them in pieces.
+    #[serde(default)]
+    tool_calls: Vec<ChunkCall>,
+}
+
+#[derive(Deserialize)]
+struct ChunkCall {
+    function: crate::tools::ToolCall,
 }
 
 /// Parses one NDJSON line into the chunk it stands for, or `None` for a line
-/// that carries no text (Ollama sends empty deltas).
-fn parse_line(line: &[u8]) -> Result<Option<Chunk>, BackendError> {
+/// that carries no text (Ollama sends empty deltas). A call Ollama parsed comes
+/// back as the canonical fenced text — see [`super::native`] — after a blank
+/// line when `texted` says prose came first.
+fn parse_line(line: &[u8], texted: bool) -> Result<Option<Chunk>, BackendError> {
     let parsed: ChatChunk =
         serde_json::from_slice(line).map_err(|e| BackendError::Malformed(e.to_string()))?;
 
@@ -125,7 +142,14 @@ fn parse_line(line: &[u8]) -> Result<Option<Chunk>, BackendError> {
         }));
     }
 
-    let text = parsed.message.map(|m| m.content).unwrap_or_default();
+    let Some(message) = parsed.message else {
+        return Ok(None);
+    };
+    let mut text = message.content;
+    for call in message.tool_calls {
+        let after = texted || !text.is_empty();
+        text.push_str(&super::native::fence(&call.function, after));
+    }
     Ok((!text.is_empty()).then_some(Chunk::Text(text)))
 }
 
@@ -195,11 +219,21 @@ impl Backend for Ollama {
         let http = self.http.clone();
 
         Box::pin(async_stream::try_stream! {
+            let native = !request.tools.is_empty();
+            let messages = match native {
+                true => serde_json::to_value(super::native::messages(
+                    &request.messages,
+                    super::native::Arguments::Object,
+                )),
+                false => serde_json::to_value(&request.messages),
+            }
+            .map_err(|e| BackendError::Malformed(e.to_string()))?;
             let response = http
                 .post(&url)
                 .json(&ChatRequest {
                     model: &request.model,
-                    messages: &request.messages,
+                    messages,
+                    tools: native.then(|| super::native::tools(&request.tools)),
                     stream: true,
                     options: Options::from_request(&request),
                     format: match &request.constraint {
@@ -220,6 +254,7 @@ impl Backend for Ollama {
 
             let mut body = response.bytes_stream();
             let mut buf: Vec<u8> = Vec::new();
+            let mut texted = false;
 
             while let Some(bytes) = body.next().await {
                 let bytes = bytes.map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -232,7 +267,8 @@ impl Backend for Ollama {
                     if line.iter().all(u8::is_ascii_whitespace) {
                         continue;
                     }
-                    if let Some(chunk) = parse_line(line)? {
+                    if let Some(chunk) = parse_line(line, texted)? {
+                        texted |= matches!(chunk, Chunk::Text(_));
                         yield chunk;
                     }
                 }
@@ -243,7 +279,7 @@ impl Backend for Ollama {
             // and loses its edition, so `&& let` is rejected here.
             let tail = match buf.iter().all(u8::is_ascii_whitespace) {
                 true => None,
-                false => parse_line(&buf)?,
+                false => parse_line(&buf, texted)?,
             };
             if let Some(chunk) = tail {
                 yield chunk;
@@ -255,17 +291,32 @@ impl Backend for Ollama {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::Message;
+
+    /// A call Ollama parsed arrives whole on one line, and goes up as the
+    /// fenced text everything above the backend reads.
+    #[test]
+    fn a_parsed_call_becomes_the_canonical_fence() {
+        let line = br#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"list_dir","arguments":{"path":"crates"}}}]},"done":false}"#;
+        match parse_line(line, true) {
+            Ok(Some(Chunk::Text(text))) => assert_eq!(
+                text,
+                "\n\n```tool\n{\"name\":\"list_dir\",\"arguments\":{\"path\":\"crates\"}}\n```"
+            ),
+            other => panic!("{other:?}"),
+        }
+    }
 
     #[test]
     fn text_delta_becomes_a_text_chunk() {
         let line = br#"{"message":{"role":"assistant","content":"Hola"},"done":false}"#;
-        assert!(matches!(parse_line(line), Ok(Some(Chunk::Text(t))) if t == "Hola"));
+        assert!(matches!(parse_line(line, false), Ok(Some(Chunk::Text(t))) if t == "Hola"));
     }
 
     #[test]
     fn an_empty_delta_yields_nothing() {
         let line = br#"{"message":{"role":"assistant","content":""},"done":false}"#;
-        assert!(matches!(parse_line(line), Ok(None)));
+        assert!(matches!(parse_line(line, false), Ok(None)));
     }
 
     #[test]
@@ -274,7 +325,7 @@ mod tests {
         let Ok(Some(Chunk::Done {
             stop,
             usage: Some(usage),
-        })) = parse_line(line)
+        })) = parse_line(line, false)
         else {
             panic!("expected a Done chunk with usage");
         };
@@ -291,7 +342,8 @@ mod tests {
         let messages = [Message::user("hola")];
         let body = serde_json::to_value(ChatRequest {
             model: "qwen2.5-coder:7b",
-            messages: &messages,
+            messages: serde_json::to_value(messages).unwrap(),
+            tools: None,
             stream: true,
             options: Some(Options {
                 num_ctx: Some(8192),
@@ -310,6 +362,7 @@ mod tests {
     #[test]
     fn pinned_sampling_is_sent_alongside_the_window() {
         let request = CompletionRequest {
+            tools: Vec::new(),
             model: "qwen2.5-coder:7b".into(),
             messages: vec![Message::user("hola")],
             context_limit: Some(8192),
@@ -329,6 +382,7 @@ mod tests {
     #[test]
     fn sampling_alone_still_sends_options() {
         let request = CompletionRequest {
+            tools: Vec::new(),
             model: "qwen2.5-coder:7b".into(),
             messages: vec![Message::user("hola")],
             context_limit: None,
@@ -346,7 +400,8 @@ mod tests {
         let messages = [Message::user("hola")];
         let body = serde_json::to_value(ChatRequest {
             model: "qwen2.5-coder:7b",
-            messages: &messages,
+            messages: serde_json::to_value(messages).unwrap(),
+            tools: None,
             stream: true,
             options: None,
             format: None,
@@ -358,6 +413,9 @@ mod tests {
     #[test]
     fn an_error_line_is_a_rejection() {
         let line = br#"{"error":"model 'nope' not found"}"#;
-        assert!(matches!(parse_line(line), Err(BackendError::Rejected(_))));
+        assert!(matches!(
+            parse_line(line, false),
+            Err(BackendError::Rejected(_))
+        ));
     }
 }

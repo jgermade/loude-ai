@@ -146,6 +146,7 @@ mod tests {
 
     fn request() -> CompletionRequest {
         CompletionRequest {
+            tools: Vec::new(),
             model: "mock".into(),
             messages: vec![Message::user("hola")],
             context_limit: None,

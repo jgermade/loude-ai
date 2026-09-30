@@ -211,6 +211,13 @@ pub struct TurnView {
     #[serde(default)]
     pub superseded: Vec<Superseded>,
     pub started_at_ms: u64,
+    /// When the first token of the answer arrived, on the same clock. Derived
+    /// from the `token` lines' own `at_ms`, so every recording has it and no
+    /// format moved: `ended - first` is how long the model spent writing,
+    /// which is what a speed is measured over, and `first - started` is the
+    /// wait before it — a model loading included.
+    #[serde(default)]
+    pub first_token_at_ms: Option<u64>,
     pub ended_at_ms: Option<u64>,
 }
 
@@ -238,6 +245,7 @@ impl TurnView {
             diverged: Vec::new(),
             superseded: Vec::new(),
             started_at_ms,
+            first_token_at_ms: None,
             ended_at_ms: None,
         }
     }
@@ -629,6 +637,11 @@ pub struct SessionView {
     /// The same, for a plan. See [`Self::authority_draft`].
     #[serde(default)]
     pub authority_plan: Option<crate::sandbox::AuthorityNote>,
+    /// `"native"` when the tools travelled in the request's own `tools` field,
+    /// as the last header says; `None` for the fenced transport and for every
+    /// stream written before `record::FORMAT` 19, which were all fenced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<String>,
     /// Everything the server declined to do, in order. Empty in a session that
     /// was refused nothing — and in every view folded before anything kept
     /// them, which the stream cannot distinguish and nothing pretends to.
@@ -665,6 +678,7 @@ impl SessionView {
             results: None,
             authority_draft: None,
             authority_plan: None,
+            tool_calls: None,
             refusals: Vec::new(),
             record: None,
         }
@@ -1115,6 +1129,7 @@ impl SessionView {
             ServerMessage::Token { turn, text } => {
                 if let Some(view) = self.turn_mut(*turn) {
                     view.text.push_str(text);
+                    view.first_token_at_ms.get_or_insert(at_ms);
                 }
             }
             ServerMessage::Ended {
@@ -1331,6 +1346,7 @@ impl SessionView {
                     results,
                     authority_draft,
                     authority_plan,
+                    tool_calls,
                     ..
                 } => {
                     // The last header wins here too, and it is what tells a
@@ -1354,6 +1370,7 @@ impl SessionView {
                     // And the two notes, one field along.
                     view.authority_draft = authority_draft.clone();
                     view.authority_plan = authority_plan.clone();
+                    view.tool_calls = tool_calls.clone();
                 }
                 RecordLine::Protocol { at_ms, message } => view.apply_protocol(*at_ms, message),
                 RecordLine::Trace { at_ms, message } => view.apply_trace(*at_ms, message),
@@ -1389,6 +1406,7 @@ mod tests {
                 results: Some(crate::context::Results::Kept),
                 authority_draft: None,
                 authority_plan: None,
+                tool_calls: None,
                 started_at: 1_700_000_000_000,
             },
             RecordLine::Protocol {
@@ -1542,6 +1560,11 @@ mod tests {
         assert_eq!(turn.reason, Some(EndReason::Stop));
         assert_eq!(turn.usage.unwrap().prompt_tokens, 5);
         assert_eq!(turn.ended_at_ms, Some(30));
+        assert_eq!(
+            turn.first_token_at_ms,
+            Some(10),
+            "the first token, not the last"
+        );
         assert!(
             turn.prompt_sent.is_some(),
             "the trace channel's prompt is kept"
@@ -1898,6 +1921,7 @@ mod tests {
             results: Some(crate::context::Results::Kept),
             authority_draft: None,
             authority_plan: None,
+            tool_calls: None,
             started_at: 1_700_000_000_000,
         }
     }

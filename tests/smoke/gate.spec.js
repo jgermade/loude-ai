@@ -247,6 +247,56 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   // message carrying every round trip it made — the fenced call it emitted and
   // then the answer.
   await expect(page.locator("article.assistant .text").last()).toContainText(ANSWER)
+  // And the call as a card where the model wrote it, not as the fence it typed.
+  // See `RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`.
+  const card = page.locator("article.assistant .call").last()
+  await expect(card.locator(".name")).toHaveText("read_file")
+  await expect(card.locator(".subject")).toHaveText("README.md")
+  await expect(card.locator(".status")).toHaveText("done")
+  await expect(page.locator("article.assistant", { hasText: "```tool" })).toHaveCount(0)
+
+  // The meta line opens the turn: the prompt it was sent, cut at its roles,
+  // the answer as the model wrote it, and the calls. See
+  // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
+  const meta = page.locator("article.assistant button.meta").last()
+  // `→ sent ← received - 🕑 first → last - speed`
+  await expect(meta).toContainText("→")
+  await expect(meta).toContainText("←")
+  await meta.click()
+  const turn = page.locator("#turn-dialog")
+  await expect(turn).toBeVisible()
+  // Grouped by what each piece is, each in its bucket's colour: the tool
+  // definitions under tools, the question under prompt.
+  await expect(turn.locator('.group[data-bucket="tools"] pre')).toContainText("# Tools")
+  await expect(turn.locator('.group[data-bucket="prompt"] pre').last()).toHaveText("go on then")
+  await expect(turn.locator(".group header b").first()).toHaveText("system")
+  await turn.locator(".tabs button", { hasText: "Answer" }).click()
+  await expect(turn.locator("pre.raw")).toContainText("```tool")
+  await expect(turn.locator("pre.raw")).toContainText(ANSWER)
+  await turn.locator(".tabs button", { hasText: "Tools" }).click()
+  await expect(turn.locator(".role b")).toHaveText("read_file")
+  await turn.locator(".modal-head button", { hasText: "close" }).click()
+  await expect(turn).toBeHidden()
+
+  // The context so far, from the indicator beside the composer: the same
+  // groups, about the newest turn.
+  const ctx = page.locator("footer.chat-foot button.ctx")
+  await expect(ctx).toBeEnabled()
+  await ctx.click()
+  const context = page.locator("#context-dialog")
+  await expect(context).toBeVisible()
+  await expect(context.locator('.group[data-bucket="prompt"] pre').last()).toHaveText("go on then")
+  await context.locator(".modal-head button", { hasText: "close" }).click()
+  await expect(context).toBeHidden()
+
+  // And after a reload, which rebuilds the session from the server: the
+  // indicator used to come back disabled over a session that had turns,
+  // because only live trace lines ever filled what it reads.
+  await page.reload()
+  await expect(ctx).toBeEnabled({ timeout: 15_000 })
+  await ctx.click()
+  await expect(context.locator('.group[data-bucket="prompt"] pre').last()).toHaveText("go on then")
+  await context.locator(".modal-head button", { hasText: "close" }).click()
 
   // One entry where its turns were.
   const live = page.locator(".live-job")

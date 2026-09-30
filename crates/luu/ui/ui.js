@@ -12,9 +12,10 @@
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
 import { $reactive } from "./vendor/jq79.js"
+import { closing } from "./modal.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,
-  newSession, resumeSession,
+  newSession, resumeSession, apiHeaders,
 } from "./store.js"
 
 export const ui = $reactive({
@@ -36,6 +37,18 @@ export const ui = $reactive({
   /// `{ verdict: "ok" | "missing" | "unreachable", detail }`, or `null` until
   /// asked. See `checkModel` for why only one of the three disables anything.
   reach: null,
+  /// The engine luu starts for this session, while it matters: `{ name,
+  /// state, model, from, secs, error }` — see `watchEngine` for which states
+  /// are kept and for how long — or `null`. A switch no longer waits for the
+  /// model to load, so this is where the wait is seen instead. See `watchEngine`.
+  engine: null,
+  /// The model the last switch left, while its feedback is on screen.
+  switchedFrom: null,
+  /// Which turn the inspection modal shows, or `null` when it is closed.
+  inspecting: null,
+  /// Whether the context modal is open: what the window holds as of the
+  /// newest turn, opened from the indicator in the chat's foot.
+  contextOpen: false,
   /// Which job ids the page has already answered on the person's behalf, so an
   /// automatic approval happens once per proposal rather than on every render.
   answered: [],
@@ -73,6 +86,7 @@ export function closeHistory() {
 ///   that locked its composer over one would be wrong far more often than it
 ///   was right.
 export async function checkModel() {
+  watchEngine()
   const profile = state.settings?.profile
   const model = state.settings?.model
   // Nothing named a profile — the mock, or a destination given on the command
@@ -150,8 +164,10 @@ export function editStarter(patch) {
 }
 
 export function closeStarter() {
-  ui.starter = null
-  ui.continuing = false
+  closing("starter-dialog", () => {
+    ui.starter = null
+    ui.continuing = false
+  })
 }
 
 export async function startSession() {
@@ -187,4 +203,81 @@ export async function continueHere() {
     await checkModel()
   }
   return ok
+}
+
+// ---- is the engine up -----------------------------------------------------
+
+/// The states of an engine that is on its way up — `engines::IN_PROGRESS`.
+export const LOADING = ["stopping", "downloading", "starting"]
+
+let watching = null
+let settling = null
+
+/// Polls `GET /api/engine` until the live session's engine has loaded its
+/// model, or failed to. One poll at a time: a second switch while the first
+/// is loading restarts the loop rather than running two.
+///
+/// What it leaves in `ui.engine`: the phase while one is under way, `failed`
+/// until the next switch, and `ready` for a few seconds after a load this page
+/// watched — so the feedback beside the picker ends in an answer rather than
+/// in nothing. An engine that was already up is `null`: nothing happened.
+///
+/// Nothing here disables the composer, for `checkModel`'s own reason — a turn
+/// sent now waits on the server for the same load, and says so if it fails.
+export function watchEngine() {
+  if (watching) clearTimeout(watching)
+  const poll = async () => {
+    watching = null
+    let answer = null
+    try {
+      const res = await fetch("./api/engine", { headers: apiHeaders() })
+      if (res.ok) answer = await res.json()
+    } catch {
+      // The server restarting; the next switch or reload asks again.
+    }
+    const was = ui.engine?.state
+    if (answer && LOADING.includes(answer.state)) {
+      if (settling) clearTimeout(settling)
+      ui.engine = answer
+      watching = setTimeout(poll, 700)
+    } else if (answer?.state === "failed") {
+      ui.engine = answer
+    } else if (answer?.state === "ready" && LOADING.includes(was)) {
+      ui.engine = { ...answer, took: ui.engine.secs }
+      settling = setTimeout(() => { ui.engine = null, ui.switchedFrom = null }, 3000)
+    } else if (!LOADING.includes(was) && was !== "ready") {
+      ui.engine = null
+      ui.switchedFrom = null
+    }
+  }
+  poll()
+}
+
+/// Said by the picker the moment somebody chooses: the model the session is
+/// leaving, for the feedback to name while the new one loads. The server only
+/// knows it when one engine restarts on another model (`from`); when the
+/// switch moves to another engine the old one was stopped before the answer
+/// came back, and this page is the only one that remembers what it ran.
+export function switching(from) {
+  ui.switchedFrom = from || null
+}
+
+// ---- inspecting a turn ----------------------------------------------------
+
+export function inspect(turn) {
+  ui.inspecting = turn
+}
+
+export function closeInspect() {
+  closing("turn-dialog", () => { ui.inspecting = null })
+}
+
+// ---- the context so far -----------------------------------------------------
+
+export function openContext() {
+  ui.contextOpen = true
+}
+
+export function closeContext() {
+  closing("context-dialog", () => { ui.contextOpen = false })
 }

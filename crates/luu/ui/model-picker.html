@@ -13,9 +13,14 @@
   //   kept and the stream gains a header saying where it changed, because every
   //   per-turn number is backend-specific and the turns before the switch are
   //   not comparable with the ones after.
+  //
+  // Neither waits for an engine luu starts to load the model: the switch
+  // answers as soon as the session points there, the menu closes, and the
+  // button says `loading 12s` until the engine answers — see `watchEngine`.
+  // A turn sent before then waits for it on the server.
   const { state, loadProviders, providerModels, newSession, resumeSession } =
     await import("./store.js")
-  const { checkModel, openSettingsAt } = await import("./ui.js")
+  const { ui, checkModel, openSettingsAt, switching: leavingFrom } = await import("./ui.js")
   const { modelLabel } = await import("./engines.js")
 
   let open = false
@@ -40,6 +45,18 @@
   $: current = state.settings?.profile || ""
   $: currentModel = state.model || state.settings?.model || ""
   $: shown = lists[focus] || null
+  // The model being left, as the feedback names it: the server's `from` when
+  // one engine restarts on another model, and this page's memory otherwise.
+  $: leaving = ui.engine?.from || ui.switchedFrom || ""
+  // The name without the store it came from — `qwen2.5-coder:7b` rather than
+  // `qwen2.5-coder:7b (ollama)` — where the width is a status bar's. The
+  // tooltip keeps the whole of it.
+  const short = model => (modelLabel(model || "") || "").replace(/ \([^)]*\)$/, "")
+  $: engineTitle = !ui.engine ? "" : ui.engine.error || [
+    `engine ${ui.engine.name}`,
+    ui.engine.model ? `model ${modelLabel(ui.engine.model)}` : "",
+    leaving ? `leaving ${modelLabel(leaving)}` : "",
+  ].filter(Boolean).join(" · ")
   $: profile = state.providers?.providers?.[focus] || {}
 
   const load = async name => {
@@ -87,6 +104,7 @@
     switching = true
     error = ""
     const choice = { provider, ...(model ? { model } : {}) }
+    const from = currentModel
     const ok = hasTurns && state.session && state.settings?.store
       ? await resumeSession(state.session, choice)
       : await newSession(choice)
@@ -96,6 +114,7 @@
       return
     }
     open = false
+    leavingFrom(from !== model ? from : null)
     await checkModel()
   }
 
@@ -107,12 +126,35 @@
 </script>
 
 <span class="picker">
-  <button type="button" class="dest" title="Where this session sends — choose another"
+  <!-- The same face as the mode's `Dropup` beside it — one bordered button,
+       its answer and a caret that opens upward — so the foot reads as a row of
+       choices of one kind. The menu is its own: two columns do not fit a
+       list. -->
+  <button type="button" class="face dest" :class.open="open"
+          :attrs="{ title: 'Where this session sends — choose another', 'aria-haspopup': 'dialog', 'aria-expanded': String(open) }"
           @click="toggle($event)">
-    <span :if="state.settings?.profile" class="tag">{{ state.settings?.profile }}</span>
-    <span class="tag">{{ modelLabel(currentModel) || "—" }}</span>
-    <svg class="ic caret" :class.open="open"><use href="#i-caret"/></svg>
+    <span :if="state.settings?.profile" class="profile">{{ state.settings?.profile }}</span>
+    <span :if="state.settings?.profile" class="sep">·</span>
+    <span class="model-name">{{ modelLabel(currentModel) || "—" }}</span>
+    <svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14.5 12 9.5l5 5"/></svg>
   </button>
+
+  <!-- What the switch is doing, beside the button that started it: the load
+       a switch no longer waits for. A turn sent now waits for it on the
+       server; this is so the wait is not a mystery. See `watchEngine`. -->
+  <span :if="ui.engine" class="engine" :class="ui.engine.state"
+        :attrs="{ title: engineTitle, 'aria-live': 'polite' }">
+    <span class="dot"></span>
+    <!-- What is happening and for how long first, and what it replaced last:
+         a chat column is narrow, and the end is what gets cut. -->
+    <span :if="ui.engine.state === 'stopping'">stopping {{ short(ui.engine.from) }}</span>
+    <span :if="ui.engine.state === 'downloading'">downloading {{ ui.engine.name }}</span>
+    <span :if="ui.engine.state === 'starting'">starting {{ short(ui.engine.model) || ui.engine.name }}</span>
+    <span :if="ui.engine.state === 'ready'">{{ short(ui.engine.model) || ui.engine.name }} ready<span :if="ui.engine.took"> in {{ ui.engine.took }}s</span></span>
+    <span :if="ui.engine.state === 'failed'">could not start {{ short(ui.engine.model) || ui.engine.name }}</span>
+    <span :if="ui.engine.state !== 'ready' && ui.engine.state !== 'failed'" class="secs">{{ ui.engine.secs }}s</span>
+    <span :if="leaving && ui.engine.state === 'starting'" class="from">· {{ short(leaving) }} stopped</span>
+  </span>
 
   <div :if="open" class="backdrop" @click="open = false"></div>
   <div :if="open" class="menu" role="dialog" aria-label="Provider and model"
@@ -135,7 +177,7 @@
             <span class="text">
               <strong>{{ name }}</strong>
               <span class="dim small">
-                {{ state.providers?.providers?.[name]?.backend || "ollama" }}{{ state.providers?.providers?.[name]?.engine ? " · luu starts it" : "" }}
+                {{ state.providers?.providers?.[name]?.backend || "ollama" }}{{ state.providers?.providers?.[name]?.engine ? " · luu starts it" : "" }}{{ state.providers?.providers?.[name]?.["tool-calls"] === "native" ? " · native tools" : "" }}
               </span>
             </span>
             <svg class="ic go"><use href="#i-caret"/></svg>
@@ -197,32 +239,70 @@
 </span>
 
 <style scoped>
-  .picker { display: inline-flex; min-width: 0; }
-  .dest {
-    display: flex;
+  .picker { display: inline-flex; align-items: center; gap: .5rem; min-width: 0; flex: 0 1 auto; }
+  /* `components/dropup.html`'s face, rule for rule, so the two read as one kind. */
+  .face {
+    display: inline-flex;
     align-items: center;
     gap: .3rem;
-    background: none;
-    border: 0;
-    border-radius: 6px;
-    padding: .15rem .2rem;
-    cursor: pointer;
     min-width: 0;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.5;
+    padding: .1rem .45rem .1rem .55rem;
+    cursor: pointer;
   }
-  .dest .tag {
+  .face:hover, .face.open { border-color: var(--accent); }
+  .face .profile { color: var(--dim); flex: none; }
+  .face .sep { color: var(--dim); opacity: .6; }
+  .face .model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The button gives way before the feedback does — it shrinks three times
+     as fast, down to a floor that still says which model — because the model
+     is on the button's tooltip and the feedback is the thing happening now.
+     Not a percentage: the row sizes itself to its content, and a percentage
+     of that resolved to one letter. */
+  .face { flex: 0 3 auto; min-width: 6rem; }
+  .engine { flex: 0 1 auto; }
+  .caret {
+    width: 11px;
+    height: 11px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    opacity: .6;
+    transition: transform .15s;
+  }
+  .face.open .caret { transform: rotate(180deg); }
+  .backdrop { position: fixed; inset: 0; z-index: 40; }
+  .engine {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    min-width: 0;
     font-size: 11px;
     color: var(--dim);
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    padding: 0 .45rem;
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
-  .dest:hover .tag { border-color: var(--accent); color: var(--fg); }
-  .caret { width: 10px; height: 10px; transform: rotate(-90deg); opacity: .6; }
-  .caret.open { transform: rotate(90deg); }
-  .backdrop { position: fixed; inset: 0; z-index: 40; }
+  .engine .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--accent); }
+  .engine.stopping .dot { background: var(--warn); }
+  .engine.stopping, .engine.downloading, .engine.starting { color: var(--fg); }
+  .engine.stopping .dot, .engine.downloading .dot, .engine.starting .dot { animation: pulse 1s ease-in-out infinite; }
+  .engine.ready { color: var(--b-history); }
+  .engine.ready .dot { background: var(--b-history); }
+  .engine.failed { color: var(--bad); cursor: help; }
+  .engine.failed .dot { background: var(--bad); }
+  .engine .from { color: var(--dim); }
+  .engine .secs { color: var(--dim); font-variant-numeric: tabular-nums; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .engine .dot { animation: none; } }
   .menu {
     position: fixed;
     z-index: 41;
@@ -237,8 +317,11 @@
   .cols {
     display: grid;
     grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
-    max-height: min(60vh, 26rem);
-    min-height: 10rem;
+    /* Fixed, not fitted: the menu opens upward from the button, so a height
+       that followed the focused provider's list moved the menu's top edge
+       every time the pointer crossed another provider. Each column scrolls
+       inside it instead. */
+    height: min(60vh, 26rem);
   }
   .providers {
     list-style: none;

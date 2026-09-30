@@ -8,9 +8,11 @@
   // server checks again: see `accepts_from_page` in `crate::engines`.
   const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("./engines.js")
   const { state, loadProviders, saveProviders } = await import("./store.js")
-  const { asModal } = await import("./modal.js")
+  const { asModal, closing } = await import("./modal.js")
 
-  asModal("engine-dialog", { close: () => close?.() })
+  // Through `closing`, so it leaves animated however it is dismissed.
+  const dismiss = () => closing("engine-dialog", () => close?.())
+  asModal("engine-dialog", { close: dismiss })
 
   const current = editing ? view?.engines?.[editing] : null
   const quote = arg => (/\s/.test(arg) ? `"${arg}"` : arg)
@@ -126,14 +128,14 @@
       }
     }
     saving = false
-    close?.()
+    dismiss()
   }
 </script>
 
-<dialog id="engine-dialog" class="modal narrow" @click.self="close?.()">
+<dialog id="engine-dialog" class="modal narrow" @click.self="dismiss()">
   <header class="modal-head">
     <strong>{{ editing ? `Engine ${editing}` : "Add an engine" }}</strong>
-    <button type="button" class="link" @click="close?.()">close</button>
+    <button type="button" class="link" @click="dismiss()">close</button>
   </header>
   <section class="modal-body">
     <dl class="settings form">
@@ -274,7 +276,7 @@
 
     <div class="modal-foot">
       <div class="modal-actions">
-        <button type="button" @click="close?.()">Cancel</button>
+        <button type="button" @click="dismiss()">Cancel</button>
         <button type="button" class="save" :disabled="!canSave" @click="save()">
           {{ saving ? "Saving…" : (editing ? "Save" : "Add engine") }}
         </button>

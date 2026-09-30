@@ -1,0 +1,144 @@
+<script :setup>
+  // One turn, opened from its meta line in the chat: what the model was given
+  // and what it gave back, at the width they were written for.
+  //
+  // The debug inspector already holds every one of these facts, a turn at a
+  // time, in a 20rem rail beside everything else. This is the same facts about
+  // *the answer somebody just read*, from where they read it — so the
+  // question "why did it say that" starts at the answer rather than at a
+  // turn picker. Nothing here is fetched: it is the turn `keepTurn` or a
+  // reload already put in `state.history`, and the message beside it. See
+  // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
+  const { state } = await import("./store.js")
+  const { ui, closeInspect } = await import("./ui.js")
+  const { asModal } = await import("./modal.js")
+  const { timing, seconds, speedLabel } = await import("./timing.js")
+  const Segmented = await import("./components/segmented.html")
+  const ContextView = await import("./context-view.html")
+
+  asModal("turn-dialog", { close: closeInspect })
+
+  let tab = "context"
+
+  $: kept = state.history.find(entry => entry.turn === ui.inspecting) || null
+  $: message = state.messages.find(m => m.role === "assistant" && m.turn === ui.inspecting) || null
+  $: asked = state.messages.find(m => m.role === "user" && m.turn === ui.inspecting) || null
+  $: tools = kept?.tools || []
+  $: t = timing(message, tools)
+  $: usage = kept?.usage || message?.usage || null
+  // How much of the window this turn's prompt took, where the window is known.
+  $: contextSent = (kept?.budget?.buckets || [])
+    .filter(b => b.name !== "reserve")
+    .reduce((sum, b) => sum + b.tokens, 0)
+  $: contextWindow = kept?.budget?.limit || state.settings?.window || null
+  $: contextPercent = contextWindow ? Math.round((contextSent / contextWindow) * 100) : null
+
+  // What the prompt was made of, grouped by bucket — see `context-view.html`,
+  // which the chat's context modal shares.
+  $: notes = [state.settings?.authority?.draft?.text, state.settings?.authority?.plan?.text].filter(Boolean)
+
+  $: TABS = [
+    { value: "context", label: "Context" },
+    { value: "answer", label: "Answer" },
+    { value: "tools", label: `Tools · ${tools.length}`, disabled: !tools.length },
+  ]
+</script>
+
+<dialog id="turn-dialog" class="modal wide" @click.self="closeInspect()">
+  <header class="modal-head">
+    <strong>Turn {{ ui.inspecting }}</strong>
+    <span :if="state.model" class="dim">{{ state.model }}</span>
+    <button type="button" class="link" @click="closeInspect()">close</button>
+  </header>
+
+  <div class="facts">
+    <div><span class="k">ended</span><b :class.warn="kept?.reason && kept.reason !== 'stop'">{{ kept?.reason || message?.reason || "—" }}</b></div>
+    <div><span class="k">prompt</span><b>{{ usage ? usage.prompt_tokens : "—" }}</b></div>
+    <div><span class="k">completion</span><b>{{ usage ? usage.completion_tokens : "—" }}</b></div>
+    <div :attrs="{ title: 'Completion tokens over first-token-to-end. A turn that ran tools spent part of that running them, so it is a floor.' }">
+      <span class="k">speed</span><b>{{ speedLabel(t) || "—" }}</b>
+    </div>
+    <div :attrs="{ title: 'From the turn starting to the first token — a model loading included' }">
+      <span class="k">first token</span><b>{{ t.first != null ? seconds(t.first) : "—" }}</b>
+    </div>
+    <div><span class="k">total</span><b>{{ t.total != null ? seconds(t.total) : "—" }}</b></div>
+    <div :attrs="{ title: contextPercent !== null
+           ? 'Tokens sent this turn, of the window'
+           : 'Tokens sent this turn, of a window luu does not know: set the profile\'s context-limit' }">
+      <span class="k">context</span>
+      <b :class.warn="contextPercent !== null && contextPercent >= 80">{{ contextSent }} / {{ contextWindow || "—" }}</b>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <Segmented size="small" :options="TABS" :model="tab" />
+  </div>
+
+  <section class="modal-body">
+    <div :if="tab === 'context'">
+      <p :if="asked" class="asked"><span class="k">asked</span> {{ asked.text }}</p>
+
+      <ContextView :prompt="kept?.prompt || ''" :budget="kept?.budget || null"
+                   :asked="asked?.text || ''" :extraCalls="kept?.extraCalls || []"
+                   :notes="notes" :window="state.settings?.window || null" />
+    </div>
+
+    <div :if="tab === 'answer'">
+      <p class="dim small">The answer as the model wrote it, tool blocks included.</p>
+      <pre class="raw">{{ message?.text || "" }}</pre>
+      <p :if="kept?.error" class="bad">{{ kept.error }}</p>
+    </div>
+
+    <div :if="tab === 'tools'">
+      <div :each="call in tools" :key="call.step" class="block">
+        <div class="role">
+          step {{ call.step }} · <b>{{ call.name }}</b>
+          <span :if="call.verdict" :class="call.verdict.allowed ? 'ok' : 'bad'">
+            · {{ call.verdict.allowed ? "allowed" : "denied" }} — {{ call.verdict.rule }}
+          </span>
+          <span :if="call.duration_ms != null" class="dim">· {{ call.duration_ms }} ms</span>
+        </div>
+        <pre>{{ JSON.stringify(call.arguments, null, 2) }}</pre>
+        <pre :if="call.error" class="bad">{{ call.error }}</pre>
+        <pre :if="call.output">{{ call.output }}</pre>
+      </div>
+    </div>
+  </section>
+</dialog>
+
+<style scoped>
+  .modal.wide { width: min(64rem, calc(100vw - 2rem)); }
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem 1.4rem;
+    padding: .7rem 1rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+  }
+  .facts div { display: flex; flex-direction: column; gap: .1rem; }
+  .k { color: var(--dim); font-size: 11px; }
+  .facts b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .warn { color: var(--warn); }
+  .bad { color: var(--bad); }
+  .ok { color: var(--b-history); }
+  .dim { color: var(--dim); }
+  .small { font-size: 11px; }
+  .tabs { padding: .6rem 1rem 0; }
+  .asked { margin: 0 0 .8rem; overflow-wrap: anywhere; }
+  .block { margin-bottom: .8rem; }
+  .role { font-size: 11px; color: var(--dim); text-transform: lowercase; margin-bottom: .2rem; }
+  pre {
+    margin: 0;
+    padding: .5rem .65rem;
+    background: var(--sunken);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    max-height: 28rem;
+    overflow: auto;
+  }
+  .raw { max-height: none; }
+</style>

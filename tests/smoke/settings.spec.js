@@ -143,9 +143,14 @@ test("the resend rules are chosen from the page, and a save says what it did not
 
   // The third section, which the modal's own comment said its shape made free.
   await page.click('.inspector .col-foot button[title="Settings"]')
-  await page.click('.modal .rail button:has-text("Resend")')
+  await page.click('.modal .rail button:has-text("Sessions")')
+  // Resend and Authority are one section now, in this order, and the rail
+  // puts Engines before Models.
+  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Engines", "Models", "Sessions"])
+  await expect(page.locator("#sessions-resend h2")).toHaveText("Resend")
+  await expect(page.locator("#sessions-authority h2")).toHaveText("Authority")
 
-  const running = page.locator(".modal .settings").first()
+  const running = page.locator("#sessions-resend .settings").first()
   await expect(running).toBeVisible()
   // What the server was started under with no flags: rule A on since
   // 2026-09-19 and the other two off, because A is the only one of the three
@@ -156,17 +161,17 @@ test("the resend rules are chosen from the page, and a save says what it did not
 
   // The editor below it: this machine's default, which says nothing yet. Unset
   // is not off — it is the code's default, which for this rule is now `once`.
-  const editor = page.locator(".modal .settings").nth(1)
+  const editor = page.locator("#sessions-resend .settings").nth(1)
   await expect(editor.locator(".seg").first().locator("button.on")).toHaveText("unset")
 
   // Rule A off, which since the flip is the direction that is a change. It
   // stores nothing, so it is the one rule that moves a running session in both
   // directions, and this is the half that used to be unreachable.
   await editor.locator('button:has-text("always")').click()
-  await expect(page.locator(".modal button.save .count")).toHaveText("1")
-  await page.locator(".modal button.save").click()
+  await expect(page.locator("#sessions-resend button.save .count")).toHaveText("1")
+  await page.locator("#sessions-resend button.save").click()
   // A save that landed says so on the button, until the next change.
-  await expect(page.locator(".modal button.save.saved")).toBeVisible()
+  await expect(page.locator("#sessions-resend button.save.saved")).toBeVisible()
 
   await expect(running.locator("dd").nth(0)).toContainText("always")
   const off = await (await fetch(`${BASE}/api/resend`)).json()
@@ -175,7 +180,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
 
   // And back on, which is the other direction and the one the default takes.
   await editor.locator('button:has-text("once")').click()
-  await page.locator(".modal button.save").click()
+  await page.locator("#sessions-resend button.save").click()
 
   await expect(running.locator("dd").nth(0)).toContainText("once")
   const written = await (await fetch(`${BASE}/api/resend`)).json()
@@ -188,7 +193,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
 
   // Rule B on, which is clean: the prune line starts moving.
   await editor.locator('button:has-text("behind")').click()
-  await page.locator(".modal button.save").click()
+  await page.locator("#sessions-resend button.save").click()
   await expect(running.locator("dd").nth(1)).toContainText("behind")
 
   // And rule B off again, which is the case this whole spec is for. The line is
@@ -196,9 +201,9 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // the page has to say both rather than reporting a change that did not
   // happen.
   await editor.locator('button:has-text("never")').click()
-  await page.locator(".modal button.save").click()
+  await page.locator("#sessions-resend button.save").click()
 
-  const waiting = page.locator(".modal .waiting")
+  const waiting = page.locator("#sessions-resend .waiting")
   await expect(waiting).toBeVisible()
   await expect(waiting).toContainText("ratchet")
   // The file moved and the session did not, and the panel above says so on the
@@ -211,7 +216,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // and from no command output at all. Matched on an exact label, because
   // `has-text` is a substring and "cited" is one of "cited_reads".
   await editor.locator("button", { hasText: /^cited_reads$/ }).click()
-  await page.locator(".modal button.save").click()
+  await page.locator("#sessions-resend button.save").click()
 
   await expect(running.locator("dd").nth(2)).toContainText("cited_reads")
   const cited = await (await fetch(`${BASE}/api/resend`)).json()
@@ -221,8 +226,8 @@ test("the resend rules are chosen from the page, and a save says what it did not
   // And stepping back down from it waits, for the same reason turning prune off
   // does: what it hands back has to fit somewhere, and what pays is the floor.
   await editor.locator("button", { hasText: /^kept$/ }).click()
-  await page.locator(".modal button.save").click()
-  await expect(page.locator(".modal .waiting")).toContainText("results:")
+  await page.locator("#sessions-resend button.save").click()
+  await expect(page.locator("#sessions-resend .waiting")).toContainText("results:")
   await expect(running.locator("dd").nth(2)).toContainText("cited_reads")
 
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
@@ -254,20 +259,20 @@ test("an authority note is written from the page and reaches the live session", 
   await chooseFolder(page)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
-  await page.click('.modal .rail button:has-text("Authority")')
+  await page.click('.modal .rail button:has-text("Sessions")')
 
-  const running = page.locator(".modal .settings").first()
+  const running = page.locator("#sessions-authority .settings").first()
   await expect(running).toBeVisible()
   // Nothing set yet, on either authority.
   await expect(running.locator("dd").nth(0)).toContainText("nothing sent")
   await expect(running.locator("dd").nth(1)).toContainText("nothing sent")
 
-  const editor = page.locator(".modal .settings").nth(1)
+  const editor = page.locator("#sessions-authority .settings").nth(1)
   await editor
     .locator("textarea")
     .first()
     .fill("You can read, but writes are refused until a plan is approved.")
-  await page.locator(".modal button.save").click()
+  await page.locator("#sessions-authority button.save").click()
 
   await expect(running.locator("dd").nth(0)).toContainText(
     "You can read, but writes are refused",
@@ -291,7 +296,7 @@ test("an authority note is written from the page and reaches the live session", 
   // `prompt`, which repeats the note every turn instead of riding the cached
   // prefix once.
   await editor.locator('button:has-text("prompt")').first().click()
-  await page.locator(".modal button.save").click()
+  await page.locator("#sessions-authority button.save").click()
   await expect(running.locator("dd").nth(0)).toContainText("prompt")
   const moved = await (await fetch(`${BASE}/api/authority`)).json()
   expect(moved.running.draft.position).toBe("prompt")
@@ -393,7 +398,7 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await expect(form.locator("button.save")).toBeDisabled()
 
   await form.locator("dd input").first().fill("local")
-  await form.locator("select").selectOption("openai")
+  await form.locator("select.backend").selectOption("openai")
   await form.locator('input[placeholder="http://127.0.0.1:8080/v1"]').fill("http://127.0.0.1:8081/v1")
   await form.locator('input[placeholder="qwen2.5-coder:7b"]').fill("tiny")
   await form.locator("button.save").click()
@@ -530,7 +535,7 @@ test("a new default and the chat's picker both move the session without a restar
   const here = page.locator(".modal table.providers tbody tr:not(.builtin)").nth(1)
   await expect(here.locator("input.w-name")).toHaveValue("here")
   await here.locator('input[type="radio"]').check()
-  await page.locator(".modal button.save").click()
+  await page.locator(".modal .section.on button.save").click()
   await expect(page.locator(".modal")).toContainText("the live session is on here")
   const after = await (await fetch(`${BASE}/api/settings`)).json()
   expect(after.profile).toBe("here")

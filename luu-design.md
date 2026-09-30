@@ -504,11 +504,27 @@ The model never executes anything directly — it only emits a structured reques
   calls is still *one* turn, evicted whole, so the model never sees a result
   whose call has gone.
 - **How the model expresses a call is a transport detail.** `ToolCall` is the type
-  and the parser is one function. Today it reads a fenced ```` ```tool ```` block
+  and the parser is one function. It reads a fenced ```` ```tool ```` block
   out of plain text, which works against any backend including a 7B that has
-  never seen a tool API. **Native function calling** — JSON Schema definitions
-  and a `tool_call` from the backend — replaces that function and nothing above
-  it. Not built.
+  never seen a tool API. **Native function calling is built, per destination,
+  and off by default** (`tool-calls = "native"` on a profile, `--tool-calls
+  native` for a run, recorded in the header as `record::FORMAT` 19). The tools
+  travel in the request's own `tools` field, so the server's chat template
+  renders them with **the tool prompt the model was trained on**, and our
+  fenced block leaves the system text. The `tools` bucket counts the specs'
+  JSON, which is what is sent. Nothing above the backend changed:
+  `backend::native` converts the history on the way out (an assistant message
+  holding a call, followed by the user message that is its `[name]` result,
+  becomes `tool_calls` plus a `tool` message, found from the alternation this
+  design already guarantees), and a call the server parsed comes back up as
+  the canonical fenced text. The measured gain is the prompt, not the parser.
+  `qwen2.5-coder:7b` on `llama-server` called on **15 of 15** probe prompts
+  under native against **7 of 15** fenced, one flag apart. It never wrote the
+  template's tags: every call arrived as a ```` ```json ```` block in the
+  content, which `parse_call` and the page now read as a call. It also called
+  a tool nobody asked for, an `edit_file` in `luu chat` where the policy file
+  granted writes, which is why the default did not move. See
+  [`RECORD/2026-09-30.native-tool-calls.completed.md`](RECORD/2026-09-30.native-tool-calls.completed.md).
   **Constrained decoding is built, off by default, and is two different bets, not
   one.** `--constrain grammar` compiles a GBNF that keeps the "just answer"
   branch reachable and forces the one correct fenced shape to complete exactly
@@ -1167,7 +1183,7 @@ Live channel — `WS /ws`:
 | Direction | Messages |
 | --- | --- |
 | client → server | `hello`, `prompt`, `approve_plan`, `decline_plan`, `request_plan`, `close_job`, `reopen_job`, `cancel` (with `approve_job`/`reject_job`/`*_task` aliases) |
-| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `draft_opened`, `plan_proposed`, `plan_declined`, `job_approved`, `job_closed`, `job_reopened`, `refused`, `evicted`, `grounded` — all built, protocol v7 (record format 16); `job_proposed` and `job_rejected` still parse and are never written, so an older recording replays; `context_snapshot` is still ahead |
+| server → client | `hello`, `turn_started`, `token`, `tool_call`, `tool_result`, `ended`, `failed`, `draft_opened`, `plan_proposed`, `plan_declined`, `job_approved`, `job_closed`, `job_reopened`, `refused`, `evicted`, `grounded` — all built, protocol v7 (record format 19); `job_proposed` and `job_rejected` still parse and are never written, so an older recording replays; `context_snapshot` is still ahead |
 
 **Both numbers live in two languages, and a test reads both.** `store.js`
 declares `PROTOCOL` and `FORMAT` beside `agent_core::protocol::VERSION` and
@@ -1253,11 +1269,50 @@ The rest follows from that:
   no transforms, so both paths serve the same bytes. No Vite proxy to configure.
 - **Rendering**: proxy-based fine-grained reactivity with no virtual DOM, and `:each` with `:key`
   keeps existing DOM when the transcript is appended to.
+- **Tool calls in the transcript**: an assistant reply is drawn as prose and tool calls, not as
+  the ```` ```tool ```` blocks the model typed. `segments.js` splits the turn's text at render
+  time, using the same forms `parse_call` accepts (a fence, or a bare `{"name": …}` at the start of
+  a line). It pairs each block, in order, with the turn's `tool_call`/`tool_result`, and
+  `tool-call.html` draws each one as a card: the name, what the call is about, how it went, and
+  the arguments and output behind a click. A block still being written is a placeholder, and a
+  tail that could be the start of one is held back for the frame or two it takes to tell. Nothing
+  on the wire or in the store changed. The text is the concatenated tokens live and after a
+  reload alike, and the raw text is still what the inspector shows. See
+  [`RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`](RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md).
+- **A turn's meta line is its flow and the way into it.** Under each answer, one line:
+  `speed · → sent ← received · 🕑 first token → last token`, with how the turn ended only
+  when it did not simply stop. It is at 0.6 opacity until hovered, when it is whole and its
+  symbols take their colours. The speed is
+  completion tokens over first-token-to-end (`timing.js`): the wait before the first token is its
+  own number because it holds a model loading, and a model switched to should not look slow for
+  it. A turn that ran tools spent part of that span running them, so its speed is a floor and
+  reads `≥`. No count from the backend means no speed, never zero. The times are the page's clock
+  live and `TurnView`'s `at_ms` after a reload. `first_token_at_ms` is folded from the `token`
+  lines' own stamps, so every recording has it and no format moved. A click opens
+  `turn-inspect.html`, a `<dialog>` with three tabs: the context, the answer as the model wrote
+  it (fences included), and each tool call. **The context is grouped by what each piece is**
+  (`context-view.html`): system, tools, map, summaries, history, code, prompt, in the legend's
+  order and colours, each a card under its bucket's count, with an earlier exchange keeping
+  who said it. The boundaries are read back from what the renderer always writes (`# Tools`,
+  `# Repository map`, a fold's `[job closed]`, a `// path` fragment, the question at the end),
+  in `prompt-parts.js`, because the wire carries counts and not spans. **No block scrolls unless
+  asked to**: one too large to read at a glance is clipped with a fade and offers *show all*
+  (inline) or *scroll* (a box of its own). Nothing is fetched: it is the turn `state.history`
+  already holds.
+- **The composer: attach on the left, the context on the right.** The clip that names the open
+  file in the prompt sits left of the input. The right end of the options row is the context
+  indicator: the newest turn's buckets as a small bar in the legend's colours and the tokens sent
+  over the window, `1.5k / 8k`, the count amber from 80% of it and red from 95%. Where the window
+  is unknown it reads `1.5k / —` and says why. The turn modal and the context modal carry the
+  same partial over total. The indicator reads the newest turn whether it happened live or came
+  back from the server, so a reload does not leave it empty. A click opens `context-modal.html`, the same grouped view
+  about that turn, with the window's use, the answer's reserve and what the server counted. See
+  [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
 - **Components**: `crates/luu/ui/components/` holds components that import nothing from the page.
   Everything arrives as props or slots, everything leaves as `:model` or `$emit`, styles are
   scoped, and page tokens are read with fallbacks. Three so far, each taking an idea from rare-ui
-  with none of its code: `Segmented` (a pill that slides to the chosen answer), `Rail` (a dot that
-  springs to the chosen section) and `SaveButton` (a count of unsaved changes, and a tick once a
+  with none of its code: `Segmented` (a pill that slides to the chosen answer), `Rail` (a bar beside the chosen section that springs
+  to it; it was a dot until 2026-09-30) and `SaveButton` (a count of unsaved changes, and a tick once a
   save lands). Every segmented choice on the page is a `Segmented`, and the global `.choice` rule is
   gone. See
   [`RECORD/2026-09-28.components-of-our-own.completed.md`](RECORD/2026-09-28.components-of-our-own.completed.md).
@@ -1459,7 +1514,8 @@ it has no turns**. One with turns stays where it is and the page says why,
 because moving a conversation to another model is a choice with a header of its
 own, not a side effect of saving a file. A destination somebody chose is kept,
 flags included. **And it is chosen from the chat**: the composer's destination
-tags open a dropup in two columns — the providers, and the models of the one in
+— one button, `profile · model`, with the same face as the mode's dropup beside
+it, so the foot reads as one row of choices — opens a dropup in two columns — the providers, and the models of the one in
 focus, which *it* says it serves — and picking one starts a session there when
 there are no turns, or moves this one with its history (the starter's
 *Continue here*) when there are. Who answers the gate (*Manual* / *Auto*) sits
@@ -1674,7 +1730,8 @@ picks a destination](#the-first-run-and-the-session-that-picks-a-destination).
 ### A model server luu starts
 
 **An engine is a server luu is allowed to start**: `[engine.<name>]` beside the providers, and a
-profile that names it has it started, and waited for, before a session sends there.
+profile that names it has it started when a session points there, and waited for before anything
+is sent to it.
 
 ```toml
 [engine.gemma]
@@ -1711,6 +1768,25 @@ engine starts then; a session that picks another model restarts a llama.cpp engi
 holds one); and an engine no session sends to is stopped, so a model does not stay in memory
 until `serve` exits. `luu chat` and `luu stdio` start it for the length of the run.
 
+**A switch does not wait for the load; the first call does.** Choosing another model answers
+as soon as the session points there, and the engine loads behind the answer
+(`Supervisor::warm`). The session's backend is wrapped (`engines::Started`) so every call runs
+`ensure` first: a turn sent while the model loads waits for it on the server, and an engine that
+cannot start reaches the turn as a transport error. `ensure` is one at a time per engine, so the
+warm-up and the first turn cannot restart it under each other. **An `ensure` says which phase it
+is in** — `stopping` (with `from`, the model the engine was running), `downloading`, `starting`,
+then `ready` or `failed` — on one clock for the whole switch, and the page reads it from
+`GET /api/engine`. Beside the picker: `starting qwen2.5-coder:14b 3s · qwen2.5-coder:7b stopped`,
+then `ready in 4s` for a few seconds, or `could not start` with the reason as its tooltip. What is
+happening and for how long comes first, because a chat column is narrow and the end is what gets
+cut. When the switch moved to *another* engine, the old one was stopped before the answer came
+back and the server has no `from` for it; the page remembers what it left. **A turn that waits
+says so where its answer will go** (`waiting for qwen2.5-coder:14b — loading · 3s`), from the same
+poll, which every turn start triggers.
+Until 2026-09-29 the switch request waited for the whole load, and with a 14B that was tens of
+seconds of a page that looked frozen. See
+[`RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`](RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md).
+
 **The models are the ones already on the machine** (`crate::models`, `GET /api/models`):
 ollama's store, llama.cpp's cache, Hugging Face's hub cache and `<state dir>/models`, each
 where its tool's own variable says (`OLLAMA_MODELS`, `LLAMA_CACHE`, `HF_HUB_CACHE`). Nothing is
@@ -1725,6 +1801,58 @@ matmul. A provider whose engine is llama.cpp or mlx lists every model it can loa
 picker, and the ones it cannot **greyed out, with a warning and the reason as a tooltip**, so a
 model on the disk never looks missing.
 See [`RECORD/2026-09-28.a-model-server-luu-starts.completed.md`](RECORD/2026-09-28.a-model-server-luu-starts.completed.md).
+
+### Settings
+
+Four sections down a rail: **General, Engines, Models, Sessions**. Engines
+come before Models because a provider can name an engine. Sessions is the
+resend rules and the authority notes together, each still its own form with its
+own save: what a session is rendered under, beyond what was asked. A change of
+section is a transition whose end is known before it starts. The chosen section
+is mounted invisible and loads, and once its height has settled (unchanged for
+90ms, 700ms at the most) the pane goes from the old height to that one in a single
+motion while the two sections cross-fade. Sections are mounted per visit, so none
+is stale and nothing hidden polls. None of it moves under `prefers-reduced-motion`.
+
+**Every modal opens and closes animated.** It rises a few pixels to full size as
+the backdrop darkens, and leaves the same way. The leaving is `modal.js`'s
+`closing(id, done)`: every modal's close function goes through it, and ESC is
+routed there rather than letting the browser close the dialog at once, so a close
+button, the backdrop and ESC all leave alike.
+See `RECORD/2026-09-28.components-of-our-own.completed.md`, 2026-09-30.
+
+### The window, when nobody said
+
+A run's window comes from, in order: `--context-limit`, the profile's
+`context-limit`, and **the server, when it says** (`WindowFrom::Server`).
+`Backend::window` asks `llama-server`'s `/props` (`n_ctx`) and then vLLM's
+listing (`max_model_len`). Ollama answers nothing on purpose: there the window
+is what luu sends as `num_ctx`, and taking the model's trained length would
+ask for a KV cache nobody chose. `serve` asks in the background once a session
+points somewhere (an engine waits until it is up). If the session is still
+there when the answer comes, the destination takes the window and the stream
+gains a header carrying it. `chat` and `stdio` ask once before the first turn
+and print `window: 32768, from the server`. See
+[`RECORD/2026-09-30.the-window-the-server-says.completed.md`](RECORD/2026-09-30.the-window-the-server-says.completed.md).
+
+### A log for `serve`
+
+`serve` keeps a log in the state directory, `logs/serve.YYYY-MM-DD.log`,
+rotated daily, seven kept, filtered by `LUU_LOG` (a `tracing` filter; `info`
+for luu's own crates and `warn` for the rest by default), and off with
+`--no-log`. It holds every HTTP request as a start and an end with its status
+and duration (the path only, never the query, where `?token=` travels), the
+sockets opening and closing, each client message by kind, every protocol event
+but `token` by type and a fixed set of fields, where a session sends after a
+switch, and each engine phase. Never a prompt, a token or a tool's output:
+those belong to the session stream. **The writer never blocks**. Lines cross
+to `tracing-appender`'s own thread and are dropped rather than waited for,
+because a log added to find a freeze must not be able to cause one. **A
+watchdog on an OS thread of its own** names every request in flight for more
+than five seconds, every five seconds. It also says when a tick that a tokio
+task bumps every second stops moving, which tells a lock (the watchdog names
+the stuck request) from a blocked runtime (the tick stops). See
+[`RECORD/2026-09-30.a-log-for-serve.completed.md`](RECORD/2026-09-30.a-log-for-serve.completed.md).
 
 ## Persistence
 

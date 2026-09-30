@@ -169,6 +169,35 @@ impl Agency {
         self.tools.definitions()
     }
 
+    /// The context with this session's tools in it, under the transport its
+    /// destination uses: as text in the system message (`fenced`), or counted
+    /// and sent in the request's own `tools` field (`native`). See
+    /// `RECORD/2026-09-30.native-tool-calls.completed.md`.
+    pub fn with_tools(
+        &self,
+        context: agent_core::context::Context,
+        tool_calls: crate::provider::ToolCalls,
+    ) -> agent_core::context::Context {
+        match tool_calls {
+            crate::provider::ToolCalls::Fenced => context.with_tools(self.definitions()),
+            crate::provider::ToolCalls::Native => {
+                context.with_native_tools(self.tools.native_definitions())
+            }
+        }
+    }
+
+    /// What a request carries in its `tools` field: every tool under
+    /// `native`, nothing under `fenced`.
+    pub fn specs(
+        &self,
+        tool_calls: crate::provider::ToolCalls,
+    ) -> Vec<agent_core::backend::ToolSpec> {
+        match tool_calls {
+            crate::provider::ToolCalls::Fenced => Vec::new(),
+            crate::provider::ToolCalls::Native => self.tools.specs(),
+        }
+    }
+
     /// Where tool calls go. The seam, resolved once: the loop asks this and
     /// never asks where it runs.
     pub fn executor(&self) -> &dyn Executor {
@@ -338,6 +367,7 @@ pub fn now_ms() -> u64 {
 /// writing a `.jsonl` and the store keeping a session's own — and a header
 /// assembled twice is two claims about what a run was comparable with. See
 /// `RECORD/2026-09-04.the-border-and-the-gate.completed.md`.
+#[allow(clippy::too_many_arguments)]
 pub fn header(
     backend: &str,
     model: &str,
@@ -350,6 +380,8 @@ pub fn header(
     // `None`, the same as a stream from before format 18. See
     // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
     authority: &crate::provider::AuthorityNotes,
+    // Written only when native — see `record::FORMAT` 19.
+    tool_calls: crate::provider::ToolCalls,
     started_at: u64,
 ) -> RecordLine {
     RecordLine::Header {
@@ -371,6 +403,7 @@ pub fn header(
         results: Some(budget.results),
         authority_draft: authority.draft_note(),
         authority_plan: authority.plan_note(),
+        tool_calls: tool_calls.native().then(|| tool_calls.as_str().to_string()),
         started_at,
     }
 }
@@ -420,6 +453,7 @@ impl Recorder {
         // `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
         posture: Option<record::Posture>,
         authority: &crate::provider::AuthorityNotes,
+        tool_calls: crate::provider::ToolCalls,
         started_at: u64,
     ) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -433,7 +467,7 @@ impl Recorder {
             .with_context(|| format!("creating {}", path.display()))?;
 
         let header = header(
-            backend, model, budget, counter, posture, authority, started_at,
+            backend, model, budget, counter, posture, authority, tool_calls, started_at,
         );
         file.write_all(format!("{}\n", serde_json::to_string(&header)?).as_bytes())
             .await?;
@@ -483,6 +517,7 @@ impl Recorder {
         counter: Counter,
         posture: Option<record::Posture>,
         authority: &crate::provider::AuthorityNotes,
+        tool_calls: crate::provider::ToolCalls,
         started_at: u64,
     ) {
         // Stored before the line is sent, so a turn published between the two
@@ -491,7 +526,7 @@ impl Recorder {
         self.started_at
             .store(started_at, std::sync::atomic::Ordering::Relaxed);
         let _ = self.lines.send(header(
-            backend, model, budget, counter, posture, authority, started_at,
+            backend, model, budget, counter, posture, authority, tool_calls, started_at,
         ));
     }
 
@@ -530,6 +565,7 @@ mod tests {
             Counter::Approximate,
             None,
             &crate::provider::AuthorityNotes::default(),
+            crate::provider::ToolCalls::Fenced,
             0,
         ) {
             RecordLine::Header {
@@ -560,6 +596,7 @@ mod tests {
             Counter::Approximate,
             None,
             &crate::provider::AuthorityNotes::default(),
+            crate::provider::ToolCalls::Fenced,
             0,
         ) {
             RecordLine::Header {

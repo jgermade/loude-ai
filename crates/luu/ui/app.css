@@ -289,6 +289,22 @@ dialog.modal {
    the template rendering and `showModal()`. */
 dialog.modal[open] { display: flex; }
 dialog.modal::backdrop { background: rgba(0, 0, 0, .55); }
+/* In and out: the box rises a few pixels and comes up to full size while the
+   backdrop darkens, and leaves the way it came. Closing is played by
+   `modal.js`'s `closing`, which adds `.closing` and unmounts the dialog once
+   `modal-out` (140ms, `CLOSE_MS` there) is over. */
+dialog.modal[open] { animation: modal-in .2s cubic-bezier(.2, .8, .2, 1); }
+dialog.modal[open]::backdrop { animation: backdrop-in .2s ease-out; }
+dialog.modal.closing { animation: modal-out .14s ease-in forwards; }
+dialog.modal.closing::backdrop { animation: backdrop-out .14s ease-in forwards; }
+@keyframes modal-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+@keyframes modal-out { to { opacity: 0; transform: translateY(6px) scale(.985); } }
+@keyframes backdrop-in { from { opacity: 0; } }
+@keyframes backdrop-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  dialog.modal[open], dialog.modal[open]::backdrop,
+  dialog.modal.closing, dialog.modal.closing::backdrop { animation: none; }
+}
 .modal-head {
   display: flex;
   align-items: center;

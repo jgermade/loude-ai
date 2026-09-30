@@ -1,7 +1,9 @@
 <script :setup="{ items = [], model = '' }">
-  // A vertical list of sections with a dot that springs to the chosen one. The
-  // chosen label is the only one at full colour. The idea is rare-ui's
-  // `bounce-sidebar`; the code is not.
+  // A vertical list of sections with a bar in the accent colour beside the
+  // chosen one, springing to it. It was a dot; a bar says *this one* by standing
+  // beside the whole item rather than beside its middle. No line joins the
+  // others: only the chosen one is marked. The chosen label is the only one at full colour. The
+  // idea is rare-ui's `bounce-sidebar`; the code is not.
   //
   // **Self-contained**, like everything in `components/`: it imports nothing
   // from the page, and what an item looks like is the caller's, through the
@@ -15,16 +17,17 @@
   // Without a slot an item draws its `label`. The choice goes back up through
   // `:model` when the tag binds one, and always as `change`.
 
-  // Where the dot is, as a y in the rail's own pixels, or `null` before the
-  // first measurement. `moving` is the same first-placement rule as
-  // `segmented.html`: the dot appears where it belongs and only moves after.
-  let y = null
+  // Where the accent stretch is — the chosen item's top and height, in the
+  // rail's own pixels — or `null` before the first measurement. `moving` is the
+  // same first-placement rule as `segmented.html`: it appears where it belongs
+  // and only moves after.
+  let at = null
   let moving = false
 
   const place = () => {
     const on = $self("button.on")
     if (!on || !on.offsetHeight) return
-    y = on.offsetTop + on.offsetHeight / 2 - 3
+    at = { y: on.offsetTop, h: on.offsetHeight }
     if (!moving) requestAnimationFrame(() => { moving = true })
   }
 
@@ -37,11 +40,11 @@
   await $mounted()
   new ResizeObserver(() => place()).observe($self(".rail"))
   $: (model, items, requestAnimationFrame(place))
-  $: dot = y === null ? "display:none" : `transform:translateY(${y}px)`
+  $: mark = at === null ? "display:none" : `height:${at.h}px;transform:translateY(${at.y}px)`
 </script>
 
 <nav class="rail" :class.moving="moving">
-  <span class="dot" :style="dot" aria-hidden="true"></span>
+  <span class="mark" :style="mark" aria-hidden="true"></span>
   <button
     :each="item in items"
     :key="item.value"
@@ -59,18 +62,19 @@
     display: flex;
     flex-direction: column;
     gap: .1rem;
-    padding-left: .7rem;
+    padding-left: .45rem;
   }
-  .dot {
+  .mark {
     position: absolute;
     top: 0;
-    left: .05rem;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
+    left: 0;
+    width: 2px;
+    border-radius: 2px;
     background: var(--accent, #2f5bbd);
   }
-  .rail.moving .dot { transition: transform .28s cubic-bezier(.34, 1.56, .64, 1); }
+  .rail.moving .mark {
+    transition: transform .28s cubic-bezier(.34, 1.56, .64, 1), height .2s ease;
+  }
   button {
     display: flex;
     align-items: center;
@@ -91,6 +95,6 @@
   button:hover { color: var(--fg, #1a1d23); background: var(--bg, #f4f5f8); }
   button.on { color: var(--fg, #1a1d23); }
   @media (prefers-reduced-motion: reduce) {
-    .rail.moving .dot { transition: none; }
+    .rail.moving .mark { transition: none; }
   }
 </style>
