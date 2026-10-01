@@ -933,6 +933,15 @@ you are sending and what you are sending it *under* — manual or automatic conf
 provider and model — are two different questions, and the second was not on the page at all at
 the moment somebody typed a prompt.
 
+**The inspector's and the chat's widths are dragged**, from the edge each shares with the content
+column (`resize.js`), and the content column takes what is left. 20rem and 30rem are the defaults;
+what was dragged is kept in `localStorage` with the rest of the screen's facts, and the stylesheet
+clamps it against the window (180px–35vw, 280px–50vw), so a width kept on a wide screen gives way
+on a narrow one without being forgotten. A drag writes a CSS property and nothing reactive until
+the pointer is let go. Double click is back to the default, and the arrow keys move a focused edge.
+In two columns only the inspector's edge is there. See
+[`RECORD/2026-10-01.columns-that-are-dragged.completed.md`](RECORD/2026-10-01.columns-that-are-dragged.completed.md).
+
 There is **no page-wide header**. There was, and every control on it belonged to a column: the
 two destination tags and the status word are the chat's session, the fixtures picker is its
 replay, the hamburger opened preferences about the browser. A strip of other columns' controls

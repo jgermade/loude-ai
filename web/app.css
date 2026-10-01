@@ -523,3 +523,8 @@ dialog.modal.narrow { width: min(34rem, calc(100vw - 2rem)); }
 .hl-link { color: var(--hl-link); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
 .hl-emphasis { font-style: italic; }
 .hl-strong { font-weight: 600; }
+
+/* While a column's edge is dragged (`resize.js`), the whole page is the
+   handle: no text gets selected and the cursor does not flicker back over
+   whatever the pointer crosses. */
+html.resizing, html.resizing * { cursor: col-resize !important; user-select: none !important; }

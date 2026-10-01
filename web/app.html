@@ -6,6 +6,7 @@
           resumeSession, deleteSession, renameSession,
           loadProviders, refreshSettings } = await import("./store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("./prefs.js")
+  const { startDrag, nudge, resetWidth, widthStyle } = await import("./resize.js")
   const { workspace, loadRoot, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
     await import("./workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel,
@@ -468,12 +469,20 @@
      that used to sit above them was a strip of *other columns'* controls, and
      it cost every column 3rem of height to say so. See
      `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`. -->
-<div class="app" :attrs="{ 'data-columns': columns }">
+<div class="app" :attrs="{ 'data-columns': columns, style: widthStyle() }">
 
   <!-- The left rail. Three things a person looks at while an agent works —
        the workspace, what changed in it, and what the context manager did —
        behind one switch rather than three columns. -->
   <aside class="col inspector">
+    <!-- The edge between the inspector and whatever is beside it: dragged,
+         nudged with the arrow keys, or double-clicked back to 20rem. See
+         `resize.js`. -->
+    <div class="resize right" role="separator" aria-orientation="vertical"
+         aria-label="Resize the inspector" tabindex="0" title="Drag to resize · double-click to reset"
+         @pointerdown="startDrag($event, 'inspector')"
+         @keydown="nudge($event, 'inspector')"
+         @dblclick="resetWidth('inspector')"></div>
     <header class="col-head">
       <!-- The corner a logo has always been in, and the column that is always
            on screen. It is a control: it means *take me back to the
@@ -574,6 +583,13 @@
   <!-- The conversation. No tabs: one session is on screen, and its name says
        which one in words the head has room for. -->
   <section class="col chat" :if="showChat">
+    <!-- Only where the chat has a width of its own: in two columns it is the
+         one that takes what is left. -->
+    <div :if="columns === 3" class="resize left" role="separator" aria-orientation="vertical"
+         aria-label="Resize the chat" tabindex="0" title="Drag to resize · double-click to reset"
+         @pointerdown="startDrag($event, 'chat')"
+         @keydown="nudge($event, 'chat')"
+         @dblclick="resetWidth('chat')"></div>
     <header class="col-head">
       <button :if="!renaming" type="button" class="name" title="Rename this session"
               @click="startRename()">{{ sessionName }}</button>
@@ -1025,14 +1041,50 @@
     /* `dvh` rather than `vh`: a mobile browser's toolbar is the difference
        between a page that fits and one whose foot is under the chrome. */
     height: 100dvh;
-    grid-template-columns: minmax(0, 20rem) minmax(0, 1fr) minmax(0, 30rem);
+    /* The two widths a person can drag (`resize.js`), each clamped against
+       the window here rather than in the script, so a width kept on a wide
+       screen gives way on a narrow one without being forgotten. */
+    grid-template-columns:
+      minmax(0, clamp(180px, var(--inspector-w, 20rem), 35vw))
+      minmax(0, 1fr)
+      minmax(0, clamp(280px, var(--chat-w, 30rem), 50vw));
   }
   /* Two columns: the inspector, and one of content or chat. Which one is the
      person's choice rather than the viewport's — the toggle lives in that
      column's own head. */
-  .app[data-columns="2"] { grid-template-columns: minmax(0, 20rem) minmax(0, 1fr); }
+  .app[data-columns="2"] {
+    grid-template-columns: minmax(0, clamp(180px, var(--inspector-w, 20rem), 35vw)) minmax(0, 1fr);
+  }
 
-  .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+
+  /* The handle: an 8px strip over the column's border, invisible until the
+     pointer or the focus is on it, so it costs the layout nothing. */
+  .resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    z-index: 5;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  .resize.right { right: -4px; }
+  .resize.left { left: -4px; }
+  .resize::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 2px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity .12s;
+  }
+  .resize:hover::after, .resize:focus-visible::after { opacity: .6; }
+  .resize:focus-visible { outline: none; }
+
   .col-head, .col-foot {
     display: flex;
     align-items: center;

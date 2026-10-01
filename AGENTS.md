@@ -130,6 +130,8 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # The page is three columns, each with a 40px head and foot: an inspector
 # (files, git, the context panel), the content, and the chat. Below 1260px it is
 # two, and the second column toggles between content and chat from its own head.
+# The inspector's and the chat's widths are dragged from their edges (double
+# click resets, arrow keys nudge), and kept in localStorage.
 # The content column keeps one tab per open thing — a file, a diff, a prompt —
 # and a single click opens a preview tab (italic) the next click replaces; a
 # double click keeps it. The chat names its session instead of spending a row

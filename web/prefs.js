@@ -27,6 +27,17 @@ function kept(key, allowed, fallback) {
   }
 }
 
+/// A remembered width in pixels, or `null` for the stylesheet's own. Anything
+/// that is not a sane number is the default rather than a column a pixel wide.
+function keptWidth(key) {
+  try {
+    const found = Number(localStorage.getItem(key))
+    return Number.isFinite(found) && found >= 120 && found <= 4000 ? Math.round(found) : null
+  } catch {
+    return null
+  }
+}
+
 function keep(key, value) {
   try {
     localStorage.setItem(key, value)
@@ -70,6 +81,12 @@ export const prefs = $reactive({
   /// visible, which is why this control sits in the composer's own second row
   /// rather than in a modal somebody set once and forgot.
   confirm: kept("luu.confirm", ["manual", "auto"], "manual"),
+  /// The inspector's and the chat's widths in pixels, as last dragged, or
+  /// `null` for the stylesheet's 20rem and 30rem. The stylesheet still clamps
+  /// whatever is here against the window, so a width kept on a wide screen
+  /// cannot squeeze the content column out of a narrow one.
+  inspectorWidth: keptWidth("luu.width.inspector"),
+  chatWidth: keptWidth("luu.width.chat"),
 })
 
 /// Dark is `:root`'s own palette in `app.css`, so it is the *absence* of the
@@ -130,6 +147,18 @@ export function setPane(which) {
 export function setInspector(which) {
   prefs.inspector = which
   keep("luu.inspector.mode", which)
+}
+
+/// `null` forgets the width, which is what a double click on the handle asks.
+export function setWidth(column, px) {
+  const key = column === "chat" ? "chatWidth" : "inspectorWidth"
+  prefs[key] = px == null ? null : Math.round(px)
+  try {
+    if (px == null) localStorage.removeItem(`luu.width.${column}`)
+    else localStorage.setItem(`luu.width.${column}`, String(Math.round(px)))
+  } catch {
+    // Unremembered, still applied.
+  }
 }
 
 export function setConfirm(which) {
