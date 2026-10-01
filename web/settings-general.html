@@ -13,16 +13,25 @@
 
   // The icon theme: the server's view of it, what is typed into the path, and
   // the last refusal, in the loader's own words.
+  //
+  // Asked without being awaited, as Monaco is below. The answer reads a
+  // `package.json` per installed extension, and on a machine whose endpoint
+  // security holds file opens that has taken over a minute, during which this
+  // whole section rendered nothing: the theme, the editor and the layout
+  // waited on a question only the icon rows ask. See
+  // `RECORD/2026-10-01.the-page-in-web.completed.md`.
   let iconView = null
   let iconError = ""
   let iconBusy = false
+  let iconAsking = true
   let typedPath = ""
-  try {
-    iconView = await loadIconTheme()
-    typedPath = iconView.named || ""
-  } catch (error) {
-    iconError = `${error.message || error}`
-  }
+  loadIconTheme()
+    .then(view => {
+      iconView = view
+      typedPath = view.named || ""
+    })
+    .catch(error => { iconError = `${error.message || error}` })
+    .finally(() => { iconAsking = false })
 
   const took = result => {
     if (result.ok) {
@@ -141,8 +150,9 @@
 <dl class="settings">
   <dt>Icons</dt>
   <dd>
+    <span :if="iconAsking" class="dim">asking the server…</span>
     <span :if="iconView?.loaded" class="path">{{ iconView.loaded }}</span>
-    <span :if="!iconView?.loaded">the tree's own two shapes</span>
+    <span :if="!iconAsking && !iconView?.loaded">the tree's own two shapes</span>
     <span :if="iconView?.named" class="dim path">· {{ iconView.named }}</span>
   </dd>
   <!-- Item 15 of `ROADMAP/2026-09-17`, kept through the redesign: the first
@@ -173,7 +183,7 @@
       <li>
         <span class="name">None</span>
         <span class="dim grow">the tree draws its own file and folder</span>
-        <span :if="!iconView?.named" class="dim">in use</span>
+        <span :if="iconView && !iconView.named" class="dim">in use</span>
         <button :if="iconView?.named" type="button" class="link"
                 :disabled="!iconView?.editable || iconBusy" @click="useTheme(null)">use</button>
       </li>
