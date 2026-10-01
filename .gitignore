@@ -6,3 +6,4 @@ tests/smoke/test-results/
 tests/smoke/playwright-report/
 records/
 *.jsonl
+.DS_Store
