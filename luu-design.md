@@ -1277,7 +1277,10 @@ Server stack: `axum` + `tokio`.
 
 ### UI stack
 
-**[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.**
+**[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.** Vendored at
+`web/vendor/jq79.js`, version 0.7.2, which binds attributes one at a time (`:title="x"`); `:attrs`
+went in 0.7. See
+[`RECORD/2026-10-01.jq79-0.7.2.completed.md`](RECORD/2026-10-01.jq79-0.7.2.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
 frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so

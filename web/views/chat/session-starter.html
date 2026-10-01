@@ -64,7 +64,7 @@
       <dt>Model</dt>
       <dd>
         <input class="w-model" :value="ui.starter?.model" list="starter-models"
-               :attrs="{ placeholder: ui.starter?.loading ? 'asking the provider…' : 'a model name' }"
+               :placeholder="ui.starter?.loading ? 'asking the provider…' : 'a model name'"
                @input="editStarter({ model: $event.target.value })">
         <datalist id="starter-models">
           <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>

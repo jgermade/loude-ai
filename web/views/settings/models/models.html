@@ -329,7 +329,7 @@
               title="What this server is sending to">running</span>
         <span :if="row.remote" class="tag warn" title="Declared as off this machine">remote</span>
         <span :if="row.engine" class="tag"
-              :attrs="{ title: `luu starts [engine.${row.engine}] before a session sends here` }">engine</span>
+              :title="`luu starts [engine.${row.engine}] before a session sends here`">engine</span>
         <!-- Only for a profile that is in the file: this starts a session
              against what the server can resolve, not against an unsaved
              row. -->
@@ -355,7 +355,7 @@
       it is about to become the default — so every run that names no provider
       goes there. Type the host to confirm.
     </p>
-    <input :value="typed" :attrs="{ placeholder: declaration.host }"
+    <input :value="typed" :placeholder="declaration.host"
            @input="typed = $event.target.value">
     <button type="button" :disabled="!canDeclare || saving"
             @click="saveConfig(true)">Confirm and save</button>

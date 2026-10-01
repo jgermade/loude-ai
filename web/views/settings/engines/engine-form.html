@@ -167,7 +167,7 @@
         </select>
       </dd>
       <dd :if="binary === 'custom'">
-        <input :value="path" :attrs="{ placeholder: `/opt/homebrew/bin/${bin}` }"
+        <input :value="path" :placeholder="`/opt/homebrew/bin/${bin}`"
                @input="path = $event.target.value">
         <span :if="badPath" class="warn">must be a file named <code>{{ bin }}</code></span>
       </dd>
@@ -181,7 +181,7 @@
 
       <dt :if="binary === 'managed'">Version</dt>
       <dd :if="binary === 'managed'">
-        <input class="w-num" :value="version" :attrs="{ placeholder: pinned }"
+        <input class="w-num" :value="version" :placeholder="pinned"
                @input="version = $event.target.value">
         <span class="dim">a release tag; empty is the one luu pins</span>
       </dd>
@@ -194,7 +194,7 @@
 
       <dt>Port</dt>
       <dd>
-        <input class="w-num" :value="port" :attrs="{ placeholder: String(defaultPort(kind)) }"
+        <input class="w-num" :value="port" :placeholder="String(defaultPort(kind))"
                @input="port = $event.target.value">
         <span :if="badPort" class="warn">a port is 1–65535</span>
       </dd>
@@ -210,7 +210,7 @@
             {{ m.label }} · {{ gb(m.size) }}
           </option>
           <option :each="m in unloadable" :key="m.reference" disabled
-                  :attrs="{ title: m.cannot[kind] }">
+                  :title="m.cannot[kind]">
             ⚠ {{ m.label }}
           </option>
         </select>
@@ -225,7 +225,7 @@
       <dd :if="kind !== 'ollama' && unloadable.length" class="caveat">
         <span class="warn">⚠</span> {{ unloadable.length }} on this machine this engine cannot load:
         <span :each="m in unloadable" :key="m.reference" class="blocked"
-              :attrs="{ title: m.cannot[kind] }">{{ m.label }}</span>
+              :title="m.cannot[kind]">{{ m.label }}</span>
         <span class="dim">— {{ unloadable[0].cannot[kind] }}{{ unloadable.length > 1 ? " (hover each for its own reason)" : "" }}</span>
         <span :if="!catalog.length">None found in {{ Object.values(roots).filter(Boolean).join(", ") }}.</span>
       </dd>
@@ -233,7 +233,7 @@
       <dt>Arguments</dt>
       <dd>
         <input :value="args"
-               :attrs="{ placeholder: kind === 'llama' ? '-hf ggml-org/gemma-3-1b-it-GGUF -c 8192' : '' }"
+               :placeholder="kind === 'llama' ? '-hf ggml-org/gemma-3-1b-it-GGUF -c 8192' : ''"
                @input="args = $event.target.value">
       </dd>
       <dd :if="kind === 'llama'" class="note">

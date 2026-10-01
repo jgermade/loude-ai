@@ -469,7 +469,7 @@
      that used to sit above them was a strip of *other columns'* controls, and
      it cost every column 3rem of height to say so. See
      `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`. -->
-<div class="app" :attrs="{ 'data-columns': columns, style: widthStyle() }">
+<div class="app" :data-columns="columns" :style="widthStyle()">
 
   <!-- The left rail. Three things a person looks at while an agent works —
        the workspace, what changed in it, and what the context manager did —
@@ -503,7 +503,7 @@
       <!-- Which folder, and the way to change it. The ceiling is where
            `luu serve` was started; this chooses a subdirectory of it. -->
       <button type="button" class="root" @click="openPicker()"
-              :attrs="{ title: `${workspace.base}${workspace.root ? '/' + workspace.root : ''} — click to change` }">
+              :title="`${workspace.base}${workspace.root ? '/' + workspace.root : ''} — click to change`">
         <svg class="ic"><use href="#i-folder"/></svg>
         <span>{{ rootLabel }}</span>
       </button>
@@ -531,9 +531,9 @@
           :class.preview="tab.preview">
           <!-- A preview tab is in italics until something keeps it: a double
                click here, or on the row that opened it. See `openTab`. -->
-          <button type="button" class="pick" :attrs="{ title: tab.path }"
+          <button type="button" class="pick" :title="tab.path"
                   @click="activate(tab.id)" @dblclick="pinTab(tab.id)">
-            <svg class="ic kind"><use :attrs="{ href: tab.kind === 'diff' ? '#i-refresh' : (tab.kind === 'debug' ? '#i-sliders' : '#i-file') }"/></svg>
+            <svg class="ic kind"><use :href="tab.kind === 'diff' ? '#i-refresh' : (tab.kind === 'debug' ? '#i-sliders' : '#i-file')"/></svg>
             <span class="label">{{ tab.title }}</span>
           </button>
           <button type="button" class="close" title="Close this tab" @click="closeTab(tab.id)">
@@ -619,7 +619,7 @@
            the two things the strip did. -->
       <div :if="ui.history" class="history" @click="armedClose = ''">
         <div :each="s in state.sessions" :key="s.id" class="row" :class.on="s.id === state.currentSessionId">
-          <button type="button" class="pick" :attrs="{ title: s.id }" @click="onSwitchSession(s.id)">
+          <button type="button" class="pick" :title="s.id" @click="onSwitchSession(s.id)">
             {{ nameOf(s) }}
             <span class="dim">{{ s.turns }}t</span>
           </button>
@@ -631,9 +631,9 @@
             type="button"
             class="close"
             :class.armed="armedClose === s.id"
-            :attrs="{ title: armedClose === s.id
+            :title="armedClose === s.id
               ? 'Click again to delete this session and its stream'
-              : 'Delete this session' }"
+              : 'Delete this session'"
             @click="onCloseSession(s.id, $event)">
             <svg class="ic"><use href="#i-close"/></svg>
           </button>
@@ -839,7 +839,7 @@
             <input
               :value="addition"
               @input="addition = $event.target.value"
-              :attrs="{ placeholder: 'a path, command or domain the plan forgot' }">
+              placeholder="a path, command or domain the plan forgot">
             <button type="button" class="link" :disabled="!addition.trim()" @click="add('files')">add read</button>
             <button type="button" class="link" :disabled="!addition.trim()" @click="add('writes')">add write</button>
             <button type="button" class="link" :disabled="!addition.trim()" @click="add('commands')">add command</button>
@@ -886,7 +886,7 @@
             <input
               :value="closesOn"
               @input="closesOn = $event.target.value"
-              :attrs="{ placeholder: 'closes itself when this command exits 0 (optional)' }">
+              placeholder="closes itself when this command exits 0 (optional)">
           </div>
           <p :if="closesOn.trim()" class="dim warn">
             this job folds itself when <code>{{ closesOn.trim() }}</code> exits 0,
@@ -935,23 +935,23 @@
              model can ask for it with `read_file`, which is the thing the
              person clicking already meant. See the record's *Still open*. -->
         <button type="button" class="clip"
-                :attrs="{ title: picked
+                :title="picked
                   ? `Name ${picked.path} in the prompt`
-                  : 'Open a file in the content column first',
-                  disabled: replaying || noProviders || !picked }"
+                  : 'Open a file in the content column first'"
+                :disabled="replaying || noProviders || !picked"
                 @click="attach()">
           <svg class="ic"><use href="#i-clip"/></svg>
         </button>
         <input
           :value="draft"
           @input="draft = $event.target.value"
-          :attrs="{ placeholder: noProviders
+          :placeholder="noProviders
             ? 'No model is configured'
             : unreachableModel
               ? 'That model is not available'
               : proposed ? 'Approve or reject the proposed job first'
-              : (replaying ? 'Replaying a recorded session — read only' : 'Ask something…'),
-            disabled: replaying || !!proposed || noProviders || !!unreachableModel }"
+              : (replaying ? 'Replaying a recorded session — read only' : 'Ask something…')"
+          :disabled="replaying || !!proposed || noProviders || !!unreachableModel"
           autofocus>
         <button :if="!running" type="submit"
                 :disabled="!draft.trim() || replaying || !!proposed || noProviders || !!unreachableModel">Send</button>
@@ -987,17 +987,17 @@
              bar in the legend's colours, and the count against the window.
              Opens what it is made of. See `context-modal.html`. -->
         <button type="button" class="ctx" :disabled="!state.budget"
-                :attrs="{ title: state.budget
+                :title="state.budget
                   ? (contextWindow
                       ? `${contextSent} of ${contextWindow} tokens sent last turn${state.settings?.window_from === 'server' ? ' (the window is what the server says it serves)' : ''} — what they are`
                       : `${contextSent} tokens sent last turn, of a window luu does not know: set the profile's context-limit`)
-                  : 'Nothing sent yet' }"
+                  : 'Nothing sent yet'"
                 @click="openContext()">
           <span class="ctx-bar">
             <span :each="b in contextBuckets" :key="b.name"
-                  :attrs="{ style: `flex-grow:${b.tokens};background:var(--b-${b.name}, var(--dim))` }"></span>
+                  :style="`flex-grow:${b.tokens};background:var(--b-${b.name}, var(--dim))`"></span>
             <span :if="contextWindow" class="ctx-free"
-                  :attrs="{ style: `flex-grow:${Math.max(0, contextWindow - contextSent)}` }"></span>
+                  :style="`flex-grow:${Math.max(0, contextWindow - contextSent)}`"></span>
           </span>
           <span class="ctx-count"
                 :class.warn="contextPercent !== null && contextPercent >= 80"

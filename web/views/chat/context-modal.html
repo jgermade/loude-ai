@@ -38,12 +38,12 @@
   <div :if="state.budget" class="facts">
     <div><span class="k">context</span><b :class.warn="percent !== null && percent >= 80">{{ sent }} / {{ limit || "—" }}</b></div>
     <div :if="state.settings?.window_from === 'server'"
-         :attrs="{ title: 'Nothing declared a window, so luu asked the server which it serves' }">
+         title="Nothing declared a window, so luu asked the server which it serves">
       <span class="k">window from</span><b>the server</b>
     </div>
     <div :if="reserve"><span class="k">kept for the answer</span><b>{{ reserve }}</b></div>
     <div :if="state.budget.backendPrompt"
-         :attrs="{ title: 'What the server counted. The difference from ours is the chat template, and under native tool calls the tools it rendered.' }">
+         title="What the server counted. The difference from ours is the chat template, and under native tool calls the tools it rendered.">
       <span class="k">the server counted</span><b>{{ state.budget.backendPrompt }}</b>
     </div>
   </div>

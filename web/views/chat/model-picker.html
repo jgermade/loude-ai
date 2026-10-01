@@ -131,7 +131,9 @@
        choices of one kind. The menu is its own: two columns do not fit a
        list. -->
   <button type="button" class="face dest" :class.open="open"
-          :attrs="{ title: 'Where this session sends — choose another', 'aria-haspopup': 'dialog', 'aria-expanded': String(open) }"
+          title="Where this session sends — choose another"
+          aria-haspopup="dialog"
+          :aria-expanded="String(open)"
           @click="toggle($event)">
     <span :if="state.settings?.profile" class="profile">{{ state.settings?.profile }}</span>
     <span :if="state.settings?.profile" class="sep">·</span>
@@ -143,7 +145,8 @@
        a switch no longer waits for. A turn sent now waits for it on the
        server; this is so the wait is not a mystery. See `watchEngine`. -->
   <span :if="ui.engine" class="engine" :class="ui.engine.state"
-        :attrs="{ title: engineTitle, 'aria-live': 'polite' }">
+        :title="engineTitle"
+        aria-live="polite">
     <span class="dot"></span>
     <!-- What is happening and for how long first, and what it replaced last:
          a chat column is narrow, and the end is what gets cut. -->
@@ -158,7 +161,7 @@
 
   <div :if="open" class="backdrop" @click="open = false"></div>
   <div :if="open" class="menu" role="dialog" aria-label="Provider and model"
-       :attrs="{ style: place }">
+       :style="place">
     <p :if="!names.length" class="dim small pad">
       No providers yet.
       <button type="button" class="link" @click="open = false, openSettingsAt('models')">add one →</button>
@@ -171,7 +174,7 @@
         <li :each="name in names" :key="name">
           <button type="button" class="prov" role="option"
                   :class.on="name === focus" :class.current="name === current"
-                  :attrs="{ 'aria-selected': String(name === focus) }"
+                  :aria-selected="String(name === focus)"
                   @click="focusOn(name)" @mouseenter="focusOn(name)" @focus="focusOn(name)">
             <span class="check">{{ name === current ? "✓" : "" }}</span>
             <span class="text">
@@ -208,7 +211,7 @@
              button: a disabled one shows no tooltip in every browser. -->
         <div :each="u in shown?.unavailable || []" :key="u.model"
              class="model off" role="option" aria-disabled="true"
-             :attrs="{ title: u.reason }">
+             :title="u.reason">
           <span class="check warn">⚠</span>
           <span class="name">{{ u.label }}</span>
         </div>

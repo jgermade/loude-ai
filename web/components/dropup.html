@@ -60,17 +60,19 @@
 
 <span class="dropup">
   <button type="button" class="face" :class.open="open" :disabled="disabled"
-          :attrs="{ title: title || chosen?.title || '', 'aria-haspopup': 'listbox', 'aria-expanded': String(open) }"
+          :title="title || chosen?.title || ''"
+          aria-haspopup="listbox"
+          :aria-expanded="String(open)"
           @click="toggle($event)">
     <span>{{ chosen?.label }}</span>
     <svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14.5 12 9.5l5 5"/></svg>
   </button>
 
   <div :if="open" class="backdrop" @click="open = false"></div>
-  <div :if="open" class="list" role="listbox" :attrs="{ style: place }" @keydown="key($event)">
+  <div :if="open" class="list" role="listbox" :style="place" @keydown="key($event)">
     <button :each="item in items" :key="String(item.value)" type="button"
             class="opt" :class.on="item.value === model" role="option"
-            :attrs="{ 'aria-selected': String(item.value === model) }"
+            :aria-selected="String(item.value === model)"
             :disabled="item.disabled" @click="choose(item)">
       <span class="check">{{ item.value === model ? "✓" : "" }}</span>
       <span class="text">

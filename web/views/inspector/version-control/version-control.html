@@ -54,7 +54,7 @@
       type="button"
       class="row"
       :class.on="picked?.path === change.path"
-      :attrs="{ title: change.path }"
+      :title="change.path"
       @click="showDiff(change.path, change.staged && !change.unstaged)"
       @dblclick="showDiff(change.path, change.staged && !change.unstaged, { pinned: true })">
       <span class="code" :class.new="change.untracked">{{ change.code }}</span>

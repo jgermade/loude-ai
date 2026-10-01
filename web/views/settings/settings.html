@@ -143,13 +143,13 @@
     <section class="modal-body pane" :style="paneStyle">
       <div class="stage">
         <div :if="mounted('general')" class="section" data-section="general" :class="phase('general')"
-             :attrs="{ 'aria-hidden': String(shown !== 'general') }"><SettingsGeneral /></div>
+             :aria-hidden="String(shown !== 'general')"><SettingsGeneral /></div>
         <div :if="mounted('engines')" class="section" data-section="engines" :class="phase('engines')"
-             :attrs="{ 'aria-hidden': String(shown !== 'engines') }"><SettingsEngines /></div>
+             :aria-hidden="String(shown !== 'engines')"><SettingsEngines /></div>
         <div :if="mounted('models')" class="section" data-section="models" :class="phase('models')"
-             :attrs="{ 'aria-hidden': String(shown !== 'models') }"><SettingsModels /></div>
+             :aria-hidden="String(shown !== 'models')"><SettingsModels /></div>
         <div :if="mounted('sessions')" class="section" data-section="sessions" :class="phase('sessions')"
-             :attrs="{ 'aria-hidden': String(shown !== 'sessions') }"><SettingsSessions /></div>
+             :aria-hidden="String(shown !== 'sessions')"><SettingsSessions /></div>
       </div>
     </section>
   </div>

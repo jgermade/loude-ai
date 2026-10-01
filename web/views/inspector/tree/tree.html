@@ -84,11 +84,11 @@
     class="node"
     :class.on="row.path === selectedPath"
     :class.ignored="row.ignored"
-    :attrs="{ style: `--depth:${row.depth}` }">
+    :style="`--depth:${row.depth}`">
     <button
       type="button"
       class="row"
-      :attrs="{ title: row.path }"
+      :title="row.path"
       @click="row.dir ? toggleDir(row.path) : showFile(row.path)"
       @dblclick="row.dir || showFile(row.path, { pinned: true })">
       <span class="twist">
@@ -102,8 +102,9 @@
         :if="row.icon"
         class="icon"
         :src="`./api/icons/${row.icon}?r=${workspace.icons.revision || 0}`"
-        :attrs="{ alt: '', loading: 'lazy' }">
-      <svg :if="!row.icon" class="ic glyph"><use :attrs="{ href: row.dir ? '#i-folder' : '#i-file' }"/></svg>
+        alt=""
+        loading="lazy">
+      <svg :if="!row.icon" class="ic glyph"><use :href="row.dir ? '#i-folder' : '#i-file'"/></svg>
       <span class="name">{{ row.name }}</span>
     </button>
     <!-- Git's own letter, not a word: `M`, `??`, `A` are what `git status`
@@ -114,7 +115,7 @@
     <button
       type="button"
       class="edit"
-      :attrs="{ title: `Edit ${row.name}` }"
+      :title="`Edit ${row.name}`"
       @click="showFile(row.path, { pinned: true })">
       <svg class="ic"><use href="#i-edit"/></svg>
     </button>

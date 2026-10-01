@@ -92,7 +92,8 @@
       :each="bucket in view?.budget?.buckets"
       :key="bucket.name"
       :class="bucket.name"
-      :attrs="{ style: `flex-grow:${bucket.tokens || 0}`, title: `${bucket.name}: ${bucket.tokens}` }"></span>
+      :style="`flex-grow:${bucket.tokens || 0}`"
+      :title="`${bucket.name}: ${bucket.tokens}`"></span>
   </div>
   <ul class="legend">
     <li :each="bucket in view?.budget?.buckets" :key="bucket.name">
@@ -146,10 +147,12 @@
   <div class="bar">
     <span
       class="shared"
-      :attrs="{ style: `flex-grow:${view?.prefix.shared_tokens || 0}`, title: `shared: ${view?.prefix.shared_tokens}` }"></span>
+      :style="`flex-grow:${view?.prefix.shared_tokens || 0}`"
+      :title="`shared: ${view?.prefix.shared_tokens}`"></span>
     <span
       class="fresh"
-      :attrs="{ style: `flex-grow:${reuseFresh}`, title: `new: ${reuseFresh}` }"></span>
+      :style="`flex-grow:${reuseFresh}`"
+      :title="`new: ${reuseFresh}`"></span>
   </div>
   <p class="dim">
     <b>{{ reusePercent }}%</b> of this prompt was already in the previous

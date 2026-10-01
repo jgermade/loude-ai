@@ -55,16 +55,16 @@
     <div><span class="k">ended</span><b :class.warn="kept?.reason && kept.reason !== 'stop'">{{ kept?.reason || message?.reason || "—" }}</b></div>
     <div><span class="k">prompt</span><b>{{ usage ? usage.prompt_tokens : "—" }}</b></div>
     <div><span class="k">completion</span><b>{{ usage ? usage.completion_tokens : "—" }}</b></div>
-    <div :attrs="{ title: 'Completion tokens over first-token-to-end. A turn that ran tools spent part of that running them, so it is a floor.' }">
+    <div title="Completion tokens over first-token-to-end. A turn that ran tools spent part of that running them, so it is a floor.">
       <span class="k">speed</span><b>{{ speedLabel(t) || "—" }}</b>
     </div>
-    <div :attrs="{ title: 'From the turn starting to the first token — a model loading included' }">
+    <div title="From the turn starting to the first token — a model loading included">
       <span class="k">first token</span><b>{{ t.first != null ? seconds(t.first) : "—" }}</b>
     </div>
     <div><span class="k">total</span><b>{{ t.total != null ? seconds(t.total) : "—" }}</b></div>
-    <div :attrs="{ title: contextPercent !== null
+    <div :title="contextPercent !== null
            ? 'Tokens sent this turn, of the window'
-           : 'Tokens sent this turn, of a window luu does not know: set the profile\'s context-limit' }">
+           : 'Tokens sent this turn, of a window luu does not know: set the profile\'s context-limit'">
       <span class="k">context</span>
       <b :class.warn="contextPercent !== null && contextPercent >= 80">{{ contextSent }} / {{ contextWindow || "—" }}</b>
     </div>

@@ -107,7 +107,7 @@
 
       <dt :if="backend !== 'mock'">URL</dt>
       <dd :if="backend !== 'mock'">
-        <input :value="url" :attrs="{ placeholder: chosen.url }"
+        <input :value="url" :placeholder="chosen.url"
                @input="url = $event.target.value, declaration = null">
       </dd>
       <dd :if="backend !== 'mock'" class="note">
@@ -170,7 +170,7 @@
           <strong>{{ declaration.host }}</strong>, which is not this machine, and
           it would become the default. Type the host to confirm.
         </p>
-        <input :value="typed" :attrs="{ placeholder: declaration.host }"
+        <input :value="typed" :placeholder="declaration.host"
                @input="typed = $event.target.value">
       </div>
       <div class="modal-actions">

@@ -77,7 +77,7 @@
           type="button"
           class="row"
           :class.ignored="row.ignored"
-          :attrs="{ title: row.path }"
+          :title="row.path"
           @click="browseTo(row.path)">
           <svg class="ic"><use href="#i-folder"/></svg>
           <span class="name">{{ row.name }}</span>

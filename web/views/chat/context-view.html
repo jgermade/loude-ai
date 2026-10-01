@@ -46,11 +46,12 @@
   <div :if="buckets.length" class="budget">
     <div class="bar">
       <span :each="b in buckets" :key="b.name"
-            :attrs="{ style: `flex-grow:${b.tokens};background:var(--b-${b.name}, var(--dim))`, title: `${b.name}: ${b.tokens}` }"></span>
+            :style="`flex-grow:${b.tokens};background:var(--b-${b.name}, var(--dim))`"
+            :title="`${b.name}: ${b.tokens}`"></span>
     </div>
     <ul class="legend">
       <li :each="b in buckets" :key="b.name">
-        <span class="swatch" :attrs="{ style: `background:var(--b-${b.name}, var(--dim))` }"></span>
+        <span class="swatch" :style="`background:var(--b-${b.name}, var(--dim))`"></span>
         {{ b.name }} <b>{{ b.tokens }}</b>
       </li>
     </ul>
@@ -64,9 +65,9 @@
     because the trace channel was not on.
   </p>
 
-  <section :each="g in groups" :key="g.bucket" class="group" :attrs="{ 'data-bucket': g.bucket }">
+  <section :each="g in groups" :key="g.bucket" class="group" :data-bucket="g.bucket">
     <header>
-      <span class="swatch" :attrs="{ style: `background:var(--b-${g.bucket}, var(--dim))` }"></span>
+      <span class="swatch" :style="`background:var(--b-${g.bucket}, var(--dim))`"></span>
       <b :class="'b-' + g.bucket">{{ g.bucket }}</b>
       <span :if="g.tokens !== null" class="dim">{{ g.tokens }} tokens</span>
       <span class="grow"></span>
