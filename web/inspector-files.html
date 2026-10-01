@@ -36,8 +36,28 @@
   // `workspace.icons` is in the list because the manifest arrives after the
   // first listing does — without it the tree would keep the shapes it resolved
   // in the moment before the theme loaded.
-  $: rows = (workspace.open, workspace.expanded, workspace.icons,
-             flatten(workspace.root || "", 0, []))
+  //
+  // **Memoized on the four things the tree is made of.** jq79 wakes a line that
+  // read a store on a write to *any* field of it, so this ran on every
+  // `loading`, `content`, `selected` and `tabs` a file click writes — six times
+  // a click. Each run built new row objects, and `:each` replaced every `<li>`:
+  // 1008 of them for one click with two directories open, which was the lag
+  // and the scroll that moved. The same inputs now give back the same array,
+  // and the same rows. See `RECORD/2026-10-01.the-page-in-web.completed.md`.
+  //
+  // The cache is inside a closure on purpose: a top-level `let` is a field of
+  // this component's store, and writing it from the line that reads it wakes
+  // that line again — a hundred times, until jq79 gives up.
+  const tree = (() => {
+    let built = null
+    return (root, open, expanded, icons) => {
+      if (built && built.root === root && built.open === open
+          && built.expanded === expanded && built.icons === icons) return built.rows
+      built = { root, open, expanded, icons, rows: flatten(root, 0, []) }
+      return built.rows
+    }
+  })()
+  $: rows = tree(workspace.root || "", workspace.open, workspace.expanded, workspace.icons)
 
   $: selectedPath = workspace.selected?.kind === "file" ? workspace.selected.path : null
 </script>
