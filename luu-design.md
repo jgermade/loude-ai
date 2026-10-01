@@ -748,12 +748,24 @@ because they are the second half of the cached prefix and a prefix assembled
 inside the image is one that moves every time the image is rebuilt. If adding
 the container had had to touch the loop, the loop was wrong.
 
-**The container's only process is the worker.** `<runtime> run --rm -i … luu
+**The container's PID 1 is the worker.** `<runtime> run --rm -i --name … luu
 worker`, spoken to over stdio — the same transport the VSCode extension uses,
-pointed the other way. So the container's lifetime *is* the worker's: no name to
-allocate, no `docker rm` to forget, and no way to leave one running after the
-session that owned it died. One per session, not one per command, because a
-container per command is a start — on some runtimes a VM boot — per command.
+pointed the other way. So the container's lifetime *is* the worker's: no
+`docker rm` to forget, and no way to leave one running after the session that
+owned it died. One per session, not one per command, because a container per
+command is a start — on some runtimes a VM boot — per command. **The name is a
+label, not a handle**: one per worker start (`luu-worker-<pid>-<n>`), so the
+page's terminal can `exec` a shell into it, and `--rm` still removes it, name
+and all. Tool calls never `exec`. The terminal is a person outside the gate,
+and it opens **where the session's commands run**: in its container, held by
+the container and nothing else, or on this machine for a `host` or `direct`
+session — which is the whole account, so `[terminal] host` in `config.toml`
+decides who gets one (`loopback`, the default, offers it only to a browser on
+this machine; `always`; `never`). Because a runtime does not end what an
+`exec` started when its client goes, each container shell is tagged
+`LUU_TERMINAL=<id>` and ended from inside. See
+[`RECORD/2026-10-01.a-terminal-in-the-container.completed.md`](RECORD/2026-10-01.a-terminal-in-the-container.completed.md)
+and [`RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`](RECORD/2026-10-01.the-terminal-follows-the-session.completed.md).
 
 **What crosses the pipe is the policy, not the sandbox.** A resolved `Sandbox` is
 canonical paths on a filesystem the worker does not have; a `SandboxPolicy` is
@@ -885,7 +897,16 @@ access = "execute"
   URL: what may be chosen is bounded by what somebody wrote on this machine, and
   the names are read once when the server starts. **A resume may not move it** —
   a destination is where a session sends and a posture is what it may do, and its
-  jobs were approved against this one. `luu chat` and `luu stdio` are unaffected:
+  jobs were approved against this one. **The live session may, between jobs**:
+  `PUT /api/session/posture` (the terminal panel's environment picker) is refused
+  while a turn runs, a proposal waits at the gate or an approved job is open, and
+  otherwise swaps the agency, ends the old worker and writes a header line, so the
+  fold's *last header wins* says from where on the session ran somewhere else.
+  **Settings → Runtimes writes the postures table**, naming a policy file out of the
+  ones at the top of the checkout and never one the page types, and the server
+  replaces the postures it offers at once. Postures are no longer read only at
+  startup ([`RECORD/2026-10-01.runtimes-in-settings.completed.md`](RECORD/2026-10-01.runtimes-in-settings.completed.md)). See
+  [`RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`](RECORD/2026-10-01.the-terminal-follows-the-session.completed.md). `luu chat` and `luu stdio` are unaffected:
   there the process is the run, and its policy file is a flag. See
   [`RECORD/2026-09-08.a-session-picks-its-executor.completed.md`](RECORD/2026-09-08.a-session-picks-its-executor.completed.md).
   Starting the worker with the session was chosen before anyone had a number.
@@ -950,7 +971,15 @@ height, so the grid was `calc(100vh - 3rem)` — a magic number that was wrong t
 wrapped. What each 40px carries now: the inspector's head is the `luu` logo (which is a control
 — it means *back to the conversation*) and the panel tabs, its foot the chosen folder, the
 status word and **settings**; the content column's head is one tab per open thing and its foot
-that thing's own facts — and, the way VS Code does it, a single click opens a **preview** tab, in
+that thing's own facts — its icon (the tree's, with the language as its title), its path, a
+**diff button while git counts it as changed** (a modal, so the file stays on screen), and at
+the far right **the terminal**: a panel *under* that foot, with a foot of its own at the bottom
+of the column (the picker that moves the session, named by where each posture runs —
+`host`, `docker · luu-worker:dev` — with the posture and its file under each, and a runtime
+this machine lacks offered off — and a contained posture offered on every container runtime,
+since they share the image and the argv, while a host posture is offered once), holding a
+shell where the session runs, which hiding does not end
+([`RECORD/2026-10-01.the-foot-names-its-file.completed.md`](RECORD/2026-10-01.the-foot-names-its-file.completed.md)) — and, the way VS Code does it, a single click opens a **preview** tab, in
 italics, that the next single click replaces in place, while a double click (on the row, or on
 the tab) or the tree's pencil keeps it; the chat's head is the session's name, editable in place, beside
 new-session and history. Settings sits in the inspector rather than in the chat's head because

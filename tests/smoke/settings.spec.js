@@ -74,6 +74,20 @@ test.beforeAll(async () => {
   mkdirSync(snapshot, { recursive: true })
   writeFileSync(join(snapshot, "small-Q4_K_M.gguf"), "GGUF")
 
+  // A stand-in for Homebrew, first on the server's PATH, so installing a
+  // runtime from Settings is exercised without installing one on the machine
+  // that runs the suite. Its `install podman` leaves a `podman` beside it that
+  // answers `info` and has no images.
+  const brewBin = join(home, "brew-bin")
+  mkdirSync(brewBin, { recursive: true })
+  writeFileSync(
+    join(brewBin, "brew"),
+    '#!/bin/sh\necho "==> Installing $2 (stand-in)"\n' +
+      'printf \'#!/bin/sh\\ncase "$1" in info) exit 0;; *) exit 1;; esac\\n\' > "$(dirname "$0")/$2"\n' +
+      'chmod +x "$(dirname "$0")/$2"\n',
+  )
+  chmodSync(join(brewBin, "brew"), 0o755)
+
   server = spawn(
     binary(),
     [
@@ -88,6 +102,7 @@ test.beforeAll(async () => {
       env: {
         ...process.env,
         LUU_HOME: home,
+        PATH: `${join(home, "brew-bin")}:${process.env.PATH}`,
         OLLAMA_MODELS: join(home, "stores/ollama"),
         HF_HUB_CACHE: join(home, "stores/hub"),
         LLAMA_CACHE: join(home, "stores/llama.cpp"),
@@ -146,7 +161,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
   await page.click('.modal .rail button:has-text("Sessions")')
   // Resend and Authority are one section now, in this order, and the rail
   // puts Engines before Models.
-  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Engines", "Models", "Sessions"])
+  await expect(page.locator(".modal .rail button")).toHaveText(["General", "Engines", "Models", "Runtimes", "Sessions"])
   await expect(page.locator("#sessions-resend h2")).toHaveText("Resend")
   await expect(page.locator("#sessions-authority h2")).toHaveText("Authority")
 
@@ -662,4 +677,90 @@ test("the gate's mode is chosen from a dropup", async ({ page }) => {
   await face.click()
   await list.locator(".opt", { hasText: "Manual" }).click()
   await expect(face).toContainText("Manual")
+})
+
+/**
+ * Settings → Runtimes: every container runtime probed, a posture added and
+ * removed by naming a policy file out of the list, and the host shell's rule
+ * written — all of it into this suite's own `config.toml`. And the one thing
+ * this page may not do: build an image no file here names. See
+ * `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
+ */
+test("runtimes, postures and the host shell are configured from Settings", async ({ page }) => {
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Runtimes")')
+  const pane = page.locator(".runtimes-pane")
+  await expect(pane.locator(".runtime")).toHaveCount(5, { timeout: 15_000 })
+  for (const runtime of ["docker", "podman", "nerdctl", "colima", "container"]) {
+    await expect(pane.locator(".runtime header strong", { hasText: new RegExp(`^${runtime}$`) })).toHaveCount(1)
+  }
+  const config = () => readFileSync(join(home, "config.toml"), "utf8")
+
+  // A posture, named by a policy file out of the list — this checkout's.
+  await pane.locator('button.add:has-text("+ posture")').click()
+  await pane.locator('.adding input[placeholder="name"]').fill("boxed")
+  await pane.locator(".adding select").selectOption("luu.container.toml")
+  await pane.locator('.adding button:has-text("add")').click()
+  await expect(pane.locator(".postures dt", { hasText: "boxed" })).toHaveCount(1)
+  expect(config()).toContain("[posture.boxed]")
+  expect(config()).toContain('policy = "luu.container.toml"')
+  // And offered at once, without a restart.
+  const offered = await (await fetch(`${BASE}/api/postures`)).json()
+  expect(Object.keys(offered.postures)).toContain("boxed")
+  await pane.locator(".postures .row", { hasText: "boxed" }).locator('button:has-text("remove")').click()
+  await expect(pane.locator(".postures dt", { hasText: "boxed" })).toHaveCount(0)
+  expect(config()).not.toContain("[posture.boxed]")
+
+  // A path out of the list is refused, from the route itself.
+  const typed = await fetch(`${BASE}/api/postures`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ postures: { wide: { policy: "/etc/anything.toml" } } }),
+  })
+  expect(typed.status).toBe(422)
+  // And so is an image no policy file here names.
+  const built = await fetch(`${BASE}/api/runtimes/docker/build`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: "somebody/else:latest" }),
+  })
+  expect(built.status).toBe(400)
+  expect(await built.text()).toContain("no policy file here names")
+
+  // Installed from here, where Homebrew can: macOS only, and with the
+  // stand-in above rather than the real thing.
+  if (process.platform === "darwin") {
+    const podman = pane.locator(".runtime", { has: page.locator("header strong", { hasText: /^podman$/ }) })
+    await expect(podman.locator(".hint code")).toContainText("brew-bin/brew install podman")
+    // The three that need an administrator say so, with no button.
+    const docker = pane.locator(".runtime", { has: page.locator("header strong", { hasText: /^container$/ }) })
+    await expect(docker.locator('button:has-text("install")')).toHaveCount(0)
+    await expect(docker).toContainText("not from here: its package needs an administrator")
+    await podman.locator('button:has-text("install")').click()
+    // When the task ends the runtimes are asked again: installed, answering,
+    // and with the image the policy files name not built yet.
+    await expect(podman.locator(".state").first()).toHaveText("answering", { timeout: 15_000 })
+    await expect(podman.locator(".images")).toContainText("not built")
+    await expect(podman.locator('.images button:has-text("build")')).toHaveCount(1)
+  }
+
+  // The host shell, closed and opened again.
+  await pane.locator('.hosts label:has-text("Nobody") input').check()
+  await expect.poll(config).toContain('host = "never"')
+  const shut = await (await fetch(`${BASE}/api/terminal`)).json()
+  expect(shut.available).toBe(false)
+  expect(shut.reason).toContain("never")
+  await pane.locator('.hosts label:has-text("This machine") input').check()
+  // The default is written as no table at all.
+  await expect.poll(config).not.toContain("[terminal]")
+
+  expect(errors, "the page logged errors").toEqual([])
 })

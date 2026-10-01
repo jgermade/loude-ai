@@ -1,10 +1,12 @@
 # `luu-worker`: level 3 of the sandbox ladder, in its development posture.
 #
-# The container's only process is `luu worker`, which is what the host talks to
-# over stdio. Its lifetime is therefore the session's, `--rm` and a closed stdin
-# are the whole of the cleanup, and there is no way to leave one running after
-# the session that owned it died. See
-# RECORD/2026-09-02.the-worker-and-the-seam.completed.md.
+# The container's PID 1 is `luu worker`, which is what the host talks to over
+# stdio. Its lifetime is therefore the session's, `--rm` and a closed stdin are
+# the whole of the cleanup, and there is no way to leave one running after the
+# session that owned it died. See
+# RECORD/2026-09-02.the-worker-and-the-seam.completed.md. The page's terminal
+# `exec`s a shell into it by name — `bash`, which the rust image carries, or
+# `sh` — see RECORD/2026-10-01.a-terminal-in-the-container.completed.md.
 #
 # Build it, and point a session at it:
 #

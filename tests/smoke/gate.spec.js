@@ -515,7 +515,7 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(16)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(21)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip. The live session cannot be deleted — the
@@ -824,7 +824,11 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
     const { showFile } = await import("./lib/workspace.js")
     await showFile("crates/luu/src/highlight.rs")
   })
-  await expect(page.locator(".content .col-foot .lang")).toHaveText("rust")
+  // The language is the foot's title now, under the file's icon rather than
+  // beside it as a word — and the icon is the tree's: the page's own shape,
+  // with no theme. See `RECORD/2026-10-01.the-foot-names-its-file.completed.md`.
+  await expect(page.locator(".content .col-foot .path")).toHaveAttribute("title", "rust")
+  await expect(page.locator('.content .col-foot svg.kind use[href="#i-file"]')).toHaveCount(1)
   // Longer than the viewer's first block, which is what makes this worth
   // asserting: the page renders a screenful and fills in the rest one frame
   // later, so a tail that never arrives leaves a file that looks whole and is
@@ -845,7 +849,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
     const { showFile } = await import("./lib/workspace.js")
     await showFile("Makefile")
   })
-  await expect(page.locator(".content .col-foot .lang")).toHaveText("make")
+  await expect(page.locator(".content .col-foot .path")).toHaveAttribute("title", "make")
   await expect(page.locator(".content code.hl-function").first()).toBeVisible()
 
   // A file with no grammar takes the same path out: lines, no language.
@@ -854,7 +858,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
     await showFile(".gitignore")
   })
   await expect(page.locator(".content .col-foot .path")).toHaveText(".gitignore")
-  await expect(page.locator(".content .col-foot .lang")).toHaveCount(0)
+  await expect(page.locator(".content .col-foot .path")).toHaveAttribute("title", "")
   await expect(page.locator(".content .code-rows li").first()).toBeVisible()
 
   expect(errors, "the page logged errors").toEqual([])

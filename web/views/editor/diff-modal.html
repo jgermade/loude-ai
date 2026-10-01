@@ -1,0 +1,72 @@
+<script :setup>
+  // One file's changes, opened from the content column's foot without leaving
+  // the file on screen. The diff tab is still there for reading a diff at the
+  // column's width; this is the glance. See
+  // `RECORD/2026-10-01.the-foot-names-its-file.completed.md`.
+  const { workspace, readDiff } = await import("@web/lib/workspace.js")
+  const { ui, closeDiff } = await import("@web/lib/ui.js")
+  const Modal = await import("@web/components/modal.html")
+  const Hunks = await import("./hunks.html")
+
+  // Git's two columns: the index, then the working tree. The side that opens
+  // is the one with something in it — a file staged whole has no working-tree
+  // diff, and opening on an empty answer reads as "no changes".
+  const code = workspace.status[ui.diff] || ""
+  let staged = code[1] === " " && code[0] !== " " && code[0] !== "?"
+  let hunks = []
+  let note = ""
+  let failed = ""
+
+  // Asked again when git's status is replaced, which is how this follows the
+  // disk: the status is re-read after every batch of changes the server
+  // reports. Memoized on what the question is made of, because jq79 wakes this
+  // line on a write to *any* field of `workspace` and a click elsewhere is not
+  // a reason to ask git again. See `views/inspector/tree/tree.html`.
+  const asking = (() => {
+    let last = null
+    return (path, side, status) => {
+      if (!path || (last && last.path === path && last.side === side && last.status === status)) return path
+      last = { path, side, status }
+      readDiff(path, side).then(diff => {
+        if (last.path !== path || last.side !== side) return
+        hunks = diff.hunks || []
+        note = diff.note || ""
+        failed = ""
+      }, e => { failed = `Could not diff ${path}: ${e.message}` })
+      return path
+    }
+  })()
+  $: asked = asking(ui.diff, staged, workspace.status)
+</script>
+
+<Modal :title="ui.diff" width="64rem" @close="closeDiff()">
+  <template :slot.head>
+    <!-- Both sides, for the reason the diff tab's foot has both: a panel that
+         shows one silently lies by omission when the other exists. -->
+    <span class="which">
+      <button type="button" :class.on="!staged" @click="staged = false">working tree</button>
+      <button type="button" :class.on="staged" @click="staged = true">staged</button>
+    </span>
+  </template>
+  <section class="body">
+    <p :if="failed" class="err">{{ failed }}</p>
+    <Hunks :if="!failed" :hunks="hunks" :note="note" />
+  </section>
+</Modal>
+
+<style scoped>
+  .body { overflow: auto; }
+  .which { display: flex; gap: .2rem; }
+  .which button {
+    background: none;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 11px;
+    padding: .05rem .4rem;
+    cursor: pointer;
+  }
+  .which button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .err { color: var(--bad); font-size: 12px; padding: .8rem 1rem; margin: 0; }
+</style>

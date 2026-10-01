@@ -40,6 +40,7 @@ fn options_for(replies: Vec<String>) -> StdioOptions {
         // Over stdio the process is the session: nothing here chooses a
         // posture, so there is nothing to build one from and nothing to offer.
         agency_for: None,
+        describe_for: None,
         postures: Default::default(),
         postures_path: None,
         // `named`: a destination handed to the server, which it keeps. One

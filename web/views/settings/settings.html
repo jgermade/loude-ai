@@ -13,6 +13,7 @@
   const SettingsGeneral = await import("./general/general.html")
   const SettingsModels = await import("./models/models.html")
   const SettingsEngines = await import("./engines/engines.html")
+  const SettingsRuntimes = await import("./runtimes/runtimes.html")
   const SettingsSessions = await import("./sessions/sessions.html")
   const Rail = await import("@web/components/rail.html")
 
@@ -23,6 +24,10 @@
     { value: "general", label: "General", icon: "i-sliders" },
     { value: "engines", label: "Engines", icon: "i-chip" },
     { value: "models", label: "Models", icon: "i-server" },
+    // Where a session's commands run: the container runtimes, their images,
+    // the postures and the host shell. Beside Sessions, because a posture is
+    // chosen per session. See `runtimes/runtimes.html`.
+    { value: "runtimes", label: "Runtimes", icon: "i-box" },
     { value: "sessions", label: "Sessions", icon: "i-repeat" },
   ]
 
@@ -135,6 +140,8 @@
              :aria-hidden="String(shown !== 'general')"><SettingsGeneral /></div>
         <div :if="mounted('engines')" class="section" data-section="engines" :class="phase('engines')"
              :aria-hidden="String(shown !== 'engines')"><SettingsEngines /></div>
+        <div :if="mounted('runtimes')" class="section" data-section="runtimes" :class="phase('runtimes')"
+             :aria-hidden="String(shown !== 'runtimes')"><SettingsRuntimes /></div>
         <div :if="mounted('models')" class="section" data-section="models" :class="phase('models')"
              :aria-hidden="String(shown !== 'models')"><SettingsModels /></div>
         <div :if="mounted('sessions')" class="section" data-section="sessions" :class="phase('sessions')"

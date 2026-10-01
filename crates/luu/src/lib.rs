@@ -40,10 +40,13 @@ pub mod icons;
 pub mod log;
 pub mod models;
 pub mod provider;
+pub mod runtimes;
 pub mod secret;
 pub mod serve;
 pub mod session;
 pub mod store;
+#[cfg(unix)]
+pub mod terminal;
 pub mod workspace;
 use clap::{Parser, Subcommand, ValueEnum};
 use tokio::io::{AsyncWriteExt, stdout};
@@ -1148,6 +1151,102 @@ impl SandboxArgs {
         }
     }
 
+    /// The `[worker]` block of a policy file, and the flags over it. A
+    /// `luu.toml` from before this existed has no block and resolves to
+    /// `host`, which is the run every measurement in this repository was made
+    /// under.
+    fn worker_config(&self, path: &std::path::Path) -> Result<WorkerConfig> {
+        let mut worker_config = match path.exists() {
+            true => WorkerConfig::from_file(path)
+                .with_context(|| format!("reading {}", path.display()))?,
+            false => WorkerConfig::default(),
+        };
+        if let Some(runtime) = self.worker {
+            worker_config.runtime = runtime;
+        }
+        if self.worker_image.is_some() {
+            worker_config.image = self.worker_image.clone();
+        }
+        if let Some(timeout_ms) = self.worker_timeout_ms {
+            worker_config.timeout_ms = timeout_ms;
+        }
+        Ok(worker_config)
+    }
+
+    /// Where a posture would run, **without building it**: the `[worker]`
+    /// block and the flags over it, and whether this machine has the runtime.
+    /// Building is what starts a container, and a picker that started one per
+    /// option to say what each one is would be a picker that cost a VM boot to
+    /// open. An image that is not built is not caught here — that needs the
+    /// runtime to answer, and the move itself says so when it is refused. See
+    /// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+    ///
+    /// `runtime` is a variant: the same file on another container runtime,
+    /// the way `--worker` moves every posture at once. The caller only asks it
+    /// of a posture that is already contained.
+    pub(crate) fn describe_posture(
+        &self,
+        policy: Option<&std::path::Path>,
+        runtime: Option<agent_core::worker::Runtime>,
+    ) -> serve::Where {
+        let path = match policy {
+            Some(path) => Ok(path.to_path_buf()),
+            None => self.policy_path(),
+        };
+        let shown = |path: &std::path::Path| match path.exists() {
+            true => path.display().to_string(),
+            false => format!("{} (absent: the built-in policy)", path.display()),
+        };
+        let (path, config) = match path {
+            Ok(path) => {
+                let config = self.worker_config(&path).map(|mut config| {
+                    if let Some(runtime) = runtime {
+                        config.runtime = runtime;
+                    }
+                    config
+                });
+                (path, config)
+            }
+            Err(error) => {
+                return serve::Where {
+                    policy: String::new(),
+                    runtime: "host".into(),
+                    image: None,
+                    missing: Some(format!("{error:#}")),
+                    gap: None,
+                };
+            }
+        };
+        match config {
+            Err(error) => serve::Where {
+                policy: shown(&path),
+                runtime: "host".into(),
+                image: None,
+                missing: Some(format!("{error:#}")),
+                gap: None,
+            },
+            Ok(config) => {
+                let contained = config.runtime.is_contained();
+                let missing = match config.runtime.program() {
+                    Some(program) if agent_core::worker::which(program).is_none() => {
+                        Some(format!("`{program}` is not installed on this machine"))
+                    }
+                    Some(_) if config.image.is_none() => {
+                        Some("the policy file names no [worker] image".to_string())
+                    }
+                    _ => None,
+                };
+                serve::Where {
+                    policy: shown(&path),
+                    runtime: config.runtime.as_str().to_string(),
+                    image: config.image.filter(|_| contained),
+                    missing,
+                    gap: config.runtime.cannot().map(str::to_string),
+                }
+            }
+        }
+    }
+
     /// The same resolution, against a policy file a *session* named rather than
     /// the one this process was started with.
     ///
@@ -1155,15 +1254,25 @@ impl SandboxArgs {
     /// the enforcement override, the worker runtime and image — means what it
     /// meant, and the rule that an explicit policy file must exist is the same
     /// rule. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
-    pub(crate) async fn resolve_posture(&self, policy: Option<&std::path::Path>) -> Result<Agency> {
-        match policy {
-            None => self.resolve().await,
-            Some(path) => {
-                let mut args = self.clone();
-                args.sandbox = Some(path.to_path_buf());
-                args.resolve().await
-            }
+    ///
+    /// `runtime` is a variant, as in [`SandboxArgs::describe_posture`]: the
+    /// `--worker` flag, for one session.
+    pub(crate) async fn resolve_posture(
+        &self,
+        policy: Option<&std::path::Path>,
+        runtime: Option<agent_core::worker::Runtime>,
+    ) -> Result<Agency> {
+        if policy.is_none() && runtime.is_none() {
+            return self.resolve().await;
         }
+        let mut args = self.clone();
+        if let Some(path) = policy {
+            args.sandbox = Some(path.to_path_buf());
+        }
+        if runtime.is_some() {
+            args.worker = runtime;
+        }
+        args.resolve().await
     }
 
     async fn resolve(&self) -> Result<Agency> {
@@ -1201,24 +1310,7 @@ impl SandboxArgs {
             };
         }
 
-        // The `[worker]` block of the same file, and the flags over it. A
-        // `luu.toml` from before this existed has no block and resolves to
-        // `host`, which is the run every measurement in this repository was
-        // made under.
-        let mut worker_config = match path.exists() {
-            true => WorkerConfig::from_file(&path)
-                .with_context(|| format!("reading {}", path.display()))?,
-            false => WorkerConfig::default(),
-        };
-        if let Some(runtime) = self.worker {
-            worker_config.runtime = runtime;
-        }
-        if self.worker_image.is_some() {
-            worker_config.image = self.worker_image.clone();
-        }
-        if let Some(timeout_ms) = self.worker_timeout_ms {
-            worker_config.timeout_ms = timeout_ms;
-        }
+        let worker_config = self.worker_config(&path)?;
 
         let sandbox = Sandbox::new(&policy, &base)?;
         let worker = match worker_config.runtime.is_worker() {
@@ -2318,13 +2410,27 @@ pub async fn run() -> Result<()> {
             // next run.
             postures: postures.clone(),
             postures_path: postures_path.clone(),
+            describe_for: Some({
+                let args = sandbox_args.clone();
+                std::sync::Arc::new(
+                    move |policy: Option<std::path::PathBuf>,
+                          runtime: Option<agent_core::worker::Runtime>| {
+                        args.describe_posture(policy.as_deref(), runtime)
+                    },
+                )
+            }),
             agency_for: Some({
                 let args = sandbox_args.clone();
-                std::sync::Arc::new(move |policy: Option<std::path::PathBuf>| {
-                    let args = args.clone();
-                    Box::pin(async move { args.resolve_posture(policy.as_deref()).await })
-                        as futures_util::future::BoxFuture<'static, Result<_>>
-                })
+                std::sync::Arc::new(
+                    move |policy: Option<std::path::PathBuf>,
+                          runtime: Option<agent_core::worker::Runtime>| {
+                        let args = args.clone();
+                        Box::pin(
+                            async move { args.resolve_posture(policy.as_deref(), runtime).await },
+                        )
+                            as futures_util::future::BoxFuture<'static, Result<_>>
+                    },
+                )
             }),
             temperature,
             seed,
@@ -2440,6 +2546,7 @@ pub async fn run() -> Result<()> {
             // `None`: over stdio the process *is* the session, so its policy
             // file is a flag and a session has nothing to choose.
             agency_for: None,
+            describe_for: None,
             postures: Default::default(),
             postures_path: None,
             temperature,
@@ -3173,6 +3280,51 @@ mod tests {
     /// unreachable from a command line. The test pins all of it — including the
     /// half that is a limitation rather than a feature — because a precedence
     /// nobody wrote down is one somebody discovers by being surprised.
+    /// A posture is described by its `[worker]` block without being built,
+    /// and a runtime this machine does not have is named rather than offered.
+    #[test]
+    fn a_posture_says_where_it_would_run_without_starting_anything() {
+        #[derive(clap::Parser)]
+        struct Line {
+            #[command(flatten)]
+            sandbox: SandboxArgs,
+        }
+        use clap::Parser;
+        let dir = std::env::temp_dir().join(format!("luu-describe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let host = dir.join("host.toml");
+        std::fs::write(&host, "[sandbox]\n").expect("a policy file");
+        // Apple's runtime: on no Linux runner and not on this Mac, so absent
+        // wherever this runs today.
+        let apple = dir.join("apple.toml");
+        std::fs::write(
+            &apple,
+            "[worker]\nruntime = \"container\"\nimage = \"luu-worker:dev\"\n",
+        )
+        .expect("a policy file");
+
+        let args = Line::parse_from(["luu", "--sandbox", &host.display().to_string()]).sandbox;
+        let own = args.describe_posture(None, None);
+        assert_eq!(own.runtime, "host");
+        assert_eq!(own.missing, None, "{own:?}");
+        assert!(own.policy.ends_with("host.toml"), "{own:?}");
+
+        let there = args.describe_posture(Some(&apple), None);
+        assert_eq!(there.runtime, "container");
+        assert_eq!(there.image.as_deref(), Some("luu-worker:dev"));
+        if agent_core::worker::which("container").is_none() {
+            assert!(
+                there
+                    .missing
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("not installed"),
+                "{there:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_flag_beats_the_file_and_only_repeat_can_be_turned_off_again() {
         let table = |repeat, prune, results| crate::provider::Resend {

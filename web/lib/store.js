@@ -208,6 +208,10 @@ function url(path) {
   return `${scheme}//${location.host}${path}${query}`
 }
 
+/// A socket on this server, with the token when there is one. Exported for
+/// the terminal panel's socket, for `apiHeaders`'s reason.
+export const socketUrl = path => url(path)
+
 /// The read side, with the token when there is one.
 /// Exported so the workspace panels authenticate the same way the rest of the
 /// page does. One place knows how this port is reached; a second copy of this

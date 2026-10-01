@@ -49,6 +49,10 @@
   /* The repository map: prefix, like the two above it, and a shade of the
      same family — what the bar shows as prefix should read as one region. */
   --b-map: #1a8fa8;
+  /* Something that is well: a session ready, a runtime answering, an image
+     built. The history bucket's green, because it is the page's one green
+     and a second would be a palette of its own. */
+  --ok: #9ece6a;
   --b-history: #9ece6a;
   /* Folded history: the same colour, darker. A closed task is history that
      was compressed, and the bar should say so without a second reading. */
@@ -102,6 +106,7 @@
   --b-system: #2f5bbd;
   --b-tools: #0b7185;
   --b-map: #075a6b;
+  --ok: #4a7a1c;
   --b-history: #4a7a1c;
   --b-summaries: #33561a;
   --b-code: #6f3fb5;

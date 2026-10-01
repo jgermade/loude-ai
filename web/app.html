@@ -7,10 +7,11 @@
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
   const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
-  const { workspace, loadRoot, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
+  const { workspace, loadRoot, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff, iconFor } =
     await import("@web/lib/workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel,
-          watchTurnEngine, inspect, LOADING, openContext } = await import("@web/lib/ui.js")
+          watchTurnEngine, inspect, LOADING, openContext, openDiff, toggleTerminal } = await import("@web/lib/ui.js")
+  const { terminal, loadTerminal } = await import("@web/lib/terminal.js")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
   const { modelLabel } = await import("@web/lib/engines.js")
   const Segmented = await import("@web/components/segmented.html")
@@ -55,6 +56,8 @@
   const ToolCall = await import("@web/views/chat/tool-call.html")
   const TurnInspect = await import("@web/views/chat/turn-inspect.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
+  const DiffModal = await import("@web/views/editor/diff-modal.html")
+  const TerminalPanel = await import("@web/views/editor/terminal.html")
   const { segments } = await import("@web/helpers/segments.js")
 
   connect()
@@ -389,6 +392,42 @@
   // one file at a time.
   $: picked = workspace.selected
   $: shown = workspace.content
+  // The tab's own file, by the tree's rules: a debug tab has a title and no
+  // file, so it gets the page's shape.
+  $: footIcon = picked && picked.kind !== "debug"
+    ? iconFor(picked.path.split("/").pop() || picked.path, false)
+    : null
+  // A file git counts as changed. Not on a diff tab, which already is one.
+  $: footChanged = picked?.kind === "file" && !!workspace.status[picked.path]
+
+  // Whether the live session has a container to open a shell in. Asked again
+  // when the session or its posture moves, and memoized on those, because
+  // jq79 wakes this line on a write to any field of `state`. Not until the
+  // socket has said there is a server, and never in a replay: the static twin
+  // answers `/api/terminal` with a 404 in the console.
+  const terminalFor = (() => {
+    let last = null
+    return (live, key) => {
+      if (live && key !== last) {
+        last = key
+        loadTerminal()
+      }
+      return key
+    }
+  })()
+  $: terminalAsked = terminalFor(
+    !!state.session && state.status !== "connecting" && state.status !== "replay",
+    `${state.session}|${state.settings?.posture?.runtime}`,
+  )
+  $: terminalReady = !!terminal.info?.available
+  $: terminalTitle = terminalReady
+    ? (ui.terminal
+        ? "Hide the terminal"
+        : (terminal.info?.place === "container"
+            ? "Open a terminal in the session's container"
+            : "Open a terminal on this machine, where the session runs"))
+    : `No terminal: ${terminal.info?.reason
+        || (state.status === "replay" ? "a recording has no container to open one in" : "asking the server…")}`
 
   // Everything the debug panel computes moved with it into
   // `views/inspector/debug/debug.html`, which reads the same store directly.
@@ -463,6 +502,17 @@
   </symbol>
   <!-- The two-column toggle: what the other column would be. A speech bubble
        for the chat, a page for the content. -->
+  <!-- The foot's two: a plus over a minus for what git counts as changed, and
+       a prompt in a window for the terminal. -->
+  <symbol id="i-diff" viewBox="0 0 24 24"><path d="M12 4.5v7M8.5 8h7M8.5 17.5h7"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7 9.5 3 2.5-3 2.5M12.5 15H17"/></symbol>
+  <!-- The terminal foot's two: a bin for ending the shell, which is what
+       ends it for good, and a chevron down for putting the panel away, which
+       does not. Different shapes because they are different promises. -->
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.8 12.2A1.5 1.5 0 0 0 8.8 20.6h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7M10.2 10.5v6.5M13.8 10.5v6.5"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6.5 9.5 5.5 5.5 5.5-5.5"/></symbol>
+  <!-- Settings → Runtimes: a box, for what a container is. -->
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 3.5 19.5 7.5v9L12 20.5 4.5 16.5v-9z"/><path d="M4.5 7.5 12 11.5l7.5-4M12 11.5v9"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.5 12a7.5 7.5 0 0 1-7.5 7.5H4.5l2.1-2.8A7.5 7.5 0 1 1 20.5 12Z"/></symbol>
 </svg>
 
@@ -559,9 +609,20 @@
     <div class="col-main"><ContentViewer /></div>
 
     <footer class="col-foot">
-      <span :if="picked" class="path">{{ picked?.path }}</span>
+      <!-- What the file is, as the tree draws it rather than as a word: the
+           theme's icon where it has one, this page's shape where it has none.
+           The language name it replaced is still the icon's title. -->
+      <img :if="footIcon" class="kind" :src="`./api/icons/${footIcon}?r=${workspace.icons.revision || 0}`"
+           alt="" :title="shown?.language || ''">
+      <svg :if="picked && !footIcon" class="ic kind"><use :href="picked?.kind === 'debug' ? '#i-sliders' : '#i-file'"/></svg>
+      <span :if="picked" class="path" :title="shown?.language || ''">{{ picked?.path }}</span>
       <span :if="!picked" class="dim small">no file open</span>
-      <span :if="shown?.language" class="lang small dim">{{ shown?.language }}</span>
+      <!-- Only where git says the file changed, and as a glance: the modal
+           leaves the file on screen, which a diff tab would not. -->
+      <button :if="footChanged" type="button" class="foot-btn" title="Show the changes (git diff)"
+              @click="openDiff(picked?.path)">
+        <svg class="ic"><use href="#i-diff"/></svg>
+      </button>
       <!-- How much of the file this is, not just that it is not all of it: the
            server counts the lines before it cuts, so the panel can say what it
            is leaving out instead of leaving the reader to wonder. -->
@@ -577,9 +638,22 @@
       </span>
       <button :if="picked?.kind === 'diff'" type="button" class="link"
               @click="showFile(picked?.path)">open the file</button>
-      <button :if="picked?.kind === 'file'" type="button" class="link"
-              @click="showDiff(picked?.path, false)">diff it</button>
+      <!-- At the far right, whatever is open or not: a shell where the
+           session's commands run, its container or this machine. Off, and
+           saying why, only where `[terminal] host` keeps a host shell from
+           this request. See
+           `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`. -->
+      <button type="button" class="foot-btn term" :class.on="ui.terminal"
+              :aria-disabled="!terminalReady && !ui.terminal"
+              :title="terminalTitle"
+              @click="(terminalReady || ui.terminal) && toggleTerminal()">
+        <svg class="ic"><use href="#i-terminal"/></svg>
+      </button>
     </footer>
+    <!-- Under the file's foot, so the foot stays with the file it describes
+         and the terminal reads as a second thing below it, with a foot of its
+         own. Hiding it leaves the shell running. -->
+    <TerminalPanel :if="ui.terminal" />
   </section>
 
   <!-- The conversation. No tabs: one session is on screen, and its name says
@@ -1018,6 +1092,7 @@
 <SessionStarter :if="ui.starter" />
 <TurnInspect :if="ui.inspecting != null" />
 <ContextModal :if="ui.contextOpen" />
+<DiffModal :if="ui.diff" />
 
 <!-- The shell's own styles, and nothing else's. `scoped` rewrites every
      selector below to also match `[data-jq79="…"]`, the attribute jq79 stamps
@@ -1217,8 +1292,26 @@
     cursor: pointer;
   }
   .which button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .content .col-foot .kind { width: 14px; height: 14px; flex: none; }
+  .foot-btn {
+    display: flex;
+    flex: none;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    padding: .2rem;
+    cursor: pointer;
+  }
+  .foot-btn:hover, .foot-btn.on { color: var(--fg); background: var(--bg); }
+  .foot-btn .ic { width: 14px; height: 14px; }
+  /* The last thing in the foot, pushed right by itself: the controls before
+     it keep their own places whether or not a diff tab drew them. */
+  .foot-btn.term { margin-left: auto; }
+  .which ~ .foot-btn.term { margin-left: 0; }
+  .foot-btn[aria-disabled="true"] { opacity: .4; cursor: default; }
+  .foot-btn[aria-disabled="true"]:hover { color: var(--dim); background: none; }
   .content .col-foot .link { font-size: 12px; flex: none; }
-  .content .col-foot > .link:not(.which ~ .link) { margin-left: auto; }
 
   /* ---- the inspector's foot: which folder ------------------------------- */
   .root {
@@ -1254,6 +1347,7 @@
   }
   .cog:hover { color: var(--fg); background: var(--bg); }
   .cog .ic { width: 14px; height: 14px; }
+  .status.ready { color: var(--ok); }
   .status.running { color: var(--accent); }
   .status.replay { color: var(--warn); }
   .status.closed { color: var(--bad); }

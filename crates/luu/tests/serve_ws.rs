@@ -178,6 +178,24 @@ fn agency_factory() -> luu::serve::AgencyFactory {
     agency_factory_rooted(std::env::current_dir().expect("the working directory"))
 }
 
+/// Where a posture would run, as the picker shows it: the policy file's
+/// `[worker]` block and nothing else, like the binary's own.
+fn describe_factory() -> luu::serve::DescribeFactory {
+    Arc::new(
+        |policy: Option<std::path::PathBuf>, runtime: Option<agent_core::worker::Runtime>| {
+            let path = policy.unwrap_or_else(|| "luu.toml".into());
+            let config = agent_core::worker::WorkerConfig::from_file(&path).unwrap_or_default();
+            luu::serve::Where {
+                policy: path.display().to_string(),
+                runtime: runtime.unwrap_or(config.runtime).as_str().to_string(),
+                image: config.image,
+                missing: None,
+                gap: None,
+            }
+        },
+    )
+}
+
 /// The same, over a tree the caller names.
 ///
 /// A resume resolves a **fresh** agency rather than keeping the one the server
@@ -187,7 +205,9 @@ fn agency_factory() -> luu::serve::AgencyFactory {
 /// `window.rs` under this package instead of under the tree it had read it
 /// from.
 fn agency_factory_rooted(base: std::path::PathBuf) -> luu::serve::AgencyFactory {
-    Arc::new(move |policy: Option<std::path::PathBuf>| {
+    // The runtime is not honoured here: no test builds a worker, and what the
+    // routes decide about a variant is decided before this is called.
+    Arc::new(move |policy: Option<std::path::PathBuf>, _runtime| {
         let base = base.clone();
         Box::pin(async move {
             let policy = match policy {
@@ -272,6 +292,7 @@ async fn server_storing_selecting(
         auth_token_file: None,
         store: Some(path.to_path_buf()),
         agency_for: Some(agency_factory_rooted(base.clone())),
+        describe_for: None,
         postures: Default::default(),
         postures_path: None,
     })
@@ -405,6 +426,7 @@ async fn server_with_postures(
         auth_token_file,
         store,
         agency_for: Some(agency_factory()),
+        describe_for: Some(describe_factory()),
         postures,
         postures_path: Some("config.toml".into()),
     })
@@ -730,6 +752,240 @@ async fn the_page_and_the_missing_page() {
         .await
         .expect("the request");
     assert_eq!(missing.status(), 404);
+}
+
+/// The terminal opens where the session's commands run, and only for this
+/// server's page.
+///
+/// This server runs its tools on the host and is bound on loopback, so the
+/// default `[terminal] host = "loopback"` offers a shell here — opened, typed
+/// into, and read back. An upgrade from any other origin, or none, is refused
+/// before anything is asked: a WebSocket is not covered by CORS, so `Origin`
+/// is the only thing between a site in another tab and a shell. See
+/// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+#[tokio::test]
+async fn the_terminal_opens_where_the_session_runs_and_only_for_this_page() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let address = server().await;
+
+    let view = get(&address, "/api/terminal").await;
+    assert_eq!(view["available"], true, "{view}");
+    assert_eq!(view["place"], "host", "{view}");
+
+    let upgrade = |origin: Option<String>| {
+        let mut request = reqwest::Client::new()
+            .get(format!("http://{address}/ws/terminal"))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+        if let Some(origin) = origin {
+            request = request.header("Origin", origin);
+        }
+        request.send()
+    };
+    let other = upgrade(Some("https://example.com".into()))
+        .await
+        .expect("sent");
+    assert_eq!(other.status(), 403);
+    assert!(other.text().await.unwrap().contains("Origin"));
+    let none = upgrade(None).await.expect("sent");
+    assert_eq!(none.status(), 403);
+
+    // Its own page: a shell, on a PTY, that does what it is told.
+    let mut request = format!("ws://{address}/ws/terminal")
+        .into_client_request()
+        .expect("a request");
+    request.headers_mut().insert(
+        "Origin",
+        format!("http://{address}").parse().expect("a header"),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("the terminal's handshake");
+    // Arithmetic, so the line that comes back is the shell's and not the echo
+    // of what was typed.
+    socket
+        .send(WsMessage::Binary(b"echo LUU_$((40+2))\n".to_vec().into()))
+        .await
+        .expect("typed");
+    let mut seen = String::new();
+    let found = tokio::time::timeout(PATIENCE, async {
+        while let Some(Ok(frame)) = socket.next().await {
+            if let WsMessage::Binary(bytes) = frame {
+                seen.push_str(&String::from_utf8_lossy(&bytes));
+                if seen.contains("LUU_42") {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+    .await;
+    assert!(
+        matches!(found, Ok(true)),
+        "the shell never answered: {seen:?}"
+    );
+    let _ = socket.close(None).await;
+}
+
+/// The live session moves to another posture between jobs, and never inside
+/// one.
+///
+/// What went wrong when a posture moved under a session was something
+/// approved under one carried into another — so a proposal at the gate and an
+/// approved job are refusals, and a session with neither moves and says where
+/// it went. See `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+#[tokio::test]
+async fn the_live_session_moves_between_postures_between_jobs() {
+    let dir = std::env::temp_dir().join(format!("luu-move-posture-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a directory for the policy file");
+    let policy = dir.join("wide.toml");
+    std::fs::write(
+        &policy,
+        "[sandbox]\nnetwork = true\n\n[[sandbox.paths]]\npath = \".\"\naccess = \"read-write\"\n",
+    )
+    .expect("a policy file");
+    // A contained posture too, for its variants. The test factory never
+    // starts its worker; only what the routes decide is under test.
+    let boxed = dir.join("boxed.toml");
+    std::fs::write(
+        &boxed,
+        "[worker]\nruntime = \"podman\"\nimage = \"luu-worker:dev\"\n",
+    )
+    .expect("a policy file");
+    let mut postures = std::collections::BTreeMap::new();
+    postures.insert(
+        "wide".to_string(),
+        luu::provider::Posture {
+            policy: policy.clone(),
+        },
+    );
+    postures.insert(
+        "boxed".to_string(),
+        luu::provider::Posture { policy: boxed },
+    );
+    let address = server_with_postures(
+        vec![PLAN.into(), ANSWER.into()],
+        Duration::ZERO,
+        SandboxPolicy::default(),
+        Budget::new(0, 0, Eviction::Turn),
+        None,
+        Approvers::default(),
+        postures,
+        None,
+        None,
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let mv = |posture: Value| {
+        client
+            .put(format!("http://{address}/api/session/posture"))
+            .json(&serde_json::json!({ "posture": posture }))
+            .send()
+    };
+
+    // Each posture is named by where it would run, read from its file
+    // without starting anything — the terminal's picker.
+    let offered = get(&address, "/api/postures").await;
+    assert_eq!(offered["places"]["wide"][0]["runtime"], "host", "{offered}");
+    // A host posture has no variants: its paths are on this machine.
+    assert_eq!(
+        offered["places"]["wide"].as_array().map(Vec::len),
+        Some(1),
+        "{offered}"
+    );
+    assert!(offered["own"][0]["runtime"].is_string(), "{offered}");
+    // A contained one is offered on every container runtime, its own first.
+    let boxed = &offered["places"]["boxed"];
+    let runtimes: Vec<&str> = boxed
+        .as_array()
+        .expect("variants")
+        .iter()
+        .filter_map(|place| place["runtime"].as_str())
+        .collect();
+    assert_eq!(
+        runtimes,
+        ["podman", "docker", "nerdctl", "colima", "container"],
+        "{offered}"
+    );
+
+    // A variant is a word out of five, and only between containers.
+    let vary = |posture: &str, runtime: &str| {
+        client
+            .put(format!("http://{address}/api/session/posture"))
+            .json(&serde_json::json!({ "posture": posture, "runtime": runtime }))
+            .send()
+    };
+    let to_host = vary("boxed", "host").await.expect("sent");
+    assert_eq!(to_host.status(), 400);
+    assert!(
+        to_host
+            .text()
+            .await
+            .unwrap()
+            .contains("not a container runtime")
+    );
+    let host_boxed = vary("wide", "docker").await.expect("sent");
+    assert_eq!(host_boxed.status(), 400);
+    assert!(
+        host_boxed
+            .text()
+            .await
+            .unwrap()
+            .contains("only a contained posture")
+    );
+    assert_eq!(vary("boxed", "lxc").await.expect("sent").status(), 400);
+
+    let moved = mv("wide".into()).await.expect("sent");
+    assert_eq!(moved.status(), 200);
+    assert_eq!(moved.json::<Value>().await.unwrap()["moved"], true);
+    let settings = get(&address, "/api/settings").await;
+    assert_eq!(settings["posture"]["name"], "wide");
+    assert_eq!(settings["posture"]["network"], true, "{settings}");
+    // The fold says so too, which is what a store and an export read.
+    let sessions = get(&address, "/api/sessions/live").await;
+    assert_eq!(sessions["posture"]["name"], "wide", "{sessions}");
+
+    // Where it already is: nothing to write.
+    let again = mv("wide".into()).await.expect("sent");
+    assert_eq!(again.json::<Value>().await.unwrap()["moved"], false);
+    // A name the file does not have is refused, and moves nothing.
+    assert_eq!(mv("nope".into()).await.expect("sent").status(), 400);
+    // And back to the server's own.
+    assert_eq!(mv(Value::Null).await.expect("sent").status(), 200);
+    assert_eq!(
+        get(&address, "/api/settings").await["posture"]["network"],
+        false
+    );
+
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "add a flag"}),
+    )
+    .await;
+    until(&mut socket, "plan_proposed").await;
+    let at_the_gate = mv("wide".into()).await.expect("sent");
+    assert_eq!(at_the_gate.status(), 409);
+    assert!(at_the_gate.text().await.unwrap().contains("gate"));
+
+    send(&mut socket, serde_json::json!({"type": "approve_plan"})).await;
+    let (approved, _) = until(&mut socket, "job_approved").await;
+    let inside = mv("wide".into()).await.expect("sent");
+    assert_eq!(inside.status(), 409);
+    let said = inside.text().await.unwrap();
+    assert!(said.contains(&format!("job {}", approved["job"])), "{said}");
+    // Refused means unmoved.
+    assert_eq!(
+        get(&address, "/api/settings").await["posture"]["network"],
+        false
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The token gates authority and the read side, and does not gate the page.

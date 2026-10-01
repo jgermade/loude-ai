@@ -39,6 +39,8 @@ clap.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tokio.workspace = true
+# The terminal panel's PTY — `crate::terminal`. agent-core's already.
+libc.workspace = true
 # Downloading a model server's release and checking it — `crate::engines`.
 # reqwest is agent-core's already; this makes it this crate's too.
 reqwest.workspace = true

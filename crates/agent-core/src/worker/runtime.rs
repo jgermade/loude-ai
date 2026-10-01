@@ -43,6 +43,18 @@ pub enum Runtime {
 }
 
 impl Runtime {
+    /// Every runtime that puts a container around the worker, in the order a
+    /// picker offers them. They build the same argv from the same image, so a
+    /// contained posture runs on any of them; `host` and `direct` are not here
+    /// because a posture's `[[worker.paths]]` exist only inside the image.
+    pub const CONTAINED: [Runtime; 5] = [
+        Self::Docker,
+        Self::Podman,
+        Self::Nerdctl,
+        Self::Colima,
+        Self::Container,
+    ];
+
     /// The program this runtime is invoked as, or `None` when there is no
     /// program because there is no container.
     pub fn program(self) -> Option<&'static str> {
@@ -79,6 +91,78 @@ impl Runtime {
     /// that reports it says so.
     pub fn is_contained(self) -> bool {
         self.program().is_some()
+    }
+
+    /// How this runtime is invoked, before its subcommand: its program, and
+    /// colima's `nerdctl --` after it. Empty where there is no container.
+    pub fn invocation(self) -> Vec<String> {
+        match (self, self.program()) {
+            (_, None) => Vec::new(),
+            (Self::Colima, Some(program)) => {
+                vec![program.to_string(), "nerdctl".to_string(), "--".to_string()]
+            }
+            (_, Some(program)) => vec![program.to_string()],
+        }
+    }
+
+    fn with(self, rest: &[&str]) -> Option<Vec<String>> {
+        let mut argv = self.invocation();
+        if argv.is_empty() {
+            return None;
+        }
+        argv.extend(rest.iter().map(|word| word.to_string()));
+        Some(argv)
+    }
+
+    /// The line that asks whether the runtime answers — the daemon, the VM,
+    /// the machine — rather than only whether its program is installed.
+    /// Apple's has no `info`; it has `system status`.
+    pub fn probe_argv(self) -> Option<Vec<String>> {
+        match self {
+            Self::Container => self.with(&["system", "status"]),
+            _ => self.with(&["info"]),
+        }
+    }
+
+    /// The line that asks whether this runtime's store has `image`. Each
+    /// runtime keeps its own: Docker's images are not Podman's.
+    pub fn image_argv(self, image: &str) -> Option<Vec<String>> {
+        self.with(&["image", "inspect", image])
+    }
+
+    /// The line that builds `image` from `containerfile`, with `context` as
+    /// the build context. One spelling for all five, which each of them
+    /// documents.
+    pub fn build_argv(
+        self,
+        image: &str,
+        containerfile: &str,
+        context: &str,
+    ) -> Option<Vec<String>> {
+        self.with(&["build", "-t", image, "-f", containerfile, context])
+    }
+
+    /// How a person gets this runtime, as text to copy. luu installs none of
+    /// them: each is a package with its own installer, and on Linux, root.
+    pub fn install_hint(self) -> Option<&'static str> {
+        match self {
+            Self::Host | Self::Direct => None,
+            Self::Docker => Some(
+                "Docker Desktop (docs.docker.com/get-docker), or `brew install colima docker` \
+                 and `colima start`",
+            ),
+            Self::Podman => {
+                Some("`brew install podman`, then `podman machine init && podman machine start`")
+            }
+            Self::Nerdctl => Some(
+                "containerd and nerdctl (github.com/containerd/nerdctl/releases); on macOS, use colima",
+            ),
+            Self::Colima => Some("`brew install colima`, then `colima start --runtime containerd`"),
+            Self::Container => Some(
+                "Apple's container (github.com/apple/container/releases), macOS 26 on Apple \
+                 silicon, then `container system start`",
+            ),
+        }
     }
 
     /// What this runtime cannot express, named rather than silently skipped.
@@ -241,17 +325,31 @@ impl WorkerSpec {
         }
     }
 
+    /// The command line that starts the worker, with no container name.
+    pub fn argv(&self, commands: &[String]) -> Result<Vec<String>, RuntimeError> {
+        self.argv_as(commands, None)
+    }
+
     /// The command line that starts the worker.
     ///
     /// The container's only process **is** the worker, rather than a keep-alive
     /// that is later `exec`'d into: then the container's lifetime is the
-    /// worker's, there is no name to allocate and no `docker rm` to forget, and
-    /// there is no way to leave a container running after the session that
-    /// owned it died.
+    /// worker's, there is no `docker rm` to forget, and there is no way to leave
+    /// a container running after the session that owned it died.
+    ///
+    /// `name` is what a terminal `exec`s into, and it is a label rather than a
+    /// handle: `--rm` still removes the container, name and all, when the
+    /// worker's stdin closes. See
+    /// `RECORD/2026-10-01.a-terminal-in-the-container.completed.md`. Ignored where
+    /// there is no container.
     ///
     /// `commands` is passed through to the worker so its handshake can answer
     /// which of them the image actually has.
-    pub fn argv(&self, commands: &[String]) -> Result<Vec<String>, RuntimeError> {
+    pub fn argv_as(
+        &self,
+        commands: &[String],
+        name: Option<&str>,
+    ) -> Result<Vec<String>, RuntimeError> {
         let base = self.base.display().to_string();
         let worker_args = |program: String| {
             let mut argv = vec![program, "worker".to_string()];
@@ -297,6 +395,9 @@ impl WorkerSpec {
         if self.runtime != Runtime::Container {
             argv.push("--init".to_string());
         }
+        if let Some(name) = name {
+            argv.extend(["--name".to_string(), name.to_string()]);
+        }
         argv.extend([
             "-i".to_string(),
             "--mount".to_string(),
@@ -328,6 +429,91 @@ impl WorkerSpec {
         argv.extend(worker_args("luu".to_string()));
         Ok(argv)
     }
+}
+
+/// A shell in a worker's container: the line that opens it, and the line that
+/// ends it.
+///
+/// **Two lines because one is not enough.** Killing the `exec` client does
+/// not end what it started: the runtime keeps the process running in the
+/// container, which here lives as long as the session, so every closed
+/// terminal would leave a shell behind. Each shell carries
+/// `LUU_TERMINAL=<id>` in its environment, which its children inherit, and
+/// `end` is a second `exec` that hangs up on every process carrying it, then
+/// kills what is left a second later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalLine {
+    pub open: Vec<String>,
+    pub end: Vec<String>,
+}
+
+impl WorkerSpec {
+    /// `<runtime> exec` (colima's with its `nerdctl --`), or `None` where
+    /// there is no container.
+    fn exec_prefix(&self) -> Option<Vec<String>> {
+        let program = self.runtime.program()?;
+        Some(match self.runtime {
+            Runtime::Colima => vec![
+                program.to_string(),
+                "nerdctl".to_string(),
+                "--".to_string(),
+                "exec".to_string(),
+            ],
+            _ => vec![program.to_string(), "exec".to_string()],
+        })
+    }
+
+    /// The shell a terminal opens in the named container, and how it is
+    /// ended, or `None` where there is no container to open one in.
+    ///
+    /// Nothing about the container is restated: `exec` inherits the run's
+    /// user, working directory, mounts and network, so the shell is held to
+    /// exactly what the worker is held to. `bash` where the image has it,
+    /// `sh` where it does not. `TERM` is named because `exec -t` sets a plain
+    /// `xterm`, and the page draws 256 colours. `id` is what [`TerminalLine`]
+    /// finds the shell by.
+    pub fn exec_argv(&self, name: &str, id: &str) -> Option<TerminalLine> {
+        let mut open = self.exec_prefix()?;
+        open.extend([
+            "-i".to_string(),
+            "-t".to_string(),
+            "-e".to_string(),
+            "TERM=xterm-256color".to_string(),
+            "-e".to_string(),
+            format!("LUU_TERMINAL={id}"),
+            name.to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            "command -v bash >/dev/null 2>&1 && exec bash || exec sh".to_string(),
+        ]);
+        // `/proc/<pid>/environ` is readable for the worker's own uid, which is
+        // every process a terminal started. The script that reads it does not
+        // carry the id, so it never signals itself.
+        let each = |signal: &str| {
+            format!(
+                "for p in /proc/[0-9]*; do grep -qzx 'LUU_TERMINAL={id}' $p/environ 2>/dev/null \
+                 && kill -{signal} ${{p#/proc/}} 2>/dev/null; done"
+            )
+        };
+        let mut end = self.exec_prefix()?;
+        end.extend([
+            name.to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; sleep 1; {}; true", each("HUP"), each("KILL")),
+        ]);
+        Some(TerminalLine { open, end })
+    }
+}
+
+/// A container name nothing else on this machine is using: one per worker
+/// *start*, not per session, because a replaced worker's container is removed
+/// by `--rm` asynchronously and a second start under its name would race that
+/// removal.
+pub fn container_name() -> String {
+    static STARTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = STARTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("luu-worker-{}-{n}", std::process::id())
 }
 
 /// Whoever started this session, so the worker writes as them.
@@ -497,6 +683,98 @@ mod tests {
                 "cargo",
             ]
         );
+    }
+
+    #[test]
+    fn a_named_container_is_still_removed_and_named_before_the_image() {
+        let argv = spec(Runtime::Docker)
+            .argv_as(&[], Some("luu-worker-1-0"))
+            .unwrap();
+        let at = argv.iter().position(|a| a == "--name").expect("named");
+        assert_eq!(argv[at + 1], "luu-worker-1-0");
+        assert!(argv.contains(&"--rm".to_string()), "{argv:?}");
+        let image = argv.iter().position(|a| a == "luu-worker:dev").unwrap();
+        assert!(
+            at < image,
+            "a flag after the image is the worker's argument: {argv:?}"
+        );
+        // And a name is never invented where nobody asked for one.
+        assert!(
+            !spec(Runtime::Docker)
+                .argv(&[])
+                .unwrap()
+                .contains(&"--name".to_string())
+        );
+    }
+
+    #[test]
+    fn a_terminal_execs_into_the_container_and_restates_nothing_about_it() {
+        let line = spec(Runtime::Docker)
+            .exec_argv("luu-worker-1-0", "7")
+            .unwrap();
+        let argv = line.open;
+        assert_eq!(&argv[..4], &["docker", "exec", "-i", "-t"]);
+        assert!(argv.contains(&"LUU_TERMINAL=7".to_string()), "{argv:?}");
+        // Ended by what it was tagged with, in the same container.
+        assert_eq!(&line.end[..3], &["docker", "exec", "luu-worker-1-0"]);
+        assert!(line.end[5].contains("LUU_TERMINAL=7"), "{:?}", line.end);
+        assert!(argv.contains(&"luu-worker-1-0".to_string()));
+        // The run already said these; saying them again could only disagree.
+        for flag in ["--user", "--mount", "--network", "--workdir"] {
+            assert!(!argv.contains(&flag.to_string()), "{flag} in {argv:?}");
+        }
+        let colima = spec(Runtime::Colima).exec_argv("n", "1").unwrap();
+        assert_eq!(&colima.open[..4], &["colima", "nerdctl", "--", "exec"]);
+        assert_eq!(&colima.end[..4], &["colima", "nerdctl", "--", "exec"]);
+        // No container, no terminal.
+        assert!(spec(Runtime::Direct).exec_argv("n", "1").is_none());
+        assert!(spec(Runtime::Host).exec_argv("n", "1").is_none());
+    }
+
+    #[test]
+    fn a_runtime_is_probed_inspected_and_built_by_its_own_words() {
+        assert_eq!(Runtime::Docker.probe_argv().unwrap(), ["docker", "info"]);
+        assert_eq!(
+            Runtime::Container.probe_argv().unwrap(),
+            ["container", "system", "status"]
+        );
+        assert_eq!(
+            Runtime::Colima.image_argv("luu-worker:dev").unwrap(),
+            [
+                "colima",
+                "nerdctl",
+                "--",
+                "image",
+                "inspect",
+                "luu-worker:dev"
+            ]
+        );
+        assert_eq!(
+            Runtime::Podman
+                .build_argv("luu-worker:dev", "Containerfile", ".")
+                .unwrap(),
+            [
+                "podman",
+                "build",
+                "-t",
+                "luu-worker:dev",
+                "-f",
+                "Containerfile",
+                "."
+            ]
+        );
+        // No container, no lines and no hint.
+        for none in [Runtime::Host, Runtime::Direct] {
+            assert!(none.probe_argv().is_none() && none.install_hint().is_none());
+        }
+        for each in Runtime::CONTAINED {
+            assert!(each.install_hint().is_some(), "{each}");
+        }
+    }
+
+    #[test]
+    fn every_start_gets_a_name_of_its_own() {
+        assert_ne!(container_name(), container_name());
     }
 
     #[test]

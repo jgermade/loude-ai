@@ -134,8 +134,17 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # click resets, arrow keys nudge), and kept in localStorage.
 # The content column keeps one tab per open thing — a file, a diff, a prompt —
 # and a single click opens a preview tab (italic) the next click replaces; a
-# double click keeps it. The chat names its session instead of spending a row
-# on tabs.
+# double click keeps it. Its foot is the file's icon and path, a diff button
+# (a modal) while git counts the file as changed, and at the far right a
+# terminal: a shell where the session's commands run (its container, or this
+# machine), in a panel under the editor whose picker moves the session to
+# another posture between jobs. A host shell is the whole account, so
+# `[terminal] host` decides who gets one: `loopback` (the default), `always`
+# (whoever holds the token) or `never`.
+#
+#   [terminal]
+#   host = "loopback"
+# The chat names its session instead of spending a row on tabs.
 # On a first visit it asks which folder to look at: a subdirectory of the one
 # `serve` was started in, which is the ceiling and is not negotiable from the
 # browser. Settings has sections down the side — General (theme, editor, layout,
@@ -159,6 +168,14 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 # Downloading luu's copy, starting it, switching its model when the chat picks
 # another, and stopping it when no session uses it are all automatic.
 #
+# Settings → Runtimes is where a session's commands may run: each container
+# runtime (docker, podman, nerdctl, colima, container) probed for whether it is
+# installed, answers, and has the images the policy files name — with install
+# (podman and colima, by Homebrew on macOS, as the person), start, and a build
+# of an image that is missing; the `[posture.*]` table, a new one naming a policy file
+# out of the ones at the top of the checkout; and `[terminal] host`. Writes are
+# loopback-only, like Engines.
+#
 # Files get VSCode icons if
 # `[ui] icon-theme` in config.toml names a theme on this machine (an installed
 # extension's directory, or its theme JSON); nothing is vendored, so without
@@ -168,13 +185,14 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   [ui]
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
 #
-# Monaco is the one optional dependency and it is a *node* one, in
-# `web/package.json` rather than vendored into the tree: `make install`
-# fetches it, the binary serves it from disk, and `General → editor` offers it
-# only where it is installed. Without it the page draws every file itself, which
-# is the default either way — see
+# Monaco and xterm.js are the optional dependencies and they are *node* ones,
+# in `web/package.json` rather than vendored into the tree: `make install`
+# fetches them and the binary serves them from disk. `General → editor` offers
+# Monaco only where it is installed, and without it the page draws every file
+# itself, which is the default either way — see
 # RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md for the
-# measurement that decided that.
+# measurement that decided that. xterm.js draws the terminal panel, which
+# without it says how to install it.
 #
 cargo run --bin luu -- stdio                          # protocol over stdin/stdout as NDJSON
 
@@ -225,7 +243,12 @@ echo '{"type":"approve_plan","job":2,"files":["Cargo.toml"]}' \
 #   policy = "luu.container.toml"
 #
 # A resume may not move it: a destination is where a session sends and a posture
-# is what it may do, and its jobs were approved against this one.
+# is what it may do, and its jobs were approved against this one. The live
+# session may move between jobs — the terminal panel's picker, or
+# `PUT /api/session/posture {"posture": "<name>" | null, "runtime": …}` — and
+# the stream gains a header line saying so. `runtime` is a variant: a contained
+# posture on another container runtime (docker, podman, nerdctl, colima,
+# container), never a host posture in a container or the other way round.
 
 # level 3: the same run, with every tool call executed inside a container.
 # `--worker direct` is the same seam with no container at all, which is how the
@@ -381,9 +404,13 @@ repository has measured), `direct` (a `luu worker` child with no container), or 
 container runtime — `docker`, `podman`, `nerdctl`, Apple's `container`. That
 layer builds an *argv* and speaks no runtime's API, which is what makes them
 substitutable, and it names the flags that are not uniform rather than assuming
-they are. The container's only process **is** `luu worker`, spoken to over stdio,
+they are. The container's PID 1 **is** `luu worker`, spoken to over stdio,
 so its lifetime is the session's and `--rm` plus a closed stdin is the whole of
-the cleanup. What crosses the pipe is the **policy**, never the resolved sandbox
+the cleanup. It is named (`luu-worker-<pid>-<n>`, one per start) only so the
+page's terminal can `exec` a shell into it; `/ws/terminal` checks `Origin`
+and, on an unguarded port, `Host`, because a WebSocket is not covered by CORS.
+See
+[`RECORD/2026-10-01.a-terminal-in-the-container.completed.md`](RECORD/2026-10-01.a-terminal-in-the-container.completed.md). What crosses the pipe is the **policy**, never the resolved sandbox
 — canonical paths are facts about the machine that resolved them — and the
 task's `Authority` crosses with it, so a denial from inside still names the plan
 that refused. The base is mounted at *its own absolute path*, not `/workspace`,
