@@ -13,8 +13,10 @@
 CARGO ?= cargo
 EXTENSION := editors/vscode
 # The debug UI's *optional* browser dependencies — today that is Monaco, which
-# the General settings offer only where it is installed. A checkout without npm
-# gets a page that draws every file itself, which is the default either way.
+# the General settings offer only where it is installed, and xterm.js, which
+# draws the terminal panel. A checkout without npm gets a page that draws every
+# file itself, which is the default either way, and a panel that says why it
+# has no terminal.
 WEBUI := web
 BIND ?= 127.0.0.1:7878
 
@@ -40,7 +42,7 @@ install:
 		echo "==> no npm on PATH: skipping $(EXTENSION)"; \
 	fi
 	@if command -v npm >/dev/null 2>&1; then \
-		echo "==> npm install in $(WEBUI) (optional: Monaco)"; \
+		echo "==> npm install in $(WEBUI) (optional: Monaco, xterm.js)"; \
 		cd $(WEBUI) && npm install --no-audit --no-fund; \
 	else \
 		echo "==> no npm on PATH: the debug UI keeps its own viewer"; \

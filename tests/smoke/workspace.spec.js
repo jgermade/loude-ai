@@ -51,7 +51,10 @@ test.beforeAll(async () => {
 
   server = spawn(binary(), ["serve", "--bind", `127.0.0.1:${PORT}`, "--mock-delay-ms", "0"], {
     cwd: work,
-    env: { ...process.env, LUU_HOME: join(scratch, "home") },
+    // `SHELL` is the host terminal's shell: the plain one, so the test does
+    // not depend on the login rc files of whoever runs it — which may ask
+    // for a passphrase, as one did here.
+    env: { ...process.env, LUU_HOME: join(scratch, "home"), SHELL: "/bin/sh" },
     stdio: "pipe",
   })
   let output = ""
@@ -136,6 +139,82 @@ test("the tree and the open file follow the disk", async ({ page }) => {
   const settled = statusAsked
   await page.waitForTimeout(4000)
   expect(statusAsked - settled, "git status asked while nothing changed").toBe(0)
+
+  expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * The content column's foot: the file's icon where the language used to be a
+ * word, and a button beside the name that shows git's diff in a modal — only
+ * while there is one. See `RECORD/2026-10-01.the-foot-names-its-file.completed.md`.
+ */
+test("the foot shows a changed file's diff in a modal", async ({ page }) => {
+  const work = join(scratch, "work")
+  const errors = []
+  page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  const git = args => execSync(`git -c user.email=t@t -c user.name=t ${args}`, { cwd: work })
+  writeFileSync(join(work, "src/foot.txt"), "one\ntwo\nthree\n")
+  git("add src/foot.txt")
+  git("commit -qm foot")
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  const picker = page.locator("dialog.modal").first()
+  await picker.locator('button:has-text("Use this folder")').click()
+  await expect(picker).toBeHidden()
+  await page.evaluate(async () => {
+    const { showFile } = await import("./lib/workspace.js")
+    await showFile("src/foot.txt")
+  })
+  const foot = page.locator(".content .col-foot")
+  await expect(foot.locator(".path")).toHaveText("src/foot.txt")
+  // The tree's shape, before the name: this server names no icon theme.
+  await expect(foot.locator('svg.kind use[href="#i-file"]')).toHaveCount(1)
+  const button = foot.locator('button[title="Show the changes (git diff)"]')
+  // Committed and untouched: nothing to show, so no button.
+  await expect(button).toHaveCount(0)
+
+  writeFileSync(join(work, "src/foot.txt"), "one\nTWO\nthree\n")
+  await expect(button).toHaveCount(1)
+  await button.click()
+  const modal = page.locator("dialog.modal")
+  await expect(modal.locator(".modal-head strong")).toHaveText("src/foot.txt")
+  await expect(modal.locator(".line.add")).toContainText("TWO")
+  await expect(modal.locator(".line.del")).toContainText("two")
+  await expect(modal.locator('.which button.on')).toHaveText("working tree")
+
+  // Staged while it is open: the working tree side empties, and the other
+  // side is one click away.
+  git("add src/foot.txt")
+  await expect(modal.locator(".diff .pad")).toBeVisible()
+  await modal.locator('.which button:has-text("staged")').click()
+  await expect(modal.locator(".line.add")).toContainText("TWO")
+
+  await modal.locator(".modal-head button.link", { hasText: "close" }).click()
+  await expect(modal).toHaveCount(0)
+  // And the file is still what the column shows: the modal was a glance.
+  await expect(foot.locator(".path")).toHaveText("src/foot.txt")
+
+  // This server runs its tools on the host and is bound on loopback, so the
+  // terminal opens here, in the folder the session works in. See
+  // `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+  const terminal = foot.locator("button.term")
+  await expect(terminal).toHaveAttribute("title", "Open a terminal on this machine, where the session runs")
+  await terminal.click()
+  const panel = page.locator(".content .terminal")
+  // Open, on the host, and the picker says so by the runtime's name.
+  await expect(panel.locator('.state.open[data-place="host"]')).toHaveCount(1, { timeout: 15_000 })
+  await expect(panel.locator(".dropup .face")).toHaveText("host")
+  await panel.locator(".host").click()
+  // Arithmetic, so what is matched is the shell's answer and not the echo.
+  await page.keyboard.type("echo AT=$(pwd -P) N=$((40+2))\n")
+  const real = execSync("pwd -P", { cwd: work }).toString().trim()
+  await expect(panel.locator(".xterm-rows")).toContainText(`AT=${real} N=42`, { timeout: 15_000 })
+  await panel.locator('button[title="End the shell"]').click()
+  await expect(panel).toHaveCount(0)
 
   expect(errors, "the page logged errors").toEqual([])
 })

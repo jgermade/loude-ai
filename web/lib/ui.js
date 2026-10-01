@@ -48,6 +48,12 @@ export const ui = $reactive({
   /// Whether the context modal is open: what the window holds as of the
   /// newest turn, opened from the indicator in the chat's foot.
   contextOpen: false,
+  /// The path whose diff the content column's foot opened in a modal, or
+  /// `null`. See `views/editor/diff-modal.html`.
+  diff: null,
+  /// Whether the terminal panel is drawn under the editor. Hiding it leaves
+  /// the shell running — see `lib/terminal.js`.
+  terminal: false,
   /// Which job ids the page has already answered on the person's behalf, so an
   /// automatic approval happens once per proposal rather than on every render.
   answered: [],
@@ -294,4 +300,20 @@ export function openContext() {
 
 export function closeContext() {
   ui.contextOpen = false
+}
+
+// ---- one file's changes -----------------------------------------------------
+
+export function openDiff(path) {
+  ui.diff = path
+}
+
+export function closeDiff() {
+  ui.diff = null
+}
+
+// ---- the terminal panel ------------------------------------------------------
+
+export function toggleTerminal() {
+  ui.terminal = !ui.terminal
 }

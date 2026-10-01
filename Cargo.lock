@@ -1292,6 +1292,7 @@ dependencies = [
  "clap",
  "futures-util",
  "ignore",
+ "libc",
  "mime_guess",
  "notify",
  "reqwest",

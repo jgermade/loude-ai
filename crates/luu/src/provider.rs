@@ -219,6 +219,11 @@ struct File {
     /// names a path that only exists on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ui: Option<Ui>,
+    /// `[terminal]`: who the page's terminal may open a shell on *this
+    /// machine* for. A file on this machine, because the answer is about this
+    /// machine's account. See [`Terminal`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal: Option<Terminal>,
     /// `[resend]`: how much of the history a turn pays for again. In this file
     /// and not in `localStorage` for the reason the providers are — it changes
     /// the bytes a run sends, which is a fact about the run and not about the
@@ -247,6 +252,43 @@ pub struct Ui {
     /// page's own two glyphs — see `crate::icons`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_theme: Option<PathBuf>,
+}
+
+/// `[terminal]`. One setting so far.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Terminal {
+    /// Where a session with no container may open a shell on the host.
+    #[serde(default)]
+    pub host: HostShell,
+}
+
+/// Who gets a shell on the host from the page's terminal.
+///
+/// A container shell is held by the container. A host shell is held by
+/// nothing but this account, so by default it is offered only to a browser
+/// on this machine — the rule `engines_allowed` keeps for starting a process
+/// here. See `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostShell {
+    /// Only when `serve` is bound on loopback and the request names it.
+    #[default]
+    Loopback,
+    /// To anyone the terminal's socket admits: off loopback, the token.
+    Always,
+    /// To nobody.
+    Never,
+}
+
+impl HostShell {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::Always => "always",
+            Self::Never => "never",
+        }
+    }
 }
 
 /// `[resend]`: the three rules a window is rendered under, as this machine's
@@ -392,6 +434,7 @@ pub struct Config {
     providers: BTreeMap<String, Profile>,
     postures: BTreeMap<String, Posture>,
     ui: Option<Ui>,
+    terminal: Option<Terminal>,
     resend: Option<Resend>,
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
@@ -493,6 +536,7 @@ impl Config {
             providers: file.provider,
             postures: file.posture,
             ui: file.ui,
+            terminal: file.terminal,
             resend: file.resend,
             authority: file.authority,
             engines: file.engine,
@@ -614,6 +658,7 @@ impl Config {
             // postures would delete them the first time somebody saved a URL.
             posture: self.postures.clone(),
             ui: self.ui.clone(),
+            terminal: self.terminal,
             resend: self.resend,
             authority: self.authority.clone(),
             engine: self.engines.clone(),
@@ -667,9 +712,28 @@ impl Config {
             providers,
             postures: self.postures.clone(),
             ui: self.ui.clone(),
+            terminal: self.terminal,
             resend: self.resend,
             authority: self.authority.clone(),
             engines: self.engines.clone(),
+        }
+    }
+
+    /// The file as Settings → Runtimes hands back the postures: every
+    /// `[posture.<name>]`, and everything else this config already had.
+    pub fn with_postures(&self, postures: BTreeMap<String, Posture>) -> Self {
+        Self {
+            postures,
+            ..self.clone()
+        }
+    }
+
+    /// The file as Settings → Runtimes hands back the host shell's rule. The
+    /// default is written as no table, so a file that never said is unchanged.
+    pub fn with_terminal(&self, terminal: Terminal) -> Self {
+        Self {
+            terminal: (terminal != Terminal::default()).then_some(terminal),
+            ..self.clone()
         }
     }
 
@@ -734,6 +798,12 @@ impl Config {
     /// What the page should look like, as the file asks for it.
     pub fn ui(&self) -> Option<&Ui> {
         self.ui.as_ref()
+    }
+
+    /// Who the terminal may open a host shell for, defaulted where the file
+    /// says nothing.
+    pub fn terminal(&self) -> Terminal {
+        self.terminal.unwrap_or_default()
     }
 
     /// Every posture the file names.
@@ -1054,6 +1124,21 @@ mod tests {
 
     /// A profile's `engine` names a table the file has, or the file does not
     /// load; and a profile that names one resolves with it.
+    #[test]
+    fn the_host_shell_is_loopback_until_the_file_says_otherwise() {
+        let none = Config::from_toml("", "config.toml").expect("an empty file loads");
+        assert_eq!(none.terminal().host, HostShell::Loopback);
+        let always = Config::from_toml("[terminal]\nhost = \"always\"\n", "config.toml")
+            .expect("a [terminal] table loads");
+        assert_eq!(always.terminal().host, HostShell::Always);
+        // Carried through a write that was about something else.
+        let rendered = always.render().expect("it renders");
+        assert!(rendered.contains("host = \"always\""), "{rendered}");
+        // A misspelling is an error, never a silent default.
+        assert!(Config::from_toml("[terminal]\nhost = \"sometimes\"\n", "c").is_err());
+        assert!(Config::from_toml("[terminal]\nhots = \"always\"\n", "c").is_err());
+    }
+
     #[test]
     fn a_profile_starts_the_engine_it_names() {
         let error = config("[provider.local]\nbackend = \"openai\"\nengine = \"gone\"\n")

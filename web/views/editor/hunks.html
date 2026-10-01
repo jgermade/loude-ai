@@ -1,0 +1,47 @@
+<script :setup="{ hunks = [], note = '' }">
+  // A diff's hunks, already classified per line by the server, so nothing here
+  // parses a patch. Shared by the content column's diff tab and the footer's
+  // diff modal, which ask the same endpoint and show the same answer. See
+  // `RECORD/2026-10-01.the-foot-names-its-file.completed.md`.
+</script>
+
+<div class="diff">
+  <p :if="note" class="dim pad">{{ note }}</p>
+  <div :each="hunk in hunks" :key="hunk.header" class="hunk">
+    <div class="hunk-head">{{ hunk.header }}</div>
+    <div :each="line in hunk.lines" class="line" :class="line.kind">
+      <span class="sign">{{ line.kind === "add" ? "+" : (line.kind === "del" ? "-" : " ") }}</span>
+      <code>{{ line.text }}</code>
+    </div>
+  </div>
+</div>
+
+<style scoped>
+  .pad { padding: .8rem 1rem; margin: 0; }
+  .diff { padding: .5rem 0 1rem; }
+  .hunk { margin-bottom: .8rem; }
+  .hunk-head {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--dim);
+    background: var(--sunken);
+    padding: .2rem .8rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .line {
+    display: flex;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre;
+    padding-right: .8rem;
+  }
+  .line .sign { flex: none; width: 1.6rem; text-align: center; color: var(--dim); user-select: none; }
+  /* Tinted by the same accents the rest of the page uses for the same
+     meanings: history-green is what was added, bad-red what left. */
+  .line.add { background: color-mix(in srgb, var(--b-history) 14%, transparent); }
+  .line.del { background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .line.add .sign { color: var(--b-history); }
+  .line.del .sign { color: var(--bad); }
+</style>

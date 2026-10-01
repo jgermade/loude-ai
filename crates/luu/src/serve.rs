@@ -235,13 +235,15 @@ struct App {
     /// about the command line and a test can hand it one. `None` where sessions
     /// cannot choose a posture — over stdio, where the process is the session.
     agency_for: Option<AgencyFactory>,
-    /// The postures this machine names, read when the server started.
-    ///
-    /// Resolved once rather than per request, and it is the same rule the
-    /// modal's first section states about everything else this server decided:
-    /// what a session may choose should not change under the surface that is
-    /// offering it. A posture added to `config.toml` is offered by the next run.
-    postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+    /// How to say where a posture would run without building it. `None`
+    /// where `agency_for` is.
+    describe_for: Option<DescribeFactory>,
+    /// The postures this machine names: read when the server started, and
+    /// replaced when Settings → Runtimes writes `config.toml`, so a posture
+    /// added there is in the picker at once rather than after a restart. A
+    /// session already on a posture keeps the agency it was built with. See
+    /// `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
+    postures: std::sync::RwLock<std::collections::BTreeMap<String, crate::provider::Posture>>,
     /// Where those came from, for the page to name.
     postures_path: Option<String>,
     /// The icon theme `[ui] icon-theme` names, or an empty one when nothing
@@ -253,6 +255,9 @@ struct App {
     /// copies. Children of this process — see [`Serving::run`] for how they
     /// stop with it, and `crate::engines` for the rest.
     engines: Arc<crate::engines::Supervisor>,
+    /// What Settings → Runtimes started: installs, starts and image builds.
+    /// See `crate::runtimes`.
+    tasks: Arc<crate::runtimes::Tasks>,
     /// The requests being answered right now, for the log's watchdog. See
     /// `crate::log`.
     inflight: Arc<crate::log::InFlight>,
@@ -324,8 +329,36 @@ struct App {
 /// Boxed because it outlives the call that made it and is shared by every
 /// session, and a function because `serve` should not know what a command line
 /// is. See `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
+/// Where a posture would run, as the environment picker shows it. See
+/// `SandboxArgs::describe_posture`, which is the only thing that makes one.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Where {
+    /// The policy file, as this machine spells it.
+    pub policy: String,
+    /// `host`, `direct`, or a container runtime.
+    pub runtime: String,
+    /// The image, for a runtime that takes one.
+    pub image: Option<String>,
+    /// Why a session cannot move there: the runtime is not installed, the
+    /// file names no image, or the file does not load. `None` is "as far as
+    /// can be told without starting it".
+    pub missing: Option<String>,
+    /// What this runtime cannot express, where it runs anyway — Apple's
+    /// `container` and the network. See `Runtime::cannot`.
+    pub gap: Option<String>,
+}
+
+/// How the server describes a posture without building it: a policy file
+/// (`None` is the server's own), on a container runtime other than the one it
+/// names where one is given.
+pub type DescribeFactory =
+    Arc<dyn Fn(Option<PathBuf>, Option<agent_core::worker::Runtime>) -> Where + Send + Sync>;
+
 pub type AgencyFactory = Arc<
-    dyn Fn(Option<PathBuf>) -> futures_util::future::BoxFuture<'static, Result<Agency>>
+    dyn Fn(
+            Option<PathBuf>,
+            Option<agent_core::worker::Runtime>,
+        ) -> futures_util::future::BoxFuture<'static, Result<Agency>>
         + Send
         + Sync,
 >;
@@ -528,6 +561,9 @@ pub struct StdioOptions {
     /// How to build the agency for a posture a session names. `None` over
     /// stdio, where the process is the session and its policy file is a flag.
     pub agency_for: Option<AgencyFactory>,
+    /// How to say where a posture would run without building it, for the
+    /// terminal's environment picker. `None` where `agency_for` is.
+    pub describe_for: Option<DescribeFactory>,
     /// `[posture.<name>]` out of `config.toml`, read once when this run
     /// started.
     pub postures: std::collections::BTreeMap<String, crate::provider::Posture>,
@@ -598,6 +634,7 @@ impl App {
             tokenizer,
             agency,
             agency_for,
+            describe_for,
             postures,
             postures_path,
             icons,
@@ -797,10 +834,12 @@ impl App {
             agency: RwLock::new(agency.clone()),
             posture: Mutex::new(None),
             agency_for,
-            postures,
+            describe_for,
+            postures: std::sync::RwLock::new(postures),
             postures_path,
             icons: std::sync::RwLock::new(icons),
             engines: Arc::default(),
+            tasks: Arc::default(),
             inflight: Arc::default(),
             temperature,
             seed,
@@ -851,6 +890,15 @@ impl App {
     /// against the one writer in `create_session`.
     async fn destination(&self) -> Arc<Destination> {
         self.destination.read().await.clone()
+    }
+
+    /// The postures as they are now. A clone, so no lock is held across
+    /// whatever the caller does with them.
+    fn postures(&self) -> std::collections::BTreeMap<String, crate::provider::Posture> {
+        self.postures
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// What this session may do and where its tools run, as a cheap clone.
@@ -994,6 +1042,9 @@ pub struct ServeOptions {
     /// How to build the agency for a posture a session names. `None` over
     /// stdio, where the process is the session and its policy file is a flag.
     pub agency_for: Option<AgencyFactory>,
+    /// How to say where a posture would run without building it, for the
+    /// terminal's environment picker. `None` where `agency_for` is.
+    pub describe_for: Option<DescribeFactory>,
     /// `[posture.<name>]` out of `config.toml`, read once when this run
     /// started.
     pub postures: std::collections::BTreeMap<String, crate::provider::Posture>,
@@ -1116,6 +1167,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         tokenizer,
         agency,
         agency_for,
+        describe_for,
         postures,
         postures_path,
         temperature,
@@ -1149,6 +1201,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         tokenizer,
         agency,
         agency_for,
+        describe_for,
         postures,
         postures_path,
         temperature,
@@ -1229,7 +1282,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
                 crate::icons::IMPORT_MAX_BYTES + 1024 * 1024,
             )),
         )
-        .route("/api/postures", get(get_postures))
+        .route("/api/postures", get(get_postures).put(put_postures))
         .route("/api/postures.json", get(get_postures))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions.json", get(list_sessions))
@@ -1271,6 +1324,26 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // 404 — which works, and logs a console error on every visit of every
         // checkout that has no Monaco, which is most of them.
         .route("/api/monaco", get(get_monaco))
+        // A shell in the live session's container, and whether there is one.
+        // Under `/ws` so `?token=` reaches it, which is all a browser's
+        // `WebSocket` can send. See [`terminal_allowed`] for what else it
+        // asks, and `RECORD/2026-10-01.a-terminal-in-the-container.completed.md`.
+        .route("/ws/terminal", get(terminal_socket))
+        .route("/api/terminal", get(get_terminal).put(put_terminal))
+        // What Settings → Runtimes shows and does: the runtimes probed, the
+        // images they have, and a build of one that is missing. See
+        // `crate::runtimes`.
+        .route("/api/runtimes", get(get_runtimes))
+        .route("/api/runtimes/tasks", get(get_tasks))
+        .route("/api/runtimes/{runtime}/build", post(build_image))
+        .route("/api/runtimes/{runtime}/install", post(install_runtime))
+        .route("/api/runtimes/{runtime}/start", post(start_runtime))
+        // Moves the live session to another posture, between jobs. See
+        // [`put_session_posture`].
+        .route(
+            "/api/session/posture",
+            axum::routing::put(put_session_posture),
+        )
         // Model servers luu starts. Every write here is held to more than the
         // providers route: see [`engines_allowed`].
         .route("/api/models", get(get_models))
@@ -1287,6 +1360,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         // embedded UI is: it is a third-party editor, the same bytes in every
         // copy, and a `<script>` tag cannot carry an `Authorization` header.
         .route("/vendor/monaco/{*path}", get(monaco_asset))
+        // xterm.js, the same way and for the same reasons.
+        .route("/vendor/xterm/{*path}", get(xterm_asset))
         .route("/{*path}", get(asset_handler))
         .with_state(AppRouterState {
             app: app.clone(),
@@ -1361,10 +1436,22 @@ async fn serve_asset(path: &str) -> Response {
 /// the same shape `[ui] icon-theme` has, where the feature waits to be told it
 /// is there rather than shipping a copy of itself.
 fn monaco_root() -> PathBuf {
+    node_modules().join("monaco-editor/min/vs")
+}
+
+/// `web/node_modules`, where the page's optional dependencies are. See
+/// [`monaco_root`] for why they are read from disk.
+fn node_modules() -> PathBuf {
     let ui = std::env::var_os("LUU_UI_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web"));
-    ui.join("node_modules/monaco-editor/min/vs")
+    ui.join("node_modules")
+}
+
+/// Where xterm.js and its fit addon live, when somebody installed them: the
+/// terminal panel's one dependency, optional the way Monaco is.
+fn xterm_root() -> PathBuf {
+    node_modules().join("@xterm")
 }
 
 /// Whether Monaco is installed, as an answer rather than as a missing file.
@@ -1374,18 +1461,29 @@ async fn get_monaco() -> Response {
 }
 
 async fn monaco_asset(Path(path): Path<String>) -> Response {
-    let root = match monaco_root().canonicalize() {
+    // Not installed. Nothing to say about it that the page does not already
+    // handle by staying on its own viewer.
+    installed_asset(monaco_root(), "monaco", &path).await
+}
+
+async fn xterm_asset(Path(path): Path<String>) -> Response {
+    installed_asset(xterm_root(), "xterm.js", &path).await
+}
+
+/// One file under an optional dependency's directory, and never one outside it.
+async fn installed_asset(root: PathBuf, what: &str, path: &str) -> Response {
+    let root = match root.canonicalize() {
         Ok(root) => root,
-        // Not installed. Nothing to say about it that the page does not already
-        // handle by staying on its own viewer.
-        Err(_) => return (StatusCode::NOT_FOUND, "monaco is not installed").into_response(),
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, format!("{what} is not installed")).into_response();
+        }
     };
     // Canonicalised and then checked for containment, rather than trusted after
     // a scan for `..`: the path arrives from a browser, and the only question
     // worth asking about it is where it actually lands. `/api/icons/{id}` takes
     // the stricter route for the same reason — there nothing client-supplied
     // reaches the filesystem at all.
-    let Ok(asked) = root.join(&path).canonicalize() else {
+    let Ok(asked) = root.join(path).canonicalize() else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
     if !asked.starts_with(&root) {
@@ -1398,6 +1496,260 @@ async fn monaco_asset(Path(path): Path<String>) -> Response {
         }
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
+
+// ---- the terminal ------------------------------------------------------------
+//
+// A shell in the live session's container, for the panel under the editor.
+// See `crate::terminal` and `RECORD/2026-10-01.a-terminal-in-the-container.completed.md`.
+
+/// Where a terminal opens, and the lines that open and end it.
+struct Shell {
+    /// `host` or `container`, as `/api/terminal` says it.
+    place: &'static str,
+    open: Vec<String>,
+    /// The host shell's working directory: the sandbox's base, which is where
+    /// the model's commands start too. `None` in a container, whose working
+    /// directory the run already set.
+    cwd: Option<PathBuf>,
+    /// A container's second line — see `TerminalLine`. A host shell needs
+    /// none: the PTY's hangup reaches it with no runtime in between.
+    end: Option<Vec<String>>,
+}
+
+/// Where a terminal would open for the live session, or why it would not.
+///
+/// **Where the session's commands run**, and nowhere else: in its container
+/// when it has one, on this machine when it does not (`host`, and `direct`,
+/// whose worker is a child here). A host shell is the whole account, so
+/// `[terminal] host` decides who gets one — by default a browser on this
+/// machine, the rule [`engines_allowed`] keeps for starting a process here.
+/// See `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+async fn terminal_shell(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+) -> Result<Shell, String> {
+    let agency = state.app.agency().await;
+    if let Some(worker) = agency
+        .worker
+        .as_ref()
+        .filter(|worker| worker.is_contained())
+    {
+        let line = worker.terminal_argv()?;
+        return Ok(Shell {
+            place: "container",
+            open: line.open,
+            cwd: None,
+            end: Some(line.end),
+        });
+    }
+    // A file that does not load is the default rule, not an open door: the
+    // default is the narrow one.
+    let rule = load_config()
+        .await
+        .map(|(config, _)| config.terminal().host)
+        .unwrap_or_default();
+    let host = headers
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .unwrap_or("");
+    match rule {
+        crate::provider::HostShell::Never => {
+            return Err(
+                "[terminal] host = \"never\" in config.toml: this machine opens no \
+                        shell on the host from the page"
+                    .to_string(),
+            );
+        }
+        crate::provider::HostShell::Loopback
+            if !(state.providers_editable && host_is_loopback(host)) =>
+        {
+            return Err(format!(
+                "this session runs on the host, and [terminal] host = \"loopback\" (the \
+                 default) keeps a shell on the host to a browser on this machine — this \
+                 request reached `{host}`. Set it to \"always\" in config.toml to offer it \
+                 to whoever holds the token"
+            ));
+        }
+        _ => {}
+    }
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|shell| !shell.is_empty())
+        .unwrap_or_else(|| "/bin/sh".to_string());
+    Ok(Shell {
+        place: "host",
+        open: vec![shell, "-l".to_string()],
+        cwd: Some(agency.sandbox.base().to_path_buf()),
+        end: None,
+    })
+}
+
+/// Whether the live session has a terminal to open and where, and whether
+/// this machine has what draws one. Two questions, because their fixes are
+/// different.
+async fn get_terminal(
+    headers: axum::http::HeaderMap,
+    State(state): State<AppRouterState>,
+) -> Response {
+    let shell = terminal_shell(&state, &headers).await;
+    let xterm = xterm_root().join("xterm/lib/xterm.mjs").is_file()
+        && xterm_root().join("addon-fit/lib/addon-fit.mjs").is_file();
+    let name = state.app.posture.lock().await.clone();
+    let posture = state.app.agency().await.posture(name);
+    Json(serde_json::json!({
+        "available": shell.is_ok() && cfg!(unix),
+        "place": shell.as_ref().ok().map(|shell| shell.place),
+        "reason": shell.err(),
+        "posture": posture,
+        "xterm": xterm,
+    }))
+    .into_response()
+}
+
+/// Whether this upgrade may open a shell.
+///
+/// **`Origin` has to be this server.** A WebSocket is not covered by CORS:
+/// any page in any tab can open one to `127.0.0.1:7878`, and on loopback with
+/// no token nothing else would stand between that page and a shell. A browser
+/// always sends `Origin` on an upgrade, and the page served from here sends
+/// its own `Host` back as it, so the page passes and every other site does
+/// not. A client with no `Origin` is refused too: nothing that is not this
+/// page needs a terminal in it.
+///
+/// **And on an unguarded port, `Host` has to be loopback** — the rebinding
+/// [`engines_allowed`] describes, where a site's own name resolves here and
+/// its `Origin` then matches its `Host`.
+fn terminal_allowed(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), Box<Response>> {
+    let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
+    let text = |name| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+    };
+    let (host, origin) = (text(header::HOST), text(header::ORIGIN));
+    let from = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"));
+    if host.is_empty() || from != Some(host) {
+        return Err(refuse(format!(
+            "Origin `{origin}` is not this server (`{host}`), and only this server's page opens a terminal"
+        )));
+    }
+    if !state.auth.is_token() && !host_is_loopback(host) {
+        return Err(refuse(format!(
+            "Host `{host}` is not this machine, and an unguarded port opens a terminal only to it"
+        )));
+    }
+    Ok(())
+}
+
+async fn terminal_socket(
+    ws: WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
+    State(state): State<AppRouterState>,
+) -> Response {
+    if let Err(refused) = terminal_allowed(&state, &headers) {
+        return *refused;
+    }
+    // Decided before the upgrade, so a shell this request may not have is a
+    // status and a sentence rather than a socket that opens and closes.
+    let shell = match terminal_shell(&state, &headers).await {
+        Ok(shell) => shell,
+        Err(why) => return (StatusCode::CONFLICT, why).into_response(),
+    };
+    ws.on_upgrade(move |socket| async move {
+        let id = SOCKETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        tracing::info!(target: "luu::ws", socket = id, channel = "terminal", place = shell.place, "open");
+        run_terminal(socket, shell).await;
+        tracing::info!(target: "luu::ws", socket = id, channel = "terminal", "closed");
+    })
+}
+
+/// What the page sends that is not keystrokes.
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TerminalControl {
+    Resize { cols: u16, rows: u16 },
+}
+
+/// Keystrokes in as binary frames, output out as binary frames, a resize as
+/// a text frame. Bytes rather than text both ways: a read can end in the
+/// middle of a UTF-8 sequence, and the page's decoder is the one that knows
+/// how to wait for the rest.
+#[cfg(unix)]
+async fn run_terminal(socket: WebSocket, shell: Shell) {
+    let (mut sink, mut stream) = socket.split();
+    let mut pty = match crate::terminal::Pty::spawn(&shell.open, shell.cwd.as_deref(), 80, 24) {
+        Ok(pty) => pty,
+        Err(error) => {
+            let said = format!(
+                "\r\nthe terminal could not start `{}`: {error}\r\n",
+                shell.open.join(" ")
+            );
+            let _ = sink.send(WsMessage::Binary(said.into_bytes().into())).await;
+            return;
+        }
+    };
+    loop {
+        tokio::select! {
+            output = pty.output.recv() => match output {
+                Some(bytes) => {
+                    if sink.send(WsMessage::Binary(bytes.into())).await.is_err() {
+                        break;
+                    }
+                }
+                // The shell exited, or the container it was in went away.
+                None => break,
+            },
+            incoming = stream.next() => match incoming {
+                Some(Ok(WsMessage::Binary(bytes))) => pty.write(bytes.to_vec()),
+                Some(Ok(WsMessage::Text(text))) => {
+                    match serde_json::from_str::<TerminalControl>(&text) {
+                        Ok(TerminalControl::Resize { cols, rows }) => pty.resize(cols, rows),
+                        Err(error) => tracing::warn!(target: "luu::ws", %error, "terminal control"),
+                    }
+                }
+                Some(Ok(WsMessage::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+    pty.hang_up().await;
+    let _ = sink.send(WsMessage::Close(None)).await;
+    // The client is gone, and what it started in the container is not: see
+    // `TerminalLine`. Bounded, because a runtime that hangs here would hold
+    // nothing but this task.
+    let Some(line) = shell.end.filter(|line| !line.is_empty()) else {
+        return;
+    };
+    let mut end = tokio::process::Command::new(&line[0]);
+    end.args(&line[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(10), end.status()).await {
+        Ok(Ok(status)) if status.success() => {}
+        outcome => tracing::warn!(
+            target: "luu::ws",
+            ?outcome,
+            "the terminal's shell may still be running"
+        ),
+    }
+}
+
+#[cfg(not(unix))]
+async fn run_terminal(socket: WebSocket, _shell: Shell) {
+    let (mut sink, _) = socket.split();
+    let said = "\r\nthe terminal needs a PTY, and this build has none\r\n";
+    let _ = sink
+        .send(WsMessage::Binary(said.as_bytes().to_vec().into()))
+        .await;
 }
 
 /// The bearer check, on the control and read surfaces only.
@@ -3183,6 +3535,13 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
 struct PosturesView {
     /// Where the file is, or `None` on a machine with no state directory.
     path: Option<String>,
+    /// Where the server's own policy file would run a session: the
+    /// `--sandbox` it was started with, or `luu.toml` where it was started.
+    /// The runtime it names first and, where that is a container, the same
+    /// file on every other container runtime after it.
+    own: Vec<Where>,
+    /// The same for every posture, by name.
+    places: std::collections::BTreeMap<String, Vec<Where>>,
     /// Whether a session may choose one here at all. False over stdio, where
     /// the process is the session.
     choosable: bool,
@@ -3617,15 +3976,429 @@ async fn get_icon(State(state): State<AppRouterState>, Path(id): Path<String>) -
     }
 }
 
+/// A posture as it names itself, and — where that is a container — the same
+/// file on every other container runtime: one image, one set of in-image
+/// paths, one argv but for its first word, which is what makes them
+/// substitutable. A host posture has no variants, because its sandbox names
+/// paths on this machine and an image's `[[worker.paths]]` are not here. See
+/// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+fn variants(describe: &DescribeFactory, policy: Option<PathBuf>) -> Vec<Where> {
+    let declared = describe(policy.clone(), None);
+    let contained = declared
+        .runtime
+        .parse::<agent_core::worker::Runtime>()
+        .is_ok_and(|runtime| runtime.is_contained());
+    let mut all = vec![declared.clone()];
+    if contained {
+        all.extend(
+            agent_core::worker::Runtime::CONTAINED
+                .into_iter()
+                .filter(|runtime| runtime.as_str() != declared.runtime)
+                .map(|runtime| describe(policy.clone(), Some(runtime))),
+        );
+    }
+    all
+}
+
 async fn get_postures(State(state): State<AppRouterState>) -> Response {
     let app = &state.app;
+    // Files, read on the blocking pool for `blocking`'s reason.
+    let (own, places) = match app.describe_for.clone() {
+        None => (Vec::new(), Default::default()),
+        Some(describe) => {
+            let postures = app.postures();
+            blocking(move || {
+                let variants = |policy: Option<PathBuf>| variants(&describe, policy);
+                let places = postures
+                    .iter()
+                    .map(|(name, posture)| (name.clone(), variants(Some(posture.policy.clone()))))
+                    .collect();
+                (variants(None), places)
+            })
+            .await
+        }
+    };
     Json(PosturesView {
         path: app.postures_path.clone(),
+        own,
+        places,
         choosable: app.agency_for.is_some(),
         running: app.posture.lock().await.clone(),
-        postures: app.postures.clone(),
+        postures: app.postures(),
     })
     .into_response()
+}
+
+// ---- runtimes ----------------------------------------------------------------
+//
+// Settings → Runtimes. Every write is held to [`engines_allowed`] — loopback by
+// the bound address and by `Host` — because a posture is what a session may do
+// and an image build is a process this machine runs. See `crate::runtimes` and
+// `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
+
+#[derive(serde::Serialize)]
+struct PostureRow {
+    policy: String,
+    place: Option<Where>,
+}
+
+#[derive(serde::Serialize)]
+struct PolicyRow {
+    path: String,
+    place: Option<Where>,
+}
+
+#[derive(serde::Serialize)]
+struct RuntimesView {
+    /// Where `config.toml` is, or would be written.
+    path: Option<String>,
+    editable: bool,
+    refused: Option<String>,
+    /// Where an image is built from, and where a policy file is looked for.
+    base: String,
+    runtimes: Vec<crate::runtimes::RuntimeView>,
+    tasks: Vec<crate::runtimes::TaskView>,
+    postures: std::collections::BTreeMap<String, PostureRow>,
+    /// The policy files a new posture may name.
+    policies: Vec<PolicyRow>,
+    /// The posture the live session is on, which may not be removed.
+    running: Option<String>,
+    /// `[terminal] host`.
+    host_shell: &'static str,
+}
+
+/// The images a runtime is asked about and may build: the ones a policy file
+/// or a posture names. Never one the page types — an image is a thing
+/// somebody wrote into a file here, for the reason a posture is never a path.
+fn images_of<'a>(places: impl Iterator<Item = &'a Option<Where>>) -> Vec<String> {
+    let mut images: Vec<String> = places
+        .flatten()
+        .filter_map(|place| place.image.clone())
+        .collect();
+    images.sort();
+    images.dedup();
+    images
+}
+
+async fn runtimes_answer(state: &AppRouterState, headers: &axum::http::HeaderMap) -> Response {
+    let app = &state.app;
+    let base = app.agency().await.sandbox.base().to_path_buf();
+    let postures = app.postures();
+    let describe = app.describe_for.clone();
+    let (postures, policies) = {
+        let base = base.clone();
+        blocking(move || {
+            let place = |policy: Option<PathBuf>| describe.as_ref().map(|d| d(policy, None));
+            let postures: std::collections::BTreeMap<_, _> = postures
+                .into_iter()
+                .map(|(name, posture)| {
+                    (
+                        name,
+                        PostureRow {
+                            policy: posture.policy.display().to_string(),
+                            place: place(Some(posture.policy.clone())),
+                        },
+                    )
+                })
+                .collect();
+            let policies: Vec<_> = crate::runtimes::policy_files(&base)
+                .into_iter()
+                .map(|file| PolicyRow {
+                    place: place(Some(base.join(&file.path))),
+                    path: file.path,
+                })
+                .collect();
+            (postures, policies)
+        })
+        .await
+    };
+    let images = images_of(
+        postures
+            .values()
+            .map(|row| &row.place)
+            .chain(policies.iter().map(|row| &row.place)),
+    );
+    let runtimes = crate::runtimes::probe_all(&images).await;
+    let refused = engines_allowed(state, headers).err().map(|_| {
+        "Runtimes are configured from a browser on this machine: a posture is what a session \
+         may do, and a build is a process this machine runs."
+            .to_string()
+    });
+    let host_shell = load_config()
+        .await
+        .map(|(config, _)| config.terminal().host)
+        .unwrap_or_default()
+        .as_str();
+    Json(RuntimesView {
+        path: config_path().await.map(|path| path.display().to_string()),
+        editable: refused.is_none(),
+        refused,
+        base: base.display().to_string(),
+        runtimes,
+        tasks: app.tasks.list(),
+        postures,
+        policies,
+        running: app.posture.lock().await.clone(),
+        host_shell,
+    })
+    .into_response()
+}
+
+async fn get_runtimes(
+    headers: axum::http::HeaderMap,
+    State(state): State<AppRouterState>,
+) -> Response {
+    runtimes_answer(&state, &headers).await
+}
+
+/// The tasks alone: what the section polls while one runs, because the
+/// probes start a process each and this starts none.
+async fn get_tasks(State(state): State<AppRouterState>) -> Response {
+    Json(state.app.tasks.list()).into_response()
+}
+
+/// A container runtime named in a route, and nothing else.
+fn contained(runtime: &str) -> Result<agent_core::worker::Runtime, Box<Response>> {
+    match runtime.parse::<agent_core::worker::Runtime>() {
+        Ok(runtime) if runtime.is_contained() => Ok(runtime),
+        Ok(runtime) => Err(Box::new(
+            (
+                StatusCode::BAD_REQUEST,
+                format!("`{runtime}` is not a container runtime"),
+            )
+                .into_response(),
+        )),
+        Err(error) => Err(Box::new((StatusCode::BAD_REQUEST, error).into_response())),
+    }
+}
+
+/// Installs a runtime, where `crate::runtimes::install_steps` has a line for
+/// it: Homebrew on macOS, for podman and colima, with the person's own
+/// authority. A JSON body is required for `start_engine`'s reason.
+async fn install_runtime(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(runtime): Path<String>,
+    Json(_): Json<serde_json::Value>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let runtime = match contained(&runtime) {
+        Ok(runtime) => runtime,
+        Err(refused) => return *refused,
+    };
+    let base = state.app.agency().await.sandbox.base().to_path_buf();
+    match state.app.tasks.install(runtime, &base) {
+        Ok(()) => Json(state.app.tasks.list()).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+/// Starts a runtime that is installed and not answering: Docker Desktop, a
+/// podman machine, colima, Apple's system service.
+async fn start_runtime(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(runtime): Path<String>,
+    Json(_): Json<serde_json::Value>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let runtime = match contained(&runtime) {
+        Ok(runtime) => runtime,
+        Err(refused) => return *refused,
+    };
+    let base = state.app.agency().await.sandbox.base().to_path_buf();
+    match state.app.tasks.wake(runtime, &base) {
+        Ok(()) => Json(state.app.tasks.list()).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct BuildAsk {
+    image: String,
+}
+
+async fn build_image(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Path(runtime): Path<String>,
+    Json(asked): Json<BuildAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let runtime = match contained(&runtime) {
+        Ok(runtime) => runtime,
+        Err(refused) => return *refused,
+    };
+    let app = &state.app;
+    let base = app.agency().await.sandbox.base().to_path_buf();
+    // Only an image some file here names.
+    let named = {
+        let base = base.clone();
+        let postures = app.postures();
+        let describe = app.describe_for.clone();
+        blocking(move || {
+            let place = |policy: PathBuf| describe.as_ref().map(|d| d(Some(policy), None));
+            let places: Vec<Option<Where>> = postures
+                .values()
+                .map(|posture| place(posture.policy.clone()))
+                .chain(
+                    crate::runtimes::policy_files(&base)
+                        .into_iter()
+                        .map(|file| place(base.join(file.path))),
+                )
+                .collect();
+            images_of(places.iter())
+        })
+        .await
+    };
+    if !named.contains(&asked.image) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "no policy file here names `{}` as its [worker] image, so it is not one this page builds",
+                asked.image
+            ),
+        )
+            .into_response();
+    }
+    match app.tasks.build(runtime, &asked.image, &base) {
+        Ok(()) => Json(app.tasks.list()).into_response(),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PosturesAsk {
+    postures: std::collections::BTreeMap<String, crate::provider::Posture>,
+}
+
+/// Replaces `[posture.*]`, and the postures this server offers with it.
+///
+/// A new posture names a policy file **out of the list** [`policy_files`]
+/// makes, never one the page types; a posture the file already had keeps
+/// whatever it names, whoever wrote it. The live session's posture may not be
+/// removed: it would be running under a name the file no longer has.
+///
+/// [`policy_files`]: crate::runtimes::policy_files
+async fn put_postures(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<PosturesAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let app = &state.app;
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let base = app.agency().await.sandbox.base().to_path_buf();
+    let offered: Vec<String> = {
+        let base = base.clone();
+        blocking(move || {
+            crate::runtimes::policy_files(&base)
+                .into_iter()
+                .map(|file| file.path)
+                .collect()
+        })
+        .await
+    };
+    for (name, posture) in &asked.postures {
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("`{name}` is not a posture name: letters, digits, `-` and `_`"),
+            )
+                .into_response();
+        }
+        let kept = current.postures().get(name) == Some(posture);
+        let listed = offered
+            .iter()
+            .any(|file| std::path::Path::new(file) == posture.policy);
+        if !kept && !listed {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!(
+                    "{} is not a policy file in {}: from this page a posture names one of those, \
+                     and any other path is written in config.toml by hand",
+                    posture.policy.display(),
+                    base.display()
+                ),
+            )
+                .into_response();
+        }
+    }
+    if let Some(running) = app.posture.lock().await.clone()
+        && !asked.postures.contains_key(&running)
+    {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "the live session is on `{running}`: move it to another posture first, from the \
+                 terminal's picker"
+            ),
+        )
+            .into_response();
+    }
+    let postures = asked.postures.clone();
+    if let Err(error) = write_config(current.with_postures(asked.postures), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    *app.postures
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = postures;
+    runtimes_answer(&state, &headers).await
+}
+
+#[derive(serde::Deserialize)]
+struct TerminalAsk {
+    host: crate::provider::HostShell,
+}
+
+/// Writes `[terminal] host`. Read again by every request for a shell, so it
+/// takes effect at once.
+async fn put_terminal(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(asked): Json<TerminalAsk>,
+) -> Response {
+    if let Err(refused) = engines_allowed(&state, &headers) {
+        return *refused;
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml",
+        )
+            .into_response();
+    };
+    let current = match load_config().await {
+        Ok((config, _)) => config,
+        Err(error) => return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    };
+    let terminal = crate::provider::Terminal { host: asked.host };
+    if let Err(error) = write_config(current.with_terminal(terminal), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    runtimes_answer(&state, &headers).await
 }
 
 // ---- engines ---------------------------------------------------------------
@@ -4828,6 +5601,10 @@ struct NewSession {
     /// and an image, for the same reason `provider` is never a URL. See
     /// `RECORD/2026-09-08.a-session-picks-its-executor.completed.md`.
     posture: Option<String>,
+    /// The posture on another container runtime — a word out of five, never
+    /// an image. See [`posture_for`].
+    #[serde(default)]
+    runtime: Option<String>,
     /// The three resend rules, each absent meaning *whatever this server is
     /// already under* — its flags, or the rules the session before it chose.
     ///
@@ -4967,11 +5744,28 @@ fn asked_for(body: &axum::body::Bytes) -> Result<NewSession, (StatusCode, String
 /// A session that names none still gets a fresh one, out of the policy file
 /// this server was started with — so a new session picks up an edited
 /// `luu.toml`, and never inherits the container the previous one was using.
+///
+/// `runtime` is a **variant**: the same posture on another container runtime.
+/// It is a name out of a closed set — the five `Runtime::CONTAINED` — and it
+/// replaces the runtime of a posture that is already contained, keeping its
+/// image and its in-image paths; it can never put a contained posture on the
+/// host, nor a host posture in a container. That is how it keeps the rule
+/// [`NewSession::posture`] states, that the browser never types a runtime and
+/// an image: it picks one of five words compiled into luu, and the image is
+/// still the file's. See
+/// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
 async fn posture_for(
     app: &App,
     asked: Option<&str>,
+    runtime: Option<&str>,
 ) -> Result<(Option<String>, Arc<Agency>), (StatusCode, String)> {
     let Some(build) = &app.agency_for else {
+        if let Some(runtime) = runtime {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("this surface cannot choose a posture, so not `{runtime}` either"),
+            ));
+        }
         return match asked {
             None => Ok((app.posture.lock().await.clone(), app.agency().await)),
             Some(name) => Err((
@@ -4984,7 +5778,7 @@ async fn posture_for(
     };
     let policy = match asked {
         None => None,
-        Some(name) => match app.postures.get(name) {
+        Some(name) => match app.postures().get(name) {
             Some(posture) => Some(posture.policy.clone()),
             None => {
                 let where_from = app
@@ -4998,7 +5792,45 @@ async fn posture_for(
             }
         },
     };
-    let agency = build(policy)
+    let runtime = match runtime {
+        None => None,
+        Some(text) => {
+            let runtime = text
+                .parse::<agent_core::worker::Runtime>()
+                .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+            if !runtime.is_contained() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "`{runtime}` is not a container runtime: a variant moves a contained \
+                         posture between runtimes, and a posture that runs on the host is \
+                         chosen by its own name"
+                    ),
+                ));
+            }
+            let declared = app
+                .describe_for
+                .as_ref()
+                .map(|describe| describe(policy.clone(), None).runtime);
+            let contained = declared
+                .as_deref()
+                .and_then(|declared| declared.parse::<agent_core::worker::Runtime>().ok())
+                .is_some_and(|declared| declared.is_contained());
+            if !contained {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "posture {} runs on {}, and only a contained posture moves to another \
+                         container runtime: its sandbox names paths on this machine, not in an image",
+                        asked.unwrap_or("(the server's own)"),
+                        declared.as_deref().unwrap_or("an unknown runtime"),
+                    ),
+                ));
+            }
+            Some(runtime)
+        }
+    };
+    let agency = build(policy, runtime)
         .await
         .map_err(|error| (StatusCode::BAD_REQUEST, format!("{error:#}")))?;
     Ok((asked.map(str::to_string), Arc::new(agency)))
@@ -5242,10 +6074,11 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     // And the same rule for what it may do: built before anything is reset, so
     // a runtime that is not installed or an image that is not built refuses the
     // *new* session rather than ending the one that is running.
-    let (posture_name, agency) = match posture_for(app, asked.posture.as_deref()).await {
-        Ok(resolved) => resolved,
-        Err((status, message)) => return (status, message).into_response(),
-    };
+    let (posture_name, agency) =
+        match posture_for(app, asked.posture.as_deref(), asked.runtime.as_deref()).await {
+            Ok(resolved) => resolved,
+            Err((status, message)) => return (status, message).into_response(),
+        };
     *app.destination.write().await = sending.clone();
     tracing::info!(
         target: "luu::session",
@@ -5355,6 +6188,146 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
     (StatusCode::CREATED, Json(summary)).into_response()
 }
 
+/// `PUT /api/session/posture`: `null` is the server's own policy file.
+#[derive(serde::Deserialize)]
+struct MovePosture {
+    #[serde(default)]
+    posture: Option<String>,
+    /// A variant: see [`posture_for`].
+    #[serde(default)]
+    runtime: Option<String>,
+}
+
+/// Moves the live session to another posture: where its commands run, and
+/// what they may do.
+///
+/// **Between jobs, and in writing.** What went wrong when a posture moved
+/// under a session was something approved under one being carried into
+/// another, and a move the stream did not record — see
+/// `RECORD/2026-09-17.what-an-approval-was-granted-under.completed.md`. So a
+/// move is refused while a turn runs, a proposal waits at the gate, or an
+/// approved job is open, and it writes a header line carrying the new posture:
+/// the fold's *last header wins* already means "from here on, this ran
+/// somewhere else". A draft is not a refusal: it runs under its posture's
+/// floor, which grants nothing to carry. See
+/// `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+async fn put_session_posture(
+    State(state): State<AppRouterState>,
+    Json(asked): Json<MovePosture>,
+) -> Response {
+    let app = &state.app;
+    // Held for the whole move, so a turn cannot start between the check and
+    // the swap. Nothing below takes it.
+    let session = app.session.lock().await;
+    if session.current.is_some() {
+        return (
+            StatusCode::CONFLICT,
+            "a turn is running: the session moves between turns",
+        )
+            .into_response();
+    }
+    if session.pending.is_some() {
+        return (
+            StatusCode::CONFLICT,
+            "a proposal is waiting at the gate, asked under this posture: approve or decline it, \
+             and the session moves after",
+        )
+            .into_response();
+    }
+    let approved = session.context.live_job().filter(|job| {
+        session
+            .context
+            .job(*job)
+            .is_some_and(|job| job.plan.is_some())
+    });
+    if let Some(job) = approved {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "job {job} is open, and it was approved under this posture: close it, and the \
+                 session moves between jobs"
+            ),
+        )
+            .into_response();
+    }
+
+    let current = app.agency().await.posture(app.posture.lock().await.clone());
+    // Built before anything is swapped, `create_session`'s discipline: a
+    // runtime that is not installed refuses the move and leaves the session
+    // where it was.
+    let (name, agency) =
+        match posture_for(app, asked.posture.as_deref(), asked.runtime.as_deref()).await {
+            Ok(resolved) => resolved,
+            Err((status, message)) => return (status, message).into_response(),
+        };
+    let posture = agency.posture(name.clone());
+    if current.same_place(&posture) && current.name == posture.name {
+        if !Arc::ptr_eq(&agency, &app.agency().await) {
+            agency.shutdown().await;
+        }
+        return Json(serde_json::json!({ "posture": posture, "moved": false })).into_response();
+    }
+
+    // Ended rather than dropped, for `Agency::shutdown`'s reason — and with it
+    // the old container, and any terminal that was open in it.
+    let previous = std::mem::replace(&mut *app.agency.write().await, agency.clone());
+    if !Arc::ptr_eq(&previous, &agency) {
+        previous.shutdown().await;
+    }
+    *app.posture.lock().await = name.clone();
+    drop(session);
+
+    let sending = app.destination().await;
+    let started_at = *app.session_started_at.lock().await;
+    app.stream.lock().await.push(crate::session::header(
+        sending.backend.name(),
+        &sending.model,
+        sending.budget,
+        sending.counter.id(),
+        Some(posture.clone()),
+        &sending.authority,
+        sending.tool_calls,
+        started_at,
+    ));
+    if let Some(recorder) = &app.recorder {
+        recorder.session(
+            sending.backend.name(),
+            &sending.model,
+            sending.budget,
+            sending.counter.id(),
+            Some(posture.clone()),
+            &sending.authority,
+            sending.tool_calls,
+            started_at,
+        );
+    }
+    {
+        // What folding that line produces, field for field — the resume's
+        // `moved` branch, for `store_parity`'s reason.
+        let mut view = app.view.lock().await;
+        view.posture = Some(posture.clone());
+        view.repeat = Some(sending.budget.repeat);
+        view.prune = Some(sending.budget.prune);
+        view.results = Some(sending.budget.results);
+        view.authority_draft = sending.authority.draft_note();
+        view.authority_plan = sending.authority.plan_note();
+        view.tool_calls = sending
+            .tool_calls
+            .native()
+            .then(|| sending.tool_calls.as_str().to_string());
+    }
+    // Now, not at the next turn: a session moved and then left alone must
+    // still say where it went.
+    app.checkpoint().await;
+    tracing::info!(
+        target: "luu::session",
+        posture = name.as_deref(),
+        runtime = posture.runtime.as_str(),
+        "the live session now runs here",
+    );
+    Json(serde_json::json!({ "posture": posture, "moved": true })).into_response()
+}
+
 /// Picks a stored session back up — optionally somewhere else.
 ///
 /// The body is `POST /api/sessions`', and means the same thing: a profile out
@@ -5430,10 +6403,11 @@ async fn resume_session(
     // is swapped, so a runtime that is not installed refuses the resume rather
     // than ending the session that is running — the discipline
     // `create_session` keeps for the same reason.
-    let (posture_name, agency) = match posture_for(app, asked.posture.as_deref()).await {
-        Ok(resolved) => resolved,
-        Err((status, message)) => return (status, message).into_response(),
-    };
+    let (posture_name, agency) =
+        match posture_for(app, asked.posture.as_deref(), asked.runtime.as_deref()).await {
+            Ok(resolved) => resolved,
+            Err((status, message)) => return (status, message).into_response(),
+        };
     let posture = agency.posture(posture_name.clone());
 
     // A destination may move under a history; a posture may not. What a session
@@ -5962,10 +6936,12 @@ mod tests {
             // session on a posture: a `None` here is the same answer stdio
             // gets, and the route says so rather than pretending.
             agency_for: None,
+            describe_for: None,
             postures: Default::default(),
             postures_path: None,
             icons: std::sync::RwLock::new(Arc::new(crate::icons::Theme::default())),
             engines: Arc::default(),
+            tasks: Arc::default(),
             inflight: Arc::default(),
             temperature: None,
             seed: None,

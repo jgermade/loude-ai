@@ -32,7 +32,7 @@ use crate::tools::{ToolCall, ToolFuture, ToolOutcome, Tools};
 
 pub mod runtime;
 
-pub use runtime::{Runtime, RuntimeError, WorkerConfig, WorkerSpec};
+pub use runtime::{Runtime, RuntimeError, TerminalLine, WorkerConfig, WorkerSpec};
 
 /// The IPC's version, bumped when a reader of the old one could not parse the
 /// new one.
@@ -235,6 +235,13 @@ pub struct Worker {
     /// fact rather than an assumption — two interleaved calls on one pipe would
     /// pair the wrong outcome with the wrong call.
     pipe: Mutex<Option<Pipe>>,
+    /// The name of the container the live pipe talks to, for a terminal to
+    /// `exec` into. **Beside the pipe rather than inside it**, because the
+    /// pipe's lock is held for the whole of a tool call, and a terminal should
+    /// not wait behind a `cargo build`. `None` when there is no container, or
+    /// while the worker is dead and waiting for the next call to restart it.
+    /// See `RECORD/2026-10-01.a-terminal-in-the-container.completed.md`.
+    container: std::sync::Mutex<Option<String>>,
 }
 
 impl std::fmt::Debug for Worker {
@@ -249,6 +256,8 @@ impl std::fmt::Debug for Worker {
 }
 
 struct Pipe {
+    /// The container this pipe's worker is the only process of, by name.
+    container: Option<String>,
     child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
     stdout: BufReader<tokio::process::ChildStdout>,
@@ -265,6 +274,7 @@ impl Worker {
     pub async fn start(spec: &WorkerSpec, commands: &[String]) -> Result<Self, WorkerError> {
         let label = spec.label();
         let (pipe, hello) = Self::open(spec, commands).await?;
+        let container = std::sync::Mutex::new(pipe.container.clone());
 
         Ok(Self {
             label,
@@ -274,6 +284,7 @@ impl Worker {
             commands: commands.to_vec(),
             restarts: std::sync::atomic::AtomicU32::new(0),
             pipe: Mutex::new(Some(pipe)),
+            container,
         })
     }
 
@@ -282,7 +293,8 @@ impl Worker {
     /// restart repeats — the same three checks, so a worker started an hour into
     /// a session is held to what the one at the start was.
     async fn open(spec: &WorkerSpec, commands: &[String]) -> Result<(Pipe, Hello), WorkerError> {
-        let argv = spec.argv(commands)?;
+        let container = spec.runtime.is_contained().then(runtime::container_name);
+        let argv = spec.argv_as(commands, container.as_deref())?;
 
         let mut command = tokio::process::Command::new(&argv[0]);
         command
@@ -299,6 +311,7 @@ impl Worker {
         let stdin = child.stdin.take().expect("stdin was piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout was piped"));
         let mut pipe = Pipe {
+            container,
             child,
             stdin,
             stdout,
@@ -355,8 +368,41 @@ impl Worker {
     /// start another. What [`Executor::abandon`] does here.
     async fn replace(&self) {
         if let Some(mut pipe) = self.pipe.lock().await.take() {
+            self.name(None);
             pipe.kill().await;
         }
+    }
+
+    fn name(&self, container: Option<String>) {
+        *self
+            .container
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = container;
+    }
+
+    /// The lines that open and end a shell in this worker's container, or why
+    /// there is none: no container at all, or a worker that is dead and waiting
+    /// for the next tool call to start it again.
+    pub fn terminal_argv(&self) -> Result<TerminalLine, String> {
+        if !self.spec.runtime.is_contained() {
+            return Err(format!(
+                "{} runs tools without a container, so there is nothing to open a terminal in",
+                self.label
+            ));
+        }
+        let name = self
+            .container
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .ok_or_else(|| {
+                "the worker is not running; it starts again on the next tool call".to_string()
+            })?;
+        static OPENED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = OPENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.spec
+            .exec_argv(&name, &format!("{}-{id}", std::process::id()))
+            .ok_or_else(|| format!("{} cannot exec into a container", self.label))
     }
 
     pub fn hello(&self) -> &Hello {
@@ -365,6 +411,12 @@ impl Worker {
 
     pub fn label(&self) -> &str {
         &self.label
+    }
+
+    /// Whether there is a container around this worker. `direct` has none:
+    /// its worker is a child on this machine.
+    pub fn is_contained(&self) -> bool {
+        self.spec.runtime.is_contained()
     }
 }
 
@@ -387,6 +439,7 @@ impl Executor for Worker {
                 // the argument for having put it there.
                 match Worker::open(&self.spec, &self.commands).await {
                     Ok((pipe, _)) => {
+                        self.name(pipe.container.clone());
                         *slot = Some(pipe);
                         self.restarts
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -421,6 +474,7 @@ impl Executor for Worker {
                     // turn failed on the same corpse. It is dropped here so the
                     // next call starts one.
                     *slot = None;
+                    self.name(None);
                     self.gave_up(error)
                 }
             }
@@ -579,8 +633,9 @@ async fn write_line(
 ///
 /// Deliberately not `Command::new(name).spawn()`: the question is whether the
 /// image *has* it, and running it to find out is a side effect nobody asked
-/// for.
-fn which(name: &str) -> Option<PathBuf> {
+/// for. Public for the page's environment picker, which asks the same
+/// question about a runtime on this machine.
+pub fn which(name: &str) -> Option<PathBuf> {
     let path = std::path::Path::new(name);
     if path.components().count() > 1 {
         return path.is_file().then(|| path.to_path_buf());

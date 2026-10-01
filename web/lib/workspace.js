@@ -459,6 +459,12 @@ async function loadDiff(tab, { quiet = false } = {}) {
   }
 }
 
+/// One file's diff, without a tab: what the content column's foot shows in a
+/// modal. The same endpoint a diff tab reads, so the two never disagree.
+export function readDiff(path, staged = false) {
+  return ask(`./api/workspace/git-diff?path=${encodeURIComponent(path)}&staged=${staged}`)
+}
+
 // ---- following the disk -----------------------------------------------------
 //
 // The server watches the base and says what changed, in batches (see

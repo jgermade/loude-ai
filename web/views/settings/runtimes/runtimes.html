@@ -1,0 +1,266 @@
+<script :setup>
+  // Where a session's commands may run: the container runtimes on this
+  // machine, the images they have, the postures that use them, and who gets a
+  // shell on the host. A runtime is usable when it is installed, answers, has
+  // the image, and a posture uses it — this section shows all four and changes
+  // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
+  const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell } =
+    await import("@web/lib/runtimes.js")
+
+  let view = null
+  let error = ""
+  let busy = ""
+  // The posture being added: `{ name, policy }`, or `null`.
+  let adding = null
+
+  const took = result => {
+    if (result.ok) {
+      view = result.view
+      error = ""
+    } else {
+      error = result.error
+    }
+    return result.ok
+  }
+  const check = async () => {
+    busy = "check"
+    took(await loadRuntimes())
+    busy = ""
+  }
+  await check()
+
+  // Only the tasks are polled, and only while one runs: the probes start a
+  // process per runtime, and on Docker Desktop each one wakes a VM. When the
+  // last task ends the runtimes are asked again, so what it changed shows.
+  //
+  // The flag is inside a closure on purpose: a top-level `let` is a field of
+  // this component's store, and writing it from the line that reads it wakes
+  // that line again (see `views/inspector/tree/tree.html`).
+  const follow = (() => {
+    let polling = false
+    const poll = async () => {
+      const pane = $self(".runtimes-pane")
+      if (!pane?.isConnected) return (polling = false)
+      const result = await loadTasks()
+      if (result.ok && view) view = { ...view, tasks: result.view }
+      if (result.ok && result.view.some(b => b.state === "running")) return setTimeout(poll, 1500)
+      polling = false
+      took(await loadRuntimes())
+    }
+    return () => {
+      if (polling) return
+      polling = true
+      setTimeout(poll, 1500)
+    }
+  })()
+  // Followed from the moment a task is started, and when the section opens on
+  // one already running — not from a `$:` line, which is a wake-up this
+  // depended on once and did not always get.
+  if ((view?.tasks || []).some(t => t.state === "running")) follow()
+
+  // A task's route answers with the task list, not the view, so the view
+  // takes the list as its `tasks` and is asked again once they have ended.
+  const task = async (label, action) => {
+    busy = label
+    const started = await action()
+    if (started.ok) {
+      view = { ...view, tasks: started.view }
+      error = ""
+      follow()
+    } else {
+      error = started.error
+    }
+    busy = ""
+  }
+  const build = (runtime, image) => task(`build:${runtime}:${image}`, () => buildImage(runtime, image))
+  const install = runtime => task(`install:${runtime}`, () => installRuntime(runtime))
+  const start = runtime => task(`start:${runtime}`, () => startRuntime(runtime))
+  const taskOf = (kind, runtime, image = null) =>
+    (view?.tasks || []).find(t => t.kind === kind && t.runtime === runtime && (t.image ?? null) === image)
+  const buildOf = (runtime, image) => taskOf("build", runtime, image)
+  // What a task in progress or failed has to say; a finished one says nothing,
+  // because the row already shows what it changed.
+  const showing = t => !!t && t.state !== "done"
+
+  const postures = () => Object.fromEntries(
+    Object.entries(view?.postures || {}).map(([name, row]) => [name, { policy: row.policy }]))
+  const remove = async name => {
+    const rest = postures()
+    delete rest[name]
+    busy = `remove:${name}`
+    took(await savePostures(rest))
+    busy = ""
+  }
+  const add = async () => {
+    const name = (adding?.name || "").trim()
+    if (!name || !adding?.policy) return
+    busy = "add"
+    if (took(await savePostures({ ...postures(), [name]: { policy: adding.policy } }))) adding = null
+    busy = ""
+  }
+  const HOSTS = [
+    { value: "loopback", label: "This machine", title: "A browser on this machine, when luu serve is bound on loopback" },
+    { value: "always", label: "Anyone with the token", title: "Off loopback too, to whoever holds the token" },
+    { value: "never", label: "Nobody", title: "No shell on the host from the page" },
+  ]
+  const host = async value => {
+    busy = "host"
+    took(await saveHostShell(value))
+    busy = ""
+  }
+
+  // Where a posture would run, in the words the terminal's picker uses.
+  const runs = place => !place ? "?"
+    : place.runtime === "direct" ? "direct (no container)"
+    : place.image ? `${place.runtime} · ${place.image}` : place.runtime
+  const answerWord = r => !r.path ? "not installed"
+    : r.answers ? "answering" : "installed, not answering"
+  $: names = Object.keys(view?.postures || {})
+  $: unused = (view?.policies || []).filter(p => !names.some(n => view.postures[n].policy === p.path))
+</script>
+
+<div class="runtimes-pane">
+  <h3>Runtimes</h3>
+  <p class="dim small">
+    Where a session's commands run. A container runtime is usable when it is
+    installed, answers, has the image a posture names, and a posture uses it.
+    Each container posture is offered on every installed container runtime,
+    from the terminal's picker. Podman and colima install from here with
+    Homebrew, as you; the others need an administrator, and each row says how.
+    <span :if="view?.path">Postures are written to {{ view.path }}.</span>
+  </p>
+  <p :if="view && !view.editable" class="refused">{{ view.refused }}</p>
+  <p :if="error" class="error">{{ error }}</p>
+
+  <section :each="r in view?.runtimes || []" :key="r.runtime" class="runtime" :class.off="!r.path">
+    <header>
+      <strong>{{ r.runtime }}</strong>
+      <span class="state" :class.up="r.answers" :class.down="r.answers === false">{{ answerWord(r) }}</span>
+      <code :if="r.path" class="dim small">{{ r.path }}</code>
+    </header>
+    <!-- Installed from here where Homebrew can do it with the person's own
+         authority; said, as a command, where it would take root. -->
+    <p :if="!r.path" class="small hint">
+      <button :if="r.install && taskOf('install', r.runtime)?.state !== 'running'" type="button"
+              :disabled="!view.editable || !!busy" @click="install(r.runtime)">install</button>
+      <code :if="r.install">{{ r.install }}</code>
+      <span :if="!r.install" class="dim">{{ (r.hint || "").replaceAll("`", "") }}</span>
+      <span :if="!r.install && r.install_refused" class="dim"> — {{ r.install_refused }}</span>
+    </p>
+    <p :if="r.answers === false" class="warn small">
+      {{ r.detail }}
+      <button :if="r.startable && taskOf('start', r.runtime)?.state !== 'running'" type="button" class="link"
+              :disabled="!view.editable || !!busy" @click="start(r.runtime)">start it</button>
+    </p>
+    <pre :if="showing(taskOf('install', r.runtime))" class="log">{{ taskOf("install", r.runtime).tail.join("\n") }}</pre>
+    <pre :if="showing(taskOf('start', r.runtime))" class="log">{{ taskOf("start", r.runtime).tail.join("\n") }}</pre>
+    <p :if="r.path && r.gap" class="dim small">{{ r.gap }}</p>
+    <ul :if="r.answers" class="images">
+      <li :each="i in r.images" :key="i.image">
+        <code>{{ i.image }}</code>
+        <span :if="i.present" class="state up">built</span>
+        <span :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" class="state down">not built</span>
+        <button :if="i.present === false && buildOf(r.runtime, i.image)?.state !== 'running'" type="button" class="link"
+                :disabled="!view.editable || !!busy" @click="build(r.runtime, i.image)">build</button>
+        <span :if="buildOf(r.runtime, i.image)?.state === 'running'" class="state">building…</span>
+        <span :if="buildOf(r.runtime, i.image)?.state === 'failed'" class="state down">the last build failed</span>
+        <pre :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'"
+             class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre>
+      </li>
+      <li :if="!r.images.length" class="dim small">No policy file here names an image.</li>
+    </ul>
+  </section>
+  <p class="dim small">
+    <button type="button" class="link" :disabled="!!busy" @click="check()">check again</button>
+    <span :if="busy === 'check'"> · asking each runtime…</span>
+  </p>
+
+  <h3>Postures</h3>
+  <p class="dim small">
+    What a session may do and where it runs, by the policy file that decides
+    both. A new posture names one of the policy files in
+    <code>{{ view?.base }}</code>; any other path is written in config.toml by hand.
+  </p>
+  <dl class="settings postures">
+    <div class="row">
+      <dt><span class="dim">server default</span></dt>
+      <dd><span class="dim">the policy file <code>luu serve</code> was started with</span></dd>
+    </div>
+    <div :each="name in names" :key="name" class="row">
+      <dt><strong>{{ name }}</strong></dt>
+      <dd>
+        <code>{{ view.postures[name].policy }}</code>
+        · {{ runs(view.postures[name].place) }}
+        <span :if="view.postures[name].place?.missing" class="warn small">— {{ view.postures[name].place.missing }}</span>
+        <span :if="view.running === name" class="tag">the live session</span>
+        <button :if="view.running !== name" type="button" class="link"
+                :disabled="!view.editable || !!busy" @click="remove(name)">remove</button>
+      </dd>
+    </div>
+  </dl>
+  <div :if="adding" class="adding">
+    <input type="text" placeholder="name" :value="adding?.name || ''"
+           @input="adding = { ...adding, name: $event.target.value }">
+    <select @change="adding = { ...adding, policy: $event.target.value }">
+      <option value="">a policy file…</option>
+      <option :each="p in view?.policies || []" :key="p.path" :value="p.path"
+              :selected="adding?.policy === p.path">{{ p.path }} · {{ runs(p.place) }}</option>
+    </select>
+    <button type="button" :disabled="!adding?.name || !adding?.policy || !!busy" @click="add()">add</button>
+    <button type="button" class="link" @click="adding = null">cancel</button>
+  </div>
+  <p :if="!adding" class="small">
+    <button type="button" class="add" :disabled="!view?.editable || !(view?.policies || []).length"
+            @click="adding = { name: '', policy: unused[0]?.path || view.policies[0]?.path || '' }">+ posture</button>
+  </p>
+
+  <h3>Host shell</h3>
+  <p class="dim small">
+    A session on the host gets its terminal on this machine, with your account.
+    Who may open one: <code>[terminal] host</code>.
+  </p>
+  <div class="hosts">
+    <label :each="o in HOSTS" :key="o.value" :title="o.title">
+      <input type="radio" name="host-shell" :value="o.value" :checked="view?.host_shell === o.value"
+             :disabled="!view?.editable || !!busy" @change="host(o.value)">
+      {{ o.label }}
+    </label>
+  </div>
+</div>
+
+<style scoped>
+  h3:first-child { margin-top: 0; }
+  .runtime {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: .5rem .8rem;
+    margin: .5rem 0;
+  }
+  .runtime.off { opacity: .75; }
+  .runtime header { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .runtime p { margin: .3rem 0 0; }
+  .state { font-size: 12px; color: var(--dim); }
+  .state.up { color: var(--ok, var(--accent)); }
+  .state.down { color: var(--warn); }
+  .images { list-style: none; margin: .4rem 0 0; padding: 0; }
+  .images li { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: 12px; }
+  .log {
+    flex-basis: 100%;
+    margin: .3rem 0 0;
+    font-size: 11px;
+    max-height: 10rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--dim);
+  }
+  /* Each row is a `div` holding its `dt` and `dd`, which HTML allows in a
+     `dl`, so the pair spans the grid's two columns as one. */
+  .postures .row { display: contents; }
+  .postures dd { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .adding { display: flex; gap: .5rem; align-items: center; margin: .6rem 0; flex-wrap: wrap; }
+  .adding input { width: 10rem; }
+  .hosts { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 13px; }
+  .hosts label { display: flex; gap: .35rem; align-items: center; }
+  code { overflow-wrap: anywhere; }
+</style>
