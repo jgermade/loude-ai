@@ -83,7 +83,7 @@
 <dl class="settings">
   <dt>Files are drawn by</dt>
   <dd>
-    <Segmented :options="editors" :model="prefs.editor" @change="setEditor($event.detail)" />
+    <Segmented label="Files are drawn by" :options="editors" :model="prefs.editor" @change="setEditor($event.detail)" />
   </dd>
   <dd :if="monacoHere === false" class="caveat">
     Monaco is not installed. It is a node dependency of
@@ -99,11 +99,11 @@
   </dd>
   <dt>Editor colours</dt>
   <dd>
-    <Segmented :options="TONES" :model="prefs.editorTone" @change="setEditorTone($event.detail)" />
+    <Segmented label="Editor colours" :options="TONES" :model="prefs.editorTone" @change="setEditorTone($event.detail)" />
   </dd>
   <dt>Snippet colours</dt>
   <dd>
-    <Segmented :options="TONES" :model="prefs.snippetTone" @change="setSnippetTone($event.detail)" />
+    <Segmented label="Snippet colours" :options="TONES" :model="prefs.snippetTone" @change="setSnippetTone($event.detail)" />
   </dd>
   <dd class="note">
     Code is drawn in Sublime Text 3's <b>Monokai</b>: <b>Dark</b> is its own,
@@ -117,7 +117,7 @@
 <dl class="settings">
   <dt>Columns</dt>
   <dd>
-    <Segmented :options="LAYOUTS" :model="prefs.layout" @change="setLayout($event.detail)" />
+    <Segmented label="Columns" :options="LAYOUTS" :model="prefs.layout" @change="setLayout($event.detail)" />
   </dd>
   <dd class="note">
     <b>Responsive</b> is three columns — inspector, content, chat — above

@@ -83,12 +83,20 @@
   $: showContent = columns === 3 || prefs.pane === "content"
   $: showChat = columns === 3 || prefs.pane === "chat"
 
+  // The chat, shown and typed into: every way to it — the logo, the column's
+  // switch, ESC — ends in the composer, because a person who brings the chat
+  // back has come to write in it. A frame later, because a chat that was
+  // hidden has no composer until it is drawn.
+  const focusChat = () =>
+    requestAnimationFrame(() => document.querySelector(".composer input")?.focus())
+  const showChatPane = () => {
+    setPane("chat")
+    focusChat()
+  }
+
   // The logo means *take me back to the conversation* — a switch where there
   // are two columns, a focus where there are three.
-  const toChat = () => {
-    setPane("chat")
-    document.querySelector(".composer input")?.focus()
-  }
+  const toChat = () => showChatPane()
 
   // ---- what the columns hold ---------------------------------------------
 
@@ -204,8 +212,15 @@
   // A *running turn* is deliberately not in the list either: it is the one
   // cancellable thing on this page whose undo costs work, and ESC is too easy
   // to hit for that. The composer's own button stays the way to stop one.
+  //
+  // With nothing left to cancel, ESC goes **to the composer** first: a chat
+  // on screen takes the focus, and only from the composer does ESC swap the
+  // columns. A terminal and the editor keep their ESC — it is a key a shell
+  // and vim are owed.
   const onKeydown = event => {
     if (event.key !== "Escape") return
+    if (event.defaultPrevented) return
+    if (event.target.closest?.(".terminal, #monaco-host")) return
     if (document.querySelector("dialog[open]")) return
     if (ui.history) return closeHistory()
     if (renaming) return cancelRename()
@@ -213,9 +228,12 @@
       armedClose = ""
       return
     }
+    const composer = document.querySelector(".composer input")
+    if (showChat && composer && document.activeElement !== composer) return focusChat()
     // Three columns are all on screen, so there is nothing to swap.
     if (columns !== 2) return
-    setPane(prefs.pane === "chat" ? "content" : "chat")
+    if (prefs.pane === "chat") setPane("content")
+    else showChatPane()
   }
   document.addEventListener("keydown", onKeydown)
 
@@ -544,7 +562,16 @@
       <!-- The corner a logo has always been in, and the column that is always
            on screen. It is a control: it means *take me back to the
            conversation*. -->
-      <button type="button" class="logo" title="Back to the chat" @click="toChat()">luu</button>
+      <button type="button" class="logo" title="Back to the chat" aria-label="luu" @click="toChat()">
+        <!-- `logo.svg` without its ground, and the letters in the page's own
+             ink, so the mark reads on the light page as on the dark one. -->
+        <svg viewBox="86 120 340 270" aria-hidden="true" fill="none" stroke-width="40"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path stroke="#f5a524" d="M116 150v210"/>
+          <path stroke="currentColor" d="M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215"/>
+          <circle cx="356" cy="296" r="13" fill="#f5a524" stroke="none"/>
+        </svg>
+      </button>
       <nav class="tabs">
         <button type="button" :class.on="prefs.inspector === 'files'" @click="setInspector('files')">Files</button>
         <button type="button" :class.on="prefs.inspector === 'git'" @click="setInspector('git')">Git</button>
@@ -618,7 +645,7 @@
         type="button"
         class="swap"
         title="Show the chat instead"
-        @click="setPane('chat')">
+        @click="showChatPane()">
         <svg class="ic"><use href="#i-chat"/></svg>
       </button>
     </header>
@@ -958,11 +985,11 @@
                job is not the session. -->
           <div class="narrow" :if="!replaying">
             <span class="dim">network</span>
-            <Segmented size="small" :options="NETWORK" :model="network" />
+            <Segmented size="small" label="network" :options="NETWORK" :model="network" />
           </div>
           <div class="narrow" :if="!replaying">
             <span class="dim">enforcement</span>
-            <Segmented size="small" :options="ENFORCEMENT" :model="enforcement" />
+            <Segmented size="small" label="enforcement" :options="ENFORCEMENT" :model="enforcement" />
           </div>
           <!-- The one field here that narrows backwards: `kernel` is a
                tightening and needs no permission, `best-effort` asks the policy
@@ -1220,7 +1247,10 @@
     letter-spacing: .02em;
     padding: .15rem .35rem;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
   }
+  .logo svg { display: block; height: 18px; width: auto; }
   .logo:hover { color: var(--accent); background: var(--bg); }
 
   .tabs { display: flex; align-items: stretch; gap: .1rem; margin-left: auto; height: 100%; }

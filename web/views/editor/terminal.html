@@ -45,6 +45,26 @@
     border-top: 1px solid var(--line);
     background: var(--bg);
     color: var(--fg);
+    /* The sixteen colours a shell names, from the author's own terminal
+       (`joshua.itermcolors` in github.com/jgermade/sh). Without them xterm
+       draws Tango, whose yellow and greens are a step duller than the
+       prompt they were picked for. Tokens, so a page can re-point them. */
+    --ansi-black: #999999;
+    --ansi-red: #ff3c3c;
+    --ansi-green: #73d216;
+    --ansi-yellow: #ffe816;
+    --ansi-blue: #3465a4;
+    --ansi-magenta: #f92a72;
+    --ansi-cyan: #62dafc;
+    --ansi-white: #cfcfcf;
+    --ansi-bright-black: #aaaaaa;
+    --ansi-bright-red: #ff2525;
+    --ansi-bright-green: #8ae234;
+    --ansi-bright-yellow: #fce94f;
+    --ansi-bright-blue: #729fcf;
+    --ansi-bright-magenta: #f92a72;
+    --ansi-bright-cyan: #81e4ff;
+    --ansi-bright-white: #f8f8f2;
   }
   .note { margin: 0; padding: .6rem .8rem; font-size: 12px; line-height: 1.5; }
   .warn { color: var(--warn); }

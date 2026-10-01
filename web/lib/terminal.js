@@ -69,12 +69,24 @@ function xterm() {
   return loaded
 }
 
+/// The sixteen a shell names, as xterm calls them and as the panel's tokens
+/// do (`--ansi-yellow`, `--ansi-bright-yellow`).
+const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
+
 /// The panel's own colours, read where xterm draws: the panel is dark whatever
-/// the page is (`app.css`), so the page's root is not where to ask.
+/// the page is (`app.css`), so the page's root is not where to ask. A token
+/// the panel does not set is left out, and xterm keeps its own colour for it.
 function theme(host) {
   const css = getComputedStyle(host)
   const token = name => css.getPropertyValue(name).trim()
+  const palette = {}
+  for (const name of ANSI) {
+    const bright = `bright${name[0].toUpperCase()}${name.slice(1)}`
+    if (token(`--ansi-${name}`)) palette[name] = token(`--ansi-${name}`)
+    if (token(`--ansi-bright-${name}`)) palette[bright] = token(`--ansi-bright-${name}`)
+  }
   return {
+    ...palette,
     background: token("--bg"),
     foreground: token("--fg"),
     cursor: token("--accent"),

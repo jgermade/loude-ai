@@ -153,7 +153,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   // The third section, which the modal's own comment said its shape made free.
@@ -270,7 +270,7 @@ test("an authority note is written from the page and reaches the live session", 
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
@@ -392,7 +392,7 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
@@ -407,6 +407,18 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await page.locator('.modal button.add:has-text("+ provider")').click()
   const form = page.getByRole("dialog", { name: "Add a provider" })
   await expect(form).toBeVisible()
+  // A child of Settings: no head of its own, hung from the bottom of Settings'
+  // head, and ESC closes it and nothing under it.
+  await expect(form.locator(".modal-head")).toHaveCount(0)
+  await expect(async () => {
+    const head = await page.locator("dialog.modal:not(.child) > .modal-head").boundingBox()
+    const box = await form.boundingBox()
+    expect(Math.abs(box.y - (head.y + head.height))).toBeLessThan(1)
+  }).toPass()
+  await page.keyboard.press("Escape")
+  await expect(form).toHaveCount(0)
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible()
+  await page.locator('.modal button.add:has-text("+ provider")').click()
   // A name the table already has is refused before it is sent.
   await form.locator("dd input").first().fill("here")
   await expect(form.locator(".warn")).toContainText("already a provider")
@@ -471,7 +483,7 @@ test("an engine is added with its provider, started, and stopped from Settings",
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
@@ -535,7 +547,7 @@ test("a new default and the chat's picker both move the session without a restar
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   // This server was started with no -p and no default: it follows the file.
@@ -605,7 +617,7 @@ test("the models on this machine are listed by where they came from", async ({ p
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   // The engine form offers the two llama.cpp can load, and says why not the third.
@@ -657,7 +669,7 @@ test("the models on this machine are listed by where they came from", async ({ p
 test("the gate's mode is chosen from a dropup", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   const face = page.locator(".options .dropup .face")

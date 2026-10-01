@@ -2,7 +2,7 @@
 import { expect, test } from "@playwright/test"
 import { execSync, spawn } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -114,6 +114,16 @@ test("a terminal opens in the session's container, survives being hidden, and en
   const uid = execSync("id -u").toString().trim()
   await page.keyboard.type("echo U=$(id -u) D=$(pwd) T=$TERM\n")
   await expect(rows).toContainText(`U=${uid} D=${root} T=xterm-256color`)
+  // luu's own prompt, not the image's: who and where, the directory under the
+  // host's own `~` (the container's `HOME` is this machine's), the branch, `▸`.
+  await page.keyboard.type("echo H=$HOME\n")
+  await expect(rows).toContainText(`H=${homedir()}`)
+  const branch = execSync("git branch --show-current", { cwd: root }).toString().trim()
+  const here = root.startsWith(`${homedir()}/`) ? `~${root.slice(homedir().length)}` : root
+  // Two lines: who and where, then the directory and the branch.
+  await expect(rows.locator("> div", { hasText: /^luu@docker\s*$/ }).first()).toBeVisible()
+  await expect(rows.locator("> div", { hasText: new RegExp(`^${here}`) }).first()).toBeVisible()
+  await expect(rows).toContainText(branch ? `${here}  ${branch}` : `${here} ▸`)
 
   // Hidden and shown: the same shell, not a new one.
   await page.keyboard.type("export MARK=kept; sleep 900 &\n")

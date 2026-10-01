@@ -784,7 +784,9 @@ flag apart" is what every probe in `scripts/tasks/` depends on. `[[worker.paths]
 is for the other direction — trees that exist only inside the image, added to the
 policy the worker resolves and never resolved on the host, because a granted path
 that is not there is a load error and `/usr/local/cargo` is not a directory on a
-Mac.
+Mac. **`HOME` is the host's too** (`-e HOME=…` at `run`), so `~` names one directory on
+both sides and the terminal's prompt reads the base as `~/…` rather than as a second spelling — see
+[`RECORD/2026-10-01.a-terminal-in-the-container.completed.md`](RECORD/2026-10-01.a-terminal-in-the-container.completed.md), 2026-10-02.
 
 ```toml
 [worker]
@@ -1074,14 +1076,21 @@ the owner mounts `<Modal>` behind its own flag, and every way out — the close 
 backdrop, ESC, `:open` going false from a script that saved — plays the same exit and then emits
 `close`, which the owner answers by clearing the flag. `locked` refuses all of them and hides the
 close button: the folder picker on a first visit, which has nothing behind it to go back to.
-**No modal has an id.** The component finds its own `<dialog>` with `$self`, so the store's close
+**A modal opened inside another is its child** — the provider and engine forms over Settings: no
+head of its own, a sheet that comes down out of the parent's head, and an overlay (its own
+`::backdrop`, fitted to the parent's body) over the parent's body only, so the parent's head stays
+lit and says whose form it is. It is still a `showModal()` dialog, so ESC closes the child and
+leaves the parent. **No modal has an id.** The component finds its own `<dialog>` with `$self`, so the store's close
 functions only clear state and nothing outside a modal names it. **ESC walks a ladder** — a modal
 cancels itself and the page does nothing else on that keypress, then the history popover, a rename
-in progress, an armed delete, and finally, with nothing left to cancel and two columns on screen,
-it swaps content and chat. A running turn is deliberately not on it: it is the one cancellable
-thing whose undo costs work. See
-[`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md)
-and [`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md).
+in progress, an armed delete, and finally, with nothing left to cancel, **the chat**: a chat on
+screen takes the focus, and only from the composer, with two columns on screen, does ESC swap
+content and chat. Every way to the chat — the logo, the column's switch, ESC — ends with the
+composer focused. ESC inside the terminal or Monaco is theirs and never reaches the ladder. A
+running turn is deliberately not on it: it is the one cancellable thing whose undo costs work. See
+[`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md),
+[`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md)
+and [`RECORD/2026-10-02.a-modal-inside-a-modal.completed.md`](RECORD/2026-10-02.a-modal-inside-a-modal.completed.md).
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps:
 *General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*

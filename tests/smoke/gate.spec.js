@@ -174,7 +174,7 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   // the inspector's head since the page-wide `<header>` came out — that header
   // was a strip of other columns' controls. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
 
   // The first thing a fresh browser is asked: which folder.
   await chooseFolder(page)
@@ -678,11 +678,17 @@ test("ESC closes what is open, and swaps the columns when nothing is", async ({ 
   await expect(page.locator("dialog.modal")).toHaveCount(0)
   expect(await shown()).toBe(before)
 
-  // With nothing left to cancel, it swaps them — and back.
+  // With nothing left to cancel, it goes to the chat — shown, if it was not,
+  // and typed into — and only from the composer does it swap them, and back.
+  const composer = page.locator(".composer input")
   await page.keyboard.press("Escape")
-  expect(await shown()).not.toBe(before)
+  expect(await shown()).toBe("chat")
+  await expect(composer).toBeFocused()
   await page.keyboard.press("Escape")
-  expect(await shown()).toBe(before)
+  expect(await shown()).toBe("content")
+  await page.keyboard.press("Escape")
+  expect(await shown()).toBe("chat")
+  await expect(composer).toBeFocused()
 
   // Three columns are all on screen, so there is nothing to swap and ESC is
   // inert rather than doing something arbitrary.
@@ -1192,4 +1198,64 @@ test("asking the gate to loosen enforcement is refused, and says by what", async
   expect(plan.enforcement ?? null).toBe(null)
 
   expect(errors, "the page logged errors").toEqual([])
+})
+
+/**
+ * A segmented control is one radio group, not a row of buttons: Tab stops on it
+ * once, at the chosen answer, and the arrows move the choice inside it.
+ */
+test("a segmented control is one radio group to the keyboard", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+
+  const group = page.getByRole("radiogroup", { name: "Editor colours" })
+  const dark = group.getByRole("radio", { name: "Dark" })
+  const light = group.getByRole("radio", { name: "Light" })
+  await expect(dark).toBeChecked()
+  // One stop for Tab, on the chosen answer.
+  await expect(dark).toHaveAttribute("tabindex", "0")
+  await expect(light).toHaveAttribute("tabindex", "-1")
+
+  await dark.focus()
+  await page.keyboard.press("ArrowRight")
+  await expect(light).toBeChecked()
+  await expect(light).toBeFocused()
+  await expect(light).toHaveAttribute("tabindex", "0")
+  // It wraps, as native radios do.
+  await page.keyboard.press("ArrowRight")
+  await expect(dark).toBeChecked()
+  await expect(dark).toBeFocused()
+  await page.keyboard.press("End")
+  await expect(light).toBeChecked()
+  await page.keyboard.press("Home")
+  await expect(dark).toBeChecked()
+})
+
+/**
+ * ESC with nothing to cancel goes to the composer, and a chat that comes back
+ * into view comes back typed into. Only from the composer does ESC swap the
+ * two columns.
+ */
+test("the chat takes the focus when it is shown and on ESC", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  const composer = page.locator(".composer input")
+  await expect(composer).toBeEnabled()
+
+  // Three columns: nothing to swap, and ESC still goes to the composer.
+  await page.click('.inspector .tabs button:has-text("Files")')
+  await page.keyboard.press("Escape")
+  await expect(composer).toBeFocused()
+
+  // Two: the column's own switch lands in the composer too.
+  await page.setViewportSize({ width: 1000, height: 800 })
+  await expect(page.locator(".app")).toHaveAttribute("data-columns", "2")
+  await composer.focus()
+  await page.keyboard.press("Escape")
+  await expect(page.locator(".col.chat")).toHaveCount(0)
+  await page.locator(".swap").click()
+  await expect(composer).toBeFocused()
 })

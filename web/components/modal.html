@@ -18,12 +18,51 @@
   // way a click on close does. `locked` refuses every dismissal and hides the
   // close button — the folder picker on a first visit, which has nothing
   // behind it to go back to. `width` is a length, capped at the window.
+  //
+  // **A modal opened inside another is its child, and stays inside it**: no
+  // head of its own, a sheet that comes down out of the parent's head, and an
+  // overlay over the parent's body only — the parent's head stays lit, so it
+  // is still clear whose form this is. The provider and engine forms over
+  // Settings are the case. It is still a `showModal()` dialog, so ESC, the
+  // focus trap and the inert parent are the platform's; only where it is
+  // drawn changes. The overlay is its `::backdrop`, fitted to the parent's
+  // body, and a click on it is a click on the dialog, so it dismisses the
+  // child like any backdrop.
 
   // How long it takes to leave; `modal-out` below is the same.
   const CLOSE_MS = 140
   let leaving = false
 
-  $: box = width ? `width:min(${width}, calc(100vw - 2rem))` : ""
+  // The parent dialog, when this one opened inside one, and the parent's
+  // body in the viewport's pixels — where the sheet and its overlay go.
+  let parent = null
+  let room = null
+
+  const fitted = (room, width) =>
+    `--top:${room.top}px;--left:${room.left}px;--w:${room.width}px;--h:${room.height}px;` +
+    `--box:min(${width || "34rem"}, ${room.width}px - 2rem)`
+  $: box = parent && room ? fitted(room, width) : width ? `width:min(${width}, calc(100vw - 2rem))` : ""
+
+  // There is no unmount here to stop listening on, so the first measurement
+  // after this dialog has left the document stops it instead.
+  let watching = null
+  const fit = () => {
+    if (!$self("dialog")?.isConnected) {
+      watching?.disconnect()
+      window.removeEventListener("resize", fit)
+      return
+    }
+    if (!parent?.open) return
+    const outer = parent.getBoundingClientRect()
+    const head = parent.querySelector(":scope > .modal-head")?.getBoundingClientRect()
+    const top = head ? head.bottom : outer.top
+    room = {
+      top,
+      left: outer.left + parent.clientLeft,
+      width: parent.clientWidth,
+      height: outer.bottom - parent.clientTop - top,
+    }
+  }
 
   const close = () => {
     if (leaving || locked) return
@@ -49,6 +88,14 @@
     }
     if (dialog.open) return
 
+    parent = dialog.parentElement?.closest("dialog.modal[open]") ?? null
+    if (parent) {
+      fit()
+      watching = new ResizeObserver(fit)
+      watching.observe(parent)
+      window.addEventListener("resize", fit)
+    }
+
     // `target` is checked because `close` is also the name this component
     // emits, and an emit bubbles: a modal opened from inside this one would
     // otherwise close both.
@@ -68,7 +115,10 @@
       if (locked) return dialog.showModal()
       close()
     })
-    dialog.showModal()
+    // A frame later for a child, so the box above is drawn — headless and
+    // in its place — before it is on screen.
+    if (parent) requestAnimationFrame(() => dialog.isConnected && !dialog.open && dialog.showModal())
+    else dialog.showModal()
   }
   show()
 </script>
@@ -76,9 +126,9 @@
 <!-- `@click.self` is the backdrop: a click that lands on the dialog itself
      rather than on anything inside it is a click outside the box, because the
      dialog has no padding of its own for a click to land in. -->
-<dialog class="modal" :class.closing="leaving" :style="box" :aria-label="title"
-        @click.self="close()">
-  <header class="modal-head">
+<dialog class="modal" :class.closing="leaving" :class.child="!!parent" :style="box"
+        :aria-label="title" @click.self="close()">
+  <header :if="!parent" class="modal-head">
     <strong>{{ title }}</strong>
     <slot.head />
     <!-- An icon, and the word kept for whoever cannot see it. -->
@@ -120,6 +170,47 @@
   @keyframes backdrop-out { to { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) {
     dialog[open], dialog[open]::backdrop, dialog.closing, dialog.closing::backdrop { animation: none; }
+  }
+
+  /* ---- a child: a sheet out of the parent's head, over the parent's body */
+  dialog.child {
+    inset: auto;
+    top: var(--top);
+    left: calc(var(--left) + (var(--w) - var(--box)) / 2);
+    width: var(--box);
+    max-width: none;
+    margin: 0;
+    max-height: calc(var(--h) - 2rem);
+    /* Fastened to the head it comes out of: no top edge, square top corners. */
+    border-top: 0;
+    border-radius: 0 0 6px 6px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+  }
+  dialog.child::backdrop {
+    inset: auto;
+    top: var(--top);
+    left: var(--left);
+    width: var(--w);
+    height: var(--h);
+    background: rgba(0, 0, 0, .45);
+    border-radius: 0 0 5px 5px;
+  }
+  dialog.child[open] { animation: sheet-in .26s cubic-bezier(.32, .72, 0, 1); }
+  dialog.child.closing { animation: sheet-out .14s ease-in forwards; }
+  /* Down out of the head's bottom edge: the part still above it is clipped, so
+     it reads as coming from behind the head rather than over it. Both ends are
+     an `inset()`, because one to `none` does not interpolate and snaps
+     halfway; the negative sides leave the shadow out of the clip. */
+  @keyframes sheet-in {
+    from { transform: translateY(-100%); clip-path: inset(100% -2rem -2rem -2rem); }
+    to { transform: none; clip-path: inset(0 -2rem -2rem -2rem); }
+  }
+  @keyframes sheet-out {
+    from { transform: none; clip-path: inset(0 -2rem -2rem -2rem); }
+    to { transform: translateY(-100%); clip-path: inset(100% -2rem -2rem -2rem); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    dialog.child[open], dialog.child.closing { animation: none; }
   }
 
   .modal-head {
