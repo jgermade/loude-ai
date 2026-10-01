@@ -167,7 +167,7 @@ tail -f ~/.config/luu/logs/serve.$(date +%F).log
 #   icon-theme = "~/.vscode/extensions/emmanuelbeziat.vscode-great-icons-3.0.0"
 #
 # Monaco is the one optional dependency and it is a *node* one, in
-# `crates/luu/ui/package.json` rather than vendored into the tree: `make install`
+# `web/package.json` rather than vendored into the tree: `make install`
 # fetches it, the binary serves it from disk, and `General → editor` offers it
 # only where it is installed. Without it the page draws every file itself, which
 # is the default either way — see
@@ -580,7 +580,7 @@ The third one is the page, and it is the only thing here that wants node —
 `cargo build` still must not:
 
 ```sh
-cp -r crates/luu/ui/. site/ && ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures
+cp -r web/. site/ && ./scripts/make-fixtures.sh ./target/debug/luu site/fixtures
 cd tests/smoke && npm ci && npx playwright install chromium && npx playwright test
 ```
 
@@ -597,7 +597,7 @@ raises the workspace version, tags it, calls `build.yml` at the new commit, publ
 the release and deploys Pages. It has a `dry-run` input — use it before the first
 real release.
 
-**Do not edit the UI's `dist`-like output, because there isn't one.** `crates/luu/ui/`
+**Do not edit the UI's `dist`-like output, because there isn't one.** `web/`
 is served as it is: `rust-embed` reads it from disk in debug builds and bakes it into
 the binary for release. Editing a component costs a reload, not a `cargo build`.
 

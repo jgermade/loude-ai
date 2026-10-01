@@ -9,7 +9,7 @@
 //!
 //! See `RECORD/2026-09-08.a-test-that-clicks-approve.completed.md`.
 
-const STORE: &str = include_str!("../ui/store.js");
+const STORE: &str = include_str!("../../../web/store.js");
 
 /// `const NAME = <digits>` at the top of the file, as a number.
 fn declared(name: &str) -> u32 {
@@ -29,7 +29,7 @@ fn the_page_speaks_the_protocol_this_binary_serves() {
     assert_eq!(
         declared("PROTOCOL"),
         agent_core::protocol::VERSION,
-        "crates/luu/ui/store.js and agent_core::protocol::VERSION disagree: \
+        "web/store.js and agent_core::protocol::VERSION disagree: \
          the host refuses the page's hello and closes it"
     );
 }
@@ -39,7 +39,7 @@ fn the_page_reads_the_record_format_this_binary_writes() {
     assert_eq!(
         declared("FORMAT"),
         agent_core::record::FORMAT,
-        "crates/luu/ui/store.js and agent_core::record::FORMAT disagree: \
+        "web/store.js and agent_core::record::FORMAT disagree: \
          the host refuses the page's hello and closes it"
     );
 }

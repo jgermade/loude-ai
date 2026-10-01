@@ -64,7 +64,7 @@
   ]
 
   // Whether Monaco is on this machine. Asked once — the answer is whether
-  // `npm install` was run in `crates/luu/ui`, and that does not change while
+  // `npm install` was run in `web/`, and that does not change while
   // the page is open.
   let monacoHere = null
   monacoAvailable().then(found => { monacoHere = found })
@@ -96,7 +96,7 @@
   </dd>
   <dd :if="monacoHere === false" class="caveat">
     Monaco is not installed. It is a node dependency of
-    <code>crates/luu/ui</code> rather than a copy in the tree — run
+    <code>web/</code> rather than a copy in the tree — run
     <code>make install</code> (or <code>npm install</code> there) and reload.
   </dd>
   <dd class="note" :if="monacoHere !== false">

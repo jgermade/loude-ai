@@ -261,8 +261,11 @@ let watchedTurn = null
 /// per token, 40 a second at the peak and 1478 in one day's log. The engine a
 /// turn waits on is decided when the turn starts; asking again mid-answer
 /// learns nothing.
+///
+/// Never in a replay: a recorded turn waited on no engine this page can ask
+/// about, and the static twin has no `/api/engine` to answer.
 export function watchTurnEngine(turn) {
-  if (turn != null && turn !== watchedTurn) watchEngine()
+  if (turn != null && turn !== watchedTurn && !state.replay) watchEngine()
   watchedTurn = turn
   return turn
 }

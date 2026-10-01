@@ -15,7 +15,7 @@ EXTENSION := editors/vscode
 # The debug UI's *optional* browser dependencies — today that is Monaco, which
 # the General settings offer only where it is installed. A checkout without npm
 # gets a page that draws every file itself, which is the default either way.
-WEBUI := crates/luu/ui
+WEBUI := web
 BIND ?= 127.0.0.1:7878
 
 .DEFAULT_GOAL := help

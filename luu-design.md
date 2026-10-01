@@ -1061,7 +1061,7 @@ which rules it kept and why, in the server's own words rather than a rule re-der
 browser. The *Files* row is there
 for a reason worth keeping: nothing on the page named `[ui] icon-theme` at all, and the first
 person to meet an unconfigured tree read a working fallback as a broken panel. The `editor` setting offers Monaco where somebody installed
-it — an **npm dependency of `crates/luu/ui`**, gitignored, excluded from the `rust_embed` folder
+it — an **npm dependency of `web/`**, gitignored, excluded from the `rust_embed` folder
 and served from disk by one route, so a release binary does not carry several megabytes of an
 editor that is off by default. That does not reopen
 [`RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md`](RECORD/2026-09-16.what-the-debug-ui-does-not-need.completed.md),
@@ -1175,7 +1175,8 @@ browser cannot request with a header. `Authorization: Bearer <token>` everywhere
 `/ws` alone, because the browser's `WebSocket` constructor cannot set a header. See
 [`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
 
-The UI is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
+The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and
+is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
 process in the loop.
 
 Live channel — `WS /ws`:
@@ -1312,7 +1313,7 @@ The rest follows from that:
   (`turn_started`, a refusal, a plan at the gate) draws the real thing. It does not wait for
   `turn_started`, because a slow server made that look like a lost message. See
   [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
-- **Components**: `crates/luu/ui/components/` holds components that import nothing from the page.
+- **Components**: `web/components/` holds components that import nothing from the page.
   Everything arrives as props or slots, everything leaves as `:model` or `$emit`, styles are
   scoped, and page tokens are read with fallbacks. Three so far, each taking an idea from rare-ui
   with none of its code: `Segmented` (a pill that slides to the chosen answer), `Rail` (a bar beside the chosen section that springs

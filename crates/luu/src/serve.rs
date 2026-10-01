@@ -46,12 +46,15 @@ use tokio::sync::{Mutex, RwLock, broadcast, mpsc, watch};
 /// `rust-embed` reads these from disk in debug builds and bakes them in for
 /// release, which is exactly the split we want: editing a component must not
 /// cost a `cargo build`, and a shipped binary must not need the files.
-/// `node_modules` is excluded because Monaco is a node dependency of `ui/` —
+/// The folder is `web/` at the root of the repository, not inside this crate:
+/// the page is a surface of its own, which a server other than the one on this
+/// machine may come to serve. `node_modules` is excluded because Monaco is a
+/// node dependency of `web/` —
 /// gitignored like every other one, and served from disk by `monaco_asset`
 /// rather than baked in. Without this line a release binary would carry several
 /// megabytes of an editor that is off by default.
 #[derive(rust_embed::Embed)]
-#[folder = "ui/"]
+#[folder = "../../web/"]
 #[exclude = "node_modules/*"]
 struct Ui;
 
@@ -1344,7 +1347,7 @@ async fn serve_asset(path: &str) -> Response {
 
 /// Where Monaco lives when somebody installed it.
 ///
-/// **A node dependency of `crates/luu/ui`, not a payload in this tree.** It is
+/// **A node dependency of `web/`, not a payload in this tree.** It is
 /// excluded from the `rust_embed` folder above, so a release binary does not
 /// gain several megabytes of an editor most runs will never open, and it is
 /// read from disk here instead. `LUU_UI_DIR` moves it, for a binary running
@@ -1359,7 +1362,7 @@ async fn serve_asset(path: &str) -> Response {
 fn monaco_root() -> PathBuf {
     let ui = std::env::var_os("LUU_UI_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ui"));
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web"));
     ui.join("node_modules/monaco-editor/min/vs")
 }
 

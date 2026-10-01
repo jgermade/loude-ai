@@ -980,7 +980,7 @@ test("the workspace can be narrowed to a subdirectory of where serve started", a
 /**
  * The optional editor, in whichever state this checkout is in.
  *
- * Monaco is an npm dependency of `crates/luu/ui`, gitignored and excluded from
+ * Monaco is an npm dependency of `web/`, gitignored and excluded from
  * the embedded UI, so *not installed* is the ordinary state for a checkout that
  * ran `cargo build` and nothing else — and it is the state CI is in. Both halves
  * are asserted because both are real: the setting says why it is unavailable, or

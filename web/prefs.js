@@ -139,7 +139,7 @@ export function setConfirm(which) {
 
 /// Whether Monaco is on this machine, asked once and cached.
 ///
-/// It is a node dependency of `crates/luu/ui` and not a file in the tree, so
+/// It is a node dependency of `web/` and not a file in the tree, so
 /// the honest answer for a checkout that ran `cargo build` and nothing else is
 /// *no*. The setting then says so and stays on this page's own viewer — the
 /// same shape `[ui] icon-theme` has, where the feature waits to be told it is

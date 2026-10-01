@@ -472,7 +472,9 @@ function onProtocol(message) {
       // A window the server said is learned in the background, after the
       // session starts; the end of a turn is when the page asks again, so the
       // context indicator is not left reading `/ —` over a window luu knows.
-      refreshSettings()
+      // Not in a replay: a recording has no server to ask, and the static twin
+      // answers the question with a 404 in the console.
+      if (!isReplay) refreshSettings()
       break
 
     // Pushed and then replaced rather than mutated: jq79 does not wake an

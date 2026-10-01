@@ -658,7 +658,7 @@ mod tests {
     }
 
     /// HTML hands `<script>` to JavaScript by injection, and so does every
-    /// component in `crates/luu/ui`.
+    /// component in `web/`.
     #[test]
     fn a_script_inside_html_is_highlighted_as_javascript() {
         let (_, lines) = lines("c.html", "<script>\n  const n = 1\n</script>\n");

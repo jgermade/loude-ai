@@ -1,7 +1,7 @@
 // @ts-check
 import { defineConfig, devices } from "@playwright/test"
 
-// The site as CI assembles it: `crates/luu/ui/` plus the fixtures and the
+// The site as CI assembles it: `web/` plus the fixtures and the
 // static twin of the read API. Served over HTTP rather than opened as a
 // `file://` URL, because the page fetches `./api/sessions.json` and a file URL
 // makes that a cross-origin request the browser refuses.

@@ -263,7 +263,7 @@ pre {
    everything behind it and the backdrop are the platform's rather than this
    page's. The positioned backdrop div with a `z-index` that used to do the
    dimming is gone; the top layer has no z-index to compete in. See
-   `crates/luu/ui/modal.js`. */
+   `web/modal.js`. */
 dialog.modal {
   background: var(--panel);
   color: var(--fg);
@@ -432,7 +432,7 @@ dialog.modal.narrow { width: min(34rem, calc(100vw - 2rem)); }
    stricter reason than the palette below: `<style scoped>` rewrites
    `.code-rows li` to `.code-rows li[data-jq79="…"]`, and only elements jq79's
    compiler built carry that attribute. These rows are built by
-   `crates/luu/ui/rows.js`, because the rows are 93% of the viewer's cost and
+   `web/rows.js`, because the rows are 93% of the viewer's cost and
    none of them ever changes — see
    `RECORD/2026-09-16.the-viewer-in-plain-js.completed.md`.
 

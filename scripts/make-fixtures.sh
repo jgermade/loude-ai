@@ -10,6 +10,15 @@ luu="${1:?usage: make-fixtures.sh <path-to-luu> <out-dir>}"
 out="${2:?usage: make-fixtures.sh <path-to-luu> <out-dir>}"
 mkdir -p "$out"
 
+# A state directory of its own. Without it, `luu chat` reads the config.toml of
+# whoever runs this, and on a machine whose default profile is a real engine
+# the fixtures are recorded against that engine — or the script starts one and
+# waits on it — instead of the mock. CI has no config, which is why it never
+# saw this. See `RECORD/2026-10-01.the-page-in-web.completed.md`.
+LUU_HOME="$(mktemp -d)"
+export LUU_HOME
+trap 'rm -rf "$LUU_HOME"' EXIT
+
 "$luu" chat "What does the context manager do?" \
   --mock-delay-ms 45 --context-limit 8192 --record "$out/completed-turn.jsonl" >/dev/null
 

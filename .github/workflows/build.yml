@@ -120,11 +120,11 @@ jobs:
           set -euo pipefail
           mkdir -p site
           # Everything but the optional node dependencies: Monaco is installed
-          # into `crates/luu/ui/node_modules` by `make install` and served from
+          # into `web/node_modules` by `make install` and served from
           # disk by the binary, never shipped — the static twin has no server
           # behind it and offers this page's own viewer either way. See
           # RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md.
-          tar -c -C crates/luu/ui \
+          tar -c -C web \
             --exclude=node_modules --exclude=package-lock.json . | tar -x -C site
           ./scripts/make-fixtures.sh ./target/release/luu site/fixtures
 
