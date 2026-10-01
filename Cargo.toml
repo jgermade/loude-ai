@@ -27,6 +27,10 @@ futures-util = "0.3"
 # RECORD/2026-09-15.a-three-pane-inspector.completed.md.
 ignore = "0.4"
 landlock = "0.4"
+# The workspace panels follow the disk: the platform's own file events
+# (FSEvents, inotify, ReadDirectoryChangesW) rather than a page that polls.
+# See RECORD/2026-10-01.the-tree-follows-the-disk.completed.md.
+notify = "8"
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 mime_guess = "2"

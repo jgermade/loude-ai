@@ -1261,6 +1261,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/workspace/file", get(get_workspace_file))
         .route("/api/workspace/git-status", get(get_workspace_git_status))
         .route("/api/workspace/git-diff", get(get_workspace_git_diff))
+        .route("/api/workspace/events", get(get_workspace_events))
         // The icon theme this machine named, if it named one. `{id}` is an id
         // out of the manifest and never a path — see `crate::icons`.
         .route("/api/icons/manifest", get(get_icons_manifest))
@@ -3271,6 +3272,38 @@ async fn get_workspace_git_diff(
         Ok(diff) => Json(diff).into_response(),
         Err(error) => workspace_error(error),
     }
+}
+
+/// What changed under the base, as it changes: one server-sent event per
+/// batch, `data:` a [`workspace::Changes`].
+///
+/// **Server-sent events and not the socket**, because this is not the
+/// protocol: `/ws` carries the agent's messages, which stdio carries too, and
+/// a file tree is something only the page has. And not polling, because the
+/// page would have to ask about every open directory and the open file on a
+/// timer, and still be up to a period late.
+///
+/// Behind the same bearer check as every other `/api/*` route, sent as a
+/// header: the page reads this with `fetch`, not `EventSource`, which cannot
+/// set one — so `?token=` stays the `/ws` exception it was.
+async fn get_workspace_events(State(state): State<AppRouterState>) -> Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+
+    let sandbox = workspace_sandbox(&state).await;
+    let watch = match workspace::Watch::start(sandbox) {
+        Ok(watch) => watch,
+        Err(error) => return workspace_error(error),
+    };
+    let stream = futures_util::stream::unfold(watch, |mut watch| async move {
+        let changes = watch.next().await?;
+        let event = Event::default()
+            .json_data(&changes)
+            .unwrap_or_else(|_| Event::default().data("{\"all\":true}"));
+        Some((Ok::<_, std::convert::Infallible>(event), watch))
+    });
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 async fn get_icons_manifest(State(state): State<AppRouterState>) -> Response {

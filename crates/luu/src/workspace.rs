@@ -459,6 +459,151 @@ async fn git(base: &Path, args: &[&str]) -> Result<String, Error> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+// ---- following the disk ----------------------------------------------------
+
+/// How long one batch stays open after its first event. A save is several
+/// events (a temp file, a rename, a chmod), and `cargo build` is thousands; the
+/// page wants one answer for each of those, not one per event.
+const BATCH: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// More paths than this in one batch and the page is told to re-read what it
+/// has open rather than handed the list: past it, naming each one costs more
+/// than re-reading.
+const MAX_NAMED: usize = 1000;
+
+/// One batch of what changed under the base.
+#[derive(Debug, Default, Serialize, PartialEq)]
+pub struct Changes {
+    /// Relative to the base, `/`-separated, sorted. Created, written, removed
+    /// or renamed, without saying which: the page re-reads either way, and
+    /// the listing it re-reads is what says which.
+    pub paths: Vec<String>,
+    /// Git's own state moved — the index, `HEAD` or a ref — with nothing in
+    /// the working tree to say so. A `git add` in a terminal is the case.
+    pub git: bool,
+    /// Too many to name: re-read everything that is open.
+    pub all: bool,
+}
+
+/// The base, watched, for as long as this value lives.
+///
+/// **One per stream, and dropped with it**: the watcher is owned here, so a
+/// page that closes its tab stops the platform watching on its behalf. Nothing
+/// is shared between two pages, because two pages are rare and a shared
+/// watcher would need a reference count to know when nobody is listening.
+///
+/// **What it reports is bounded by the sandbox the way a listing is**: a
+/// path is named only when its directory is one the panels may list, and a
+/// listing already names everything in a directory it may read. So a change
+/// says nothing the tree would not.
+pub struct Watch {
+    // Held only so it keeps watching; dropping it is what stops it.
+    _watcher: notify::RecommendedWatcher,
+    events: tokio::sync::mpsc::UnboundedReceiver<PathBuf>,
+    sandbox: std::sync::Arc<Sandbox>,
+    /// The base as the platform spells it. FSEvents reports canonical paths,
+    /// and a base reached through a symlink (`/var` → `/private/var` on
+    /// macOS) would strip nothing off them.
+    canonical: PathBuf,
+}
+
+impl Watch {
+    pub fn start(sandbox: std::sync::Arc<Sandbox>) -> Result<Watch, Error> {
+        use notify::Watcher;
+
+        let base = sandbox.base().to_path_buf();
+        let canonical = base.canonicalize().unwrap_or_else(|_| base.clone());
+        let (send, events) = tokio::sync::mpsc::unbounded_channel();
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else { return };
+                // Reading a file is not changing it, and inotify reports both.
+                if matches!(event.kind, notify::EventKind::Access(_)) {
+                    return;
+                }
+                for path in event.paths {
+                    // The receiver is gone once the stream is: nothing to do.
+                    let _ = send.send(path);
+                }
+            })
+            .map_err(|error| Error::Failed(format!("cannot watch the workspace: {error}")))?;
+        watcher
+            .watch(&canonical, notify::RecursiveMode::Recursive)
+            .map_err(|error| Error::Failed(format!("cannot watch the workspace: {error}")))?;
+        Ok(Watch {
+            _watcher: watcher,
+            events,
+            sandbox,
+            canonical,
+        })
+    }
+
+    /// The next batch: waits for an event, then gathers for [`BATCH`].
+    /// `None` once the watcher has stopped. A batch whose every path was left
+    /// out is not answered — it waits for the next one instead.
+    pub async fn next(&mut self) -> Option<Changes> {
+        loop {
+            let first = self.events.recv().await?;
+            let mut raw = vec![first];
+            let deadline = tokio::time::sleep(BATCH);
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    more = self.events.recv() => match more {
+                        Some(path) => raw.push(path),
+                        None => break,
+                    },
+                    _ = &mut deadline => break,
+                }
+            }
+            let changes = classify(&self.sandbox, &self.canonical, raw);
+            if changes != Changes::default() {
+                return Some(changes);
+            }
+        }
+    }
+}
+
+/// What a batch of absolute paths means to the panels.
+fn classify(sandbox: &Sandbox, canonical: &Path, raw: Vec<PathBuf>) -> Changes {
+    let mut changes = Changes::default();
+    let mut named = std::collections::BTreeSet::new();
+    // Asked once per directory per batch: a build writes hundreds of files
+    // into the same few, and each answer resolves symlinks on disk.
+    let mut listable: std::collections::HashMap<PathBuf, bool> = std::collections::HashMap::new();
+    for path in raw {
+        let Ok(relative) = path.strip_prefix(canonical) else {
+            continue;
+        };
+        let mut parts = relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy());
+        if parts.next().as_deref() == Some(".git") {
+            // Only what moves `git status`. Objects, logs and lock files are
+            // churn, and `git status` itself rewrites the index now and then —
+            // which is why the page throttles what it does with this flag.
+            let next = parts.next();
+            changes.git |= matches!(next.as_deref(), Some("index" | "HEAD" | "refs"));
+            continue;
+        }
+        // Equal to the base: nothing to name.
+        let Some(parent) = path.parent().filter(|_| !relative.as_os_str().is_empty()) else {
+            continue;
+        };
+        let allowed = *listable
+            .entry(parent.to_path_buf())
+            .or_insert_with(|| sandbox.check_path(parent, Access::Read).verdict.allowed);
+        if allowed {
+            named.insert(relative_of(canonical, &path));
+        }
+    }
+    match named.len() > MAX_NAMED {
+        true => changes.all = true,
+        false => changes.paths = named.into_iter().collect(),
+    }
+    changes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

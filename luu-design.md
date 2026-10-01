@@ -1089,7 +1089,7 @@ that codepoint, so none of them lined up with the 16px box a theme's file icons 
 exception is prose: the `→` in `use →` is a word, not a control, and stays a character.
 
 The panels are fed by four plain `GET`s — `/api/workspace/{tree,file,git-status,git-diff}` —
-which are **not** behind the job gate on purpose: a person clicking a directory is not a model
+plus a stream that says when to ask again, and all of them are **not** behind the job gate on purpose: a person clicking a directory is not a model
 proposing a tool call, and routing it through approval would mean either rubber-stamping a job
 nobody asked for or building a second, unaudited read path. Every path still resolves through
 `Sandbox::check_path`, so the panels reach exactly what the session's policy grants and nothing
@@ -1098,6 +1098,21 @@ what `read_dir` does, which gets nested `.gitignore` files and negations right f
 diff is parsed into hunks server-side rather than shipped as text — the same call this document
 makes for prompt diffs below, answered by parsing git's own output rather than adding a second
 diff implementation.
+
+**The panels follow the disk.** `GET /api/workspace/events` is a server-sent event stream of
+what changed under the base, from the platform's own file events (`notify`: FSEvents, inotify,
+ReadDirectoryChangesW). The events come in batches 150 ms apart, so a save is one answer and a
+build is a few rather than thousands. Each batch is either the paths that changed, `git: true`
+when only the index, `HEAD` or a ref moved, or `all` past a thousand paths. The page re-reads only
+what is on screen: the open directories each path sits under (a directory's row carries the
+loudest git letter beneath it), git at most once a second, and the active tab, quietly, without a
+`loading` blank, so the scroll stays where it was. Another tab re-reads when it is activated, as
+it always did. **Server-sent events, not the socket**: `/ws` is the protocol, which stdio carries
+too, and a file tree is the page's alone. **Read with `fetch`, not `EventSource`**, so the bearer
+token travels as a header and `?token=` stays the `/ws` exception. A path is named only when its
+directory is one the panels may list, and a listing already names everything in it. One watcher per
+stream, dropped with it. See
+[`RECORD/2026-10-01.the-tree-follows-the-disk.completed.md`](RECORD/2026-10-01.the-tree-follows-the-disk.completed.md).
 
 **The viewer opens in two blocks.** A file arrives whole and already coloured, and what costs
 is the DOM: about 50 µs per row, measured, **with or without colour** — so a 3807-line file is

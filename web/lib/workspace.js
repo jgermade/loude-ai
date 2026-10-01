@@ -414,13 +414,17 @@ export function showDebug(id, title, text) {
   return openTab({ id: `debug:${id}`, kind: "debug", path: title, title, text })
 }
 
-async function loadFile(tab) {
-  workspace.loading = true
+/// `quiet` is a re-read of the tab already on screen, because the file changed
+/// under it: no `loading`, which would blank the column and lose the scroll,
+/// and nothing replaced when nothing changed.
+async function loadFile(tab, { quiet = false } = {}) {
+  if (!quiet) workspace.loading = true
   try {
     const file = await ask(`./api/workspace/file?path=${encodeURIComponent(tab.path)}`)
     // Dropped if the person clicked something else while this was in flight:
     // the column's tab and its body have to be the same file.
     if (workspace.active !== tab.id) return
+    if (quiet && same(workspace.content, { kind: "file", ...file })) return
     // The rows themselves are not stored: `content.lines` is what the viewer
     // paints from, and `rows.js` owns the two passes that put them on screen.
     // They used to be three reactive fields here — `head`, `tail` and
@@ -437,13 +441,14 @@ async function loadFile(tab) {
   }
 }
 
-async function loadDiff(tab) {
-  workspace.loading = true
+async function loadDiff(tab, { quiet = false } = {}) {
+  if (!quiet) workspace.loading = true
   try {
     const diff = await ask(
       `./api/workspace/git-diff?path=${encodeURIComponent(tab.path)}&staged=${tab.staged}`,
     )
     if (workspace.active !== tab.id) return
+    if (quiet && same(workspace.content, { kind: "diff", ...diff })) return
     workspace.content = { kind: "diff", ...diff }
     workspace.error = null
   } catch (e) {
@@ -451,5 +456,151 @@ async function loadDiff(tab) {
     workspace.error = `Could not diff ${tab.path}: ${e.message}`
   } finally {
     if (workspace.active === tab.id) workspace.loading = false
+  }
+}
+
+// ---- following the disk -----------------------------------------------------
+//
+// The server watches the base and says what changed, in batches (see
+// `crate::workspace::Watch`). What is re-read is what is on screen and nothing
+// else: the open directories a change sits under, git, and the tab being
+// looked at. Another tab re-reads when it is activated, as it always did. See
+// `RECORD/2026-10-01.the-tree-follows-the-disk.completed.md`.
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+
+/// Every open directory a path sits under, the base included: a directory's
+/// row carries the loudest git letter beneath it, so a write three levels
+/// down can change the letter on all three.
+function openAbove(path) {
+  const parts = path.split("/")
+  const above = []
+  for (let n = 0; n < parts.length; n++) {
+    const dir = parts.slice(0, n).join("/")
+    if (workspace.open[dir]) above.push(dir)
+  }
+  return above
+}
+
+function forget(key) {
+  const open = { ...workspace.open }
+  const expanded = { ...workspace.expanded }
+  delete open[key]
+  delete expanded[key]
+  workspace.open = open
+  workspace.expanded = expanded
+}
+
+const parentOf = path => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
+
+/// Re-lists open directories, shallowest first, so a directory whose parent's
+/// new listing no longer has it is forgotten without being asked for: a
+/// folder that was deleted is not an error, and asking would log a 404 for it.
+async function relist(keys) {
+  const byDepth = new Map()
+  for (const key of keys) {
+    const depth = key ? key.split("/").length : 0
+    byDepth.set(depth, [...(byDepth.get(depth) || []), key])
+  }
+  for (const depth of [...byDepth.keys()].sort((a, b) => a - b)) {
+    await Promise.all(byDepth.get(depth).map(async key => {
+      const parent = workspace.open[parentOf(key)]
+      if (key && parent && !parent.some(entry => entry.dir && entry.path === key)) return forget(key)
+      try {
+        const tree = await ask(`./api/workspace/tree?path=${encodeURIComponent(key)}`)
+        if (workspace.open[key]) workspace.open = { ...workspace.open, [key]: tree.entries }
+      } catch {
+        forget(key)
+      }
+    }))
+  }
+}
+
+/// `git status` at most once a second, and once more after a burst. Not only
+/// for a build's thousand writes: `git status` itself rewrites the index now
+/// and then, which comes back here as a change to git, and unthrottled that
+/// is a loop.
+let statusAt = 0
+let statusLater = null
+function statusSoon() {
+  if (statusLater) return
+  const wait = Math.max(0, statusAt + 1000 - Date.now())
+  statusLater = setTimeout(() => {
+    statusLater = null
+    statusAt = Date.now()
+    loadStatus()
+  }, wait)
+}
+
+async function changed({ paths = [], git = false, all = false }) {
+  const keys = new Set(all || git ? Object.keys(workspace.open) : paths.flatMap(openAbove))
+  await relist(keys)
+  statusSoon()
+
+  const tab = workspace.tabs.find(open => open.id === workspace.active)
+  if (!tab || (tab.kind !== "file" && tab.kind !== "diff")) return
+  // A diff moves with the index as well as with the file: staging it is a
+  // change to git and not to any path.
+  const touched = all || paths.includes(tab.path) || (git && tab.kind === "diff")
+  if (!touched) return
+  if (tab.kind === "file") loadFile(tab, { quiet: true })
+  else loadDiff(tab, { quiet: true })
+}
+
+/// Calls `each` with every `data:` an event stream carries, until it ends.
+async function readEvents(body, each) {
+  const reader = body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ""
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) return
+    buffer += value
+    let end
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const event = buffer.slice(0, end)
+      buffer = buffer.slice(end + 2)
+      // Lines starting `:` are the server's keep-alive and say nothing.
+      const data = event.split("\n").filter(line => line.startsWith("data:"))
+        .map(line => line.slice(5).trimStart()).join("\n")
+      if (data) each(JSON.parse(data))
+    }
+  }
+}
+
+let watching = false
+
+/// Follows the disk for as long as the page is open. Read with `fetch` rather
+/// than `EventSource`, which cannot send the bearer header a guarded server
+/// asks for.
+///
+/// A dropped stream is reconnected every three seconds, and the panels catch
+/// up once it is back, since anything could have changed while nobody was
+/// listening. A server that answers with an error — one too old to have the
+/// route, or a refusal — is not asked again: the refresh button still works.
+export async function watchWorkspace() {
+  if (watching) return
+  watching = true
+  let dropped = false
+  for (;;) {
+    let answer = null
+    try {
+      answer = await fetch("./api/workspace/events", { headers: apiHeaders() })
+    } catch {
+      // The server is gone; it may come back.
+    }
+    if (answer && !answer.ok) {
+      watching = false
+      return
+    }
+    if (answer?.body) {
+      if (dropped) changed({ all: true })
+      try {
+        await readEvents(answer.body, changes => { changed(changes) })
+      } catch {
+        // Cut mid-stream: the same as ending.
+      }
+    }
+    dropped = true
+    await new Promise(again => setTimeout(again, 3000))
   }
 }

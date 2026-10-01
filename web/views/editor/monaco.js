@@ -130,6 +130,8 @@ const LANGUAGES = { tsx: "typescript", bash: "shell" }
 
 let editor = null
 let attachedTo = null
+/// The file the editor is showing, so a re-read of it is told from a new one.
+let paintedPath = null
 
 /// Puts one file on screen, creating the editor the first time.
 ///
@@ -137,7 +139,7 @@ let attachedTo = null
 /// half, and a tab switch that disposed and rebuilt it would spend that cost
 /// every time. `attachedTo` is the host it was built into, because the host
 /// element is recreated whenever the column's body re-renders.
-export async function paint(host, { text, language, dark, code }) {
+export async function paint(host, { text, language, dark, code, path }) {
   const monaco = await ensureMonaco()
   if (!monaco || !host) return false
   const theme = code === "monokai" ? "luu-monokai" : dark ? "luu-dark" : "luu-light"
@@ -160,6 +162,7 @@ export async function paint(host, { text, language, dark, code }) {
       fontSize: 12,
     })
     attachedTo = host
+    paintedPath = path
     return true
   }
   monaco.editor.setTheme(theme)
@@ -168,8 +171,15 @@ export async function paint(host, { text, language, dark, code }) {
     monaco.editor.setModelLanguage(model, LANGUAGES[language] || language || "plaintext")
     // `setValue` rather than a new model: a model per tab is a leak unless
     // every one of them is disposed, and there is one file on screen.
-    if (model.getValue() !== text) model.setValue(text)
+    // The same file re-read because it changed on disk keeps its scroll and
+    // cursor rather than jumping to the top; another file starts at its own.
+    if (model.getValue() !== text) {
+      const view = path === paintedPath ? editor.saveViewState() : null
+      model.setValue(text)
+      if (view) editor.restoreViewState(view)
+    }
   }
+  paintedPath = path
   return true
 }
 
@@ -177,6 +187,7 @@ export function dispose() {
   editor?.dispose()
   editor = null
   attachedTo = null
+  paintedPath = null
 }
 
 /// The file the server sent, as text.

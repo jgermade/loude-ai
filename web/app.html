@@ -7,7 +7,7 @@
           loadProviders, refreshSettings } = await import("@web/lib/store.js")
   const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
   const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
-  const { workspace, loadRoot, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
+  const { workspace, loadRoot, watchWorkspace, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
     await import("@web/lib/workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel,
           watchTurnEngine, inspect, LOADING, openContext } = await import("@web/lib/ui.js")
@@ -253,6 +253,9 @@
     // whole of what `serve` was started in and then moved would be two
     // listings for one visit.
     await loadRoot(state.settings?.base)
+    // The tree and the open file follow the disk from here on, whoever writes
+    // to it — the model, an editor, a build.
+    watchWorkspace()
     await loadProviders()
     await checkModel()
     // Nothing opens a modal here. A server with nowhere to send says so in the
