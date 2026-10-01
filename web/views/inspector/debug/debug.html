@@ -4,12 +4,12 @@
   // now one mode of the left Inspector
   // (`RECORD/2026-09-15.a-three-pane-inspector.completed.md`). Self-sufficient on
   // purpose: it imports `store.js` directly rather than taking `state` as a
-  // prop, so it stays a plain sibling of `inspector-files.html` and
-  // `inspector-git.html` instead of `app.html` having to thread six
+  // prop, so it stays a plain sibling of `views/inspector/tree/tree.html` and
+  // `views/inspector/version-control/version-control.html` instead of `app.html` having to thread six
   // computed values through three components that each want a different
   // subset of them.
-  const { state, panel, selectTurn } = await import("./store.js")
-  const { showDebug } = await import("./workspace.js")
+  const { state, panel, selectTurn } = await import("../../../lib/store.js")
+  const { showDebug } = await import("../../../lib/workspace.js")
 
   // The one thing a 20rem rail has never been able to show: a prompt, at the
   // width it was written for. `showDebug` opens it as a tab in the content

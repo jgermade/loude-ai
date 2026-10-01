@@ -22,7 +22,7 @@
 ///
 /// Called straight from a component's `:setup`, which jq79 runs to completion
 /// *before* the template renders — so the element does not exist yet, and this
-/// waits for it. The same seam `content-viewer.html` uses for Monaco and for
+/// waits for it. The same seam `views/editor/editor.html` uses for Monaco and for
 /// `rows.js`, and for the same stated reason: the id is the one thing both
 /// sides can name.
 ///

@@ -978,9 +978,9 @@ the sentence above rather than routing around it. See
 [`RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md`](RECORD/2026-09-16.the-tree-makes-room-for-an-icon.completed.md).
 
 The columns' contents and every dialog are separate jq79 components
-(`inspector-{files,git,debug}.html`, `content-viewer.html`, `settings-{modal,general,models}.html`,
+(`inspector-{files,git,debug}.html`, `views/editor/editor.html`, `settings-{modal,general,models}.html`,
 `session-starter.html`, `folder-picker.html`); `app.html` keeps the shell — the grid, the three
-columns' chrome, and the chat. Two things inside `content-viewer.html` are attached to plain
+columns' chrome, and the chat. Two things inside `views/editor/editor.html` are attached to plain
 elements by id rather than drawn by the renderer, for the same reason and now with a number
 behind it: the optional Monaco editor, and the own viewer's rows.
 
@@ -1187,6 +1187,19 @@ browser cannot request with a header. `Authorization: Bearer <token>` everywhere
 The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and
 is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
 process in the loop.
+
+**Inside `web/`, a file lives by what it is**, not by which column uses it:
+
+| folder | what goes there | the test |
+|---|---|---|
+| `views/` | the components the page is composed of, one folder per view (`views/inspector/tree/tree.html`), with the parts only that view uses beside it | it is a place on the screen |
+| `components/` | components any view may use (`segmented`, `rail`, `save-button`, `dropup`) | it imports nothing from the page |
+| `lib/` | shared modules that keep state or reach outside themselves: the stores, the API, the DOM, `localStorage` | it remembers, or it asks |
+| `helpers/` | pure functions (`segments`, `timing`, `prompt-parts`) | it keeps nothing and imports only other helpers |
+
+The shell (`index.html`, `app.html`, `app.css`) and `vendor/` stay at the top. A view's file is
+named after its folder, so a tab or a search result says which view it is. See
+[`RECORD/2026-10-01.a-file-lives-by-what-it-is.completed.md`](RECORD/2026-10-01.a-file-lives-by-what-it-is.completed.md).
 
 Live channel — `WS /ws`:
 

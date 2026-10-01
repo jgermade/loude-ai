@@ -12,7 +12,7 @@
 /// and the shell reads them, and they are siblings. See
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
-import { $reactive } from "./vendor/jq79.js"
+import { $reactive } from "../vendor/jq79.js"
 import { apiHeaders } from "./store.js"
 
 /// Reads one remembered value, falling back where the browser will not answer —

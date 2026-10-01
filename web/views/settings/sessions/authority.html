@@ -8,9 +8,9 @@
   // a draft that tries to write discovered the floor by being refused, and a
   // refusal is a turn. See
   // `RECORD/2026-09-22.an-authority-a-model-is-told.completed.md`.
-  const { state, loadAuthority, saveAuthority } = await import("./store.js")
-  const Segmented = await import("./components/segmented.html")
-  const SaveButton = await import("./components/save-button.html")
+  const { state, loadAuthority, saveAuthority } = await import("../../../lib/store.js")
+  const Segmented = await import("../../../components/segmented.html")
+  const SaveButton = await import("../../../components/save-button.html")
 
   const POSITIONS = [{ value: "", label: "system (default)" }, "prompt"]
 

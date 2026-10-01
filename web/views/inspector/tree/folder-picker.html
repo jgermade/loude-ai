@@ -9,8 +9,8 @@
   // sandbox, and that is the one thing the workspace surface has never been.
   // See `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   const { workspace, openDir, browseTo, chooseRoot, closePicker } =
-    await import("./workspace.js")
-  const { asModal } = await import("./modal.js")
+    await import("../../../lib/workspace.js")
+  const { asModal } = await import("../../../lib/modal.js")
 
   // **Forced is locked.** On a first visit there is nothing behind this to go
   // back to, so `closePicker` refuses — and ESC has to refuse with it, or the

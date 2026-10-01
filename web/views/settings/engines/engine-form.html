@@ -6,9 +6,9 @@
   // The binary is a choice among what the server found, luu's own copy, or a
   // path — and the path must end in the kind's own binary name, which the
   // server checks again: see `accepts_from_page` in `crate::engines`.
-  const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("./engines.js")
-  const { state, loadProviders, saveProviders } = await import("./store.js")
-  const { asModal, closing } = await import("./modal.js")
+  const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("../../../lib/engines.js")
+  const { state, loadProviders, saveProviders } = await import("../../../lib/store.js")
+  const { asModal, closing } = await import("../../../lib/modal.js")
 
   // Through `closing`, so it leaves animated however it is dismissed.
   const dismiss = () => closing("engine-dialog", () => close?.())

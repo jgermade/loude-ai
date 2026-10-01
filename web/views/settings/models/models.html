@@ -4,9 +4,9 @@
   // lifetime — and the file the *next* run reads. Saying so is the whole
   // difference between a form that works and one that looks like it did. See
   // `RECORD/2026-09-07.configuring-from-the-browser.completed.md`.
-  const { state, saveProviders, loadProviders, refreshSettings } = await import("./store.js")
-  const { ui, openStarter } = await import("./ui.js")
-  const SaveButton = await import("./components/save-button.html")
+  const { state, saveProviders, loadProviders, refreshSettings } = await import("../../../lib/store.js")
+  const { ui, openStarter } = await import("../../../lib/ui.js")
+  const SaveButton = await import("../../../components/save-button.html")
   const ProviderForm = await import("./provider-form.html")
 
   // `config` is a *copy* of the providers file: typing into the server's own

@@ -11,7 +11,7 @@
 /// This is what is open on screen right now. See
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
-import { $reactive } from "./vendor/jq79.js"
+import { $reactive } from "../vendor/jq79.js"
 import { closing } from "./modal.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,

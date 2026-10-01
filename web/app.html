@@ -4,16 +4,16 @@
   const { state, connect, send, cancel, playFixture, foldTranscript,
           approvePlan, declinePlan, requestPlan, closeJob, reopenJob,
           resumeSession, deleteSession, renameSession,
-          loadProviders, refreshSettings } = await import("./store.js")
-  const { prefs, setPane, setInspector, setConfirm } = await import("./prefs.js")
-  const { startDrag, nudge, resetWidth, widthStyle } = await import("./resize.js")
+          loadProviders, refreshSettings } = await import("./lib/store.js")
+  const { prefs, setPane, setInspector, setConfirm } = await import("./lib/prefs.js")
+  const { startDrag, nudge, resetWidth, widthStyle } = await import("./lib/resize.js")
   const { workspace, loadRoot, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
-    await import("./workspace.js")
+    await import("./lib/workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel,
-          watchTurnEngine, inspect, LOADING, openContext } = await import("./ui.js")
-  const { timing, seconds, speedLabel } = await import("./timing.js")
-  const { modelLabel } = await import("./engines.js")
-  const { modalOpen } = await import("./modal.js")
+          watchTurnEngine, inspect, LOADING, openContext } = await import("./lib/ui.js")
+  const { timing, seconds, speedLabel } = await import("./helpers/timing.js")
+  const { modelLabel } = await import("./lib/engines.js")
+  const { modalOpen } = await import("./lib/modal.js")
   const Segmented = await import("./components/segmented.html")
   const Dropup = await import("./components/dropup.html")
 
@@ -45,18 +45,18 @@
   // script has no static `import`. jq79's loader answers an `.html`
   // specifier with the component itself, not a module namespace, so there is
   // nothing to destructure off it.
-  const InspectorDebug = await import("./inspector-debug.html")
-  const InspectorFiles = await import("./inspector-files.html")
-  const InspectorGit = await import("./inspector-git.html")
-  const ContentViewer = await import("./content-viewer.html")
-  const FolderPicker = await import("./folder-picker.html")
-  const SettingsModal = await import("./settings-modal.html")
-  const ModelPicker = await import("./model-picker.html")
-  const SessionStarter = await import("./session-starter.html")
-  const ToolCall = await import("./tool-call.html")
-  const TurnInspect = await import("./turn-inspect.html")
-  const ContextModal = await import("./context-modal.html")
-  const { segments } = await import("./segments.js")
+  const InspectorDebug = await import("./views/inspector/debug/debug.html")
+  const InspectorFiles = await import("./views/inspector/tree/tree.html")
+  const InspectorGit = await import("./views/inspector/version-control/version-control.html")
+  const ContentViewer = await import("./views/editor/editor.html")
+  const FolderPicker = await import("./views/inspector/tree/folder-picker.html")
+  const SettingsModal = await import("./views/settings/settings.html")
+  const ModelPicker = await import("./views/chat/model-picker.html")
+  const SessionStarter = await import("./views/chat/session-starter.html")
+  const ToolCall = await import("./views/chat/tool-call.html")
+  const TurnInspect = await import("./views/chat/turn-inspect.html")
+  const ContextModal = await import("./views/chat/context-modal.html")
+  const { segments } = await import("./helpers/segments.js")
 
   connect()
 
@@ -389,7 +389,7 @@
   $: shown = workspace.content
 
   // Everything the debug panel computes moved with it into
-  // `inspector-debug.html`, which reads the same store directly.
+  // `views/inspector/debug/debug.html`, which reads the same store directly.
 </script>
 
 <!-- The page's own chrome, drawn rather than typed. Every one of these was a

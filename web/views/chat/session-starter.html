@@ -3,11 +3,11 @@
   // switches inside a session — every per-turn number is backend-specific, and
   // one label over two backends is a comparison nobody can make. See
   // `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`.
-  const { state } = await import("./store.js")
+  const { state } = await import("../../lib/store.js")
   const {
     ui, loadModels, editStarter, closeStarter, startSession, continueHere,
-  } = await import("./ui.js")
-  const { asModal } = await import("./modal.js")
+  } = await import("../../lib/ui.js")
+  const { asModal } = await import("../../lib/modal.js")
 
   // ESC, the focus trap and the backdrop come from `<dialog>` rather than from
   // this file. See `modal.js`.

@@ -6,9 +6,9 @@
   // next prompt rather than after it. Nothing is fetched: it is the budget
   // and the prompt the trace channel last sent. See
   // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
-  const { state } = await import("./store.js")
-  const { closeContext } = await import("./ui.js")
-  const { asModal } = await import("./modal.js")
+  const { state } = await import("../../lib/store.js")
+  const { closeContext } = await import("../../lib/ui.js")
+  const { asModal } = await import("../../lib/modal.js")
   const ContextView = await import("./context-view.html")
 
   asModal("context-dialog", { close: closeContext })

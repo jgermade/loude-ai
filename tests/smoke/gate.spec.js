@@ -821,7 +821,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   // A Rust file, opened through the store the way a click does, because this
   // one is several directories down and the point is the highlighting.
   await page.evaluate(async () => {
-    const { showFile } = await import("./workspace.js")
+    const { showFile } = await import("./lib/workspace.js")
     await showFile("crates/luu/src/highlight.rs")
   })
   await expect(page.locator(".content .col-foot .lang")).toHaveText("rust")
@@ -831,7 +831,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   // not. See the phase 8 sections of
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
   const rows = await page.evaluate(async () =>
-    (await import("./workspace.js")).workspace.content.lines.length)
+    (await import("./lib/workspace.js")).workspace.content.lines.length)
   expect(rows, "this file is meant to outrun the first block").toBeGreaterThan(200)
   await expect(page.locator(".content .code-rows li")).toHaveCount(rows)
   // Three captures that any Rust file has, so this fails if the grammar stops
@@ -842,7 +842,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
 
   // Found by its name, having no extension to be found by.
   await page.evaluate(async () => {
-    const { showFile } = await import("./workspace.js")
+    const { showFile } = await import("./lib/workspace.js")
     await showFile("Makefile")
   })
   await expect(page.locator(".content .col-foot .lang")).toHaveText("make")
@@ -850,7 +850,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
 
   // A file with no grammar takes the same path out: lines, no language.
   await page.evaluate(async () => {
-    const { showFile } = await import("./workspace.js")
+    const { showFile } = await import("./lib/workspace.js")
     await showFile(".gitignore")
   })
   await expect(page.locator(".content .col-foot .path")).toHaveText(".gitignore")

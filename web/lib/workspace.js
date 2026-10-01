@@ -9,7 +9,7 @@
 /// them. See `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
-import { $reactive } from "./vendor/jq79.js"
+import { $reactive } from "../vendor/jq79.js"
 import { apiHeaders } from "./store.js"
 import { closing } from "./modal.js"
 import { setPane } from "./prefs.js"
@@ -45,7 +45,7 @@ export const workspace = $reactive({
   /// The active tab itself. `picked` rather than `selected` in the components
   /// that read it, and the name is load-bearing: a scope variable called
   /// `selected` collides with the DOM property of that name, and jq79's render
-  /// effect ends up writing what it reads. See `content-viewer.html`.
+  /// effect ends up writing what it reads. See `views/editor/editor.html`.
   selected: null,
   /// What the viewer is showing, once it has arrived.
   /// `{ kind: "file", path, lines, truncated }`,

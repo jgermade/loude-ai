@@ -8,8 +8,8 @@
   // edit somebody has half-made in the table is neither saved by accident nor
   // thrown away: `added` hands the new name back and the table merges it into
   // its draft. `taken` is every name the table holds, saved or not.
-  const { state, saveProviders } = await import("./store.js")
-  const { asModal, closing } = await import("./modal.js")
+  const { state, saveProviders } = await import("../../../lib/store.js")
+  const { asModal, closing } = await import("../../../lib/modal.js")
 
   // Through `closing`, so it leaves animated however it is dismissed.
   const dismiss = () => closing("provider-dialog", () => close?.())

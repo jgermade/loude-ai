@@ -9,11 +9,11 @@
   // turn picker. Nothing here is fetched: it is the turn `keepTurn` or a
   // reload already put in `state.history`, and the message beside it. See
   // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
-  const { state } = await import("./store.js")
-  const { ui, closeInspect } = await import("./ui.js")
-  const { asModal } = await import("./modal.js")
-  const { timing, seconds, speedLabel } = await import("./timing.js")
-  const Segmented = await import("./components/segmented.html")
+  const { state } = await import("../../lib/store.js")
+  const { ui, closeInspect } = await import("../../lib/ui.js")
+  const { asModal } = await import("../../lib/modal.js")
+  const { timing, seconds, speedLabel } = await import("../../helpers/timing.js")
+  const Segmented = await import("../../components/segmented.html")
   const ContextView = await import("./context-view.html")
 
   asModal("turn-dialog", { close: closeInspect })

@@ -8,8 +8,8 @@
   // are the same 40px. This file draws what is inside the box. See
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md` and
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const { workspace } = await import("./workspace.js")
-  const { prefs, monacoAvailable } = await import("./prefs.js")
+  const { workspace } = await import("../../lib/workspace.js")
+  const { prefs, monacoAvailable } = await import("../../lib/prefs.js")
   const { paint, dispose, textOf } = await import("./monaco.js")
   const { paintFile } = await import("./rows.js")
 

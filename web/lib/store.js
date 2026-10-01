@@ -12,7 +12,7 @@
 //    exported with `ts-rs`, this file gets `// @ts-check` against the generated
 //    .d.ts; the templates stay untyped. Nothing here should need a DOM node.
 
-import { $reactive } from "./vendor/jq79.js"
+import { $reactive } from "../vendor/jq79.js"
 import { closing } from "./modal.js"
 
 // What this client speaks, sent on connect so a host that speaks something else
@@ -941,7 +941,7 @@ export const reopenTask = reopenJob
 /// mounts whichever section is open — so a fetch here would be a fetch racing
 /// the component that draws its result. The section that needs the data awaits
 /// it in its own `:setup`, which jq79 runs before the template renders; see
-/// `settings-models.html`, where a reactive statement that rebuilt the draft
+/// `views/settings/models/models.html`, where a reactive statement that rebuilt the draft
 /// instead was an effect writing what the component read, and jq79 gave up on
 /// it settling after 100 passes.
 ///

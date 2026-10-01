@@ -3,7 +3,7 @@
   // column. Read-only: nothing here stages, commits or reverts — see
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md` on why this panel is a
   // window and not a second way to change the workspace.
-  const { workspace, loadStatus, showDiff, inside } = await import("./workspace.js")
+  const { workspace, loadStatus, showDiff, inside } = await import("../../../lib/workspace.js")
 
   loadStatus()
 
@@ -35,7 +35,7 @@
     .sort((a, b) => a.path.localeCompare(b.path))
 
   // Not `selected` — that name collides with the DOM property and loops
-  // the render effect. See `content-viewer.html`.
+  // the render effect. See `views/editor/editor.html`.
   $: picked = workspace.selected?.kind === "diff" ? workspace.selected : null
 </script>
 

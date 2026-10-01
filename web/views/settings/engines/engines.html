@@ -4,8 +4,8 @@
   // and a profile that names it has it started before a session sends there.
   // See `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
   const { loadEngines, saveEngines, startEngine, stopEngine, installEngine, modelLabel } =
-    await import("./engines.js")
-  const { openStarter } = await import("./ui.js")
+    await import("../../../lib/engines.js")
+  const { openStarter } = await import("../../../lib/ui.js")
   const EngineForm = await import("./engine-form.html")
 
   let view = null

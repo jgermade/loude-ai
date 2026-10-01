@@ -6,24 +6,24 @@
   // table have nothing to do with each other, and stacking them made the second
   // one the reward for scrolling past the first. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const { state, closeSettings } = await import("./store.js")
-  const { ui } = await import("./ui.js")
-  const { asModal } = await import("./modal.js")
+  const { state, closeSettings } = await import("../../lib/store.js")
+  const { ui } = await import("../../lib/ui.js")
+  const { asModal } = await import("../../lib/modal.js")
 
   // ESC, the focus trap and the backdrop come from `<dialog>` rather than from
   // this file. See `modal.js`.
   asModal("settings-dialog", { close: closeSettings })
 
-  const SettingsGeneral = await import("./settings-general.html")
-  const SettingsModels = await import("./settings-models.html")
-  const SettingsEngines = await import("./settings-engines.html")
-  const SettingsSessions = await import("./settings-sessions.html")
-  const Rail = await import("./components/rail.html")
+  const SettingsGeneral = await import("./general/general.html")
+  const SettingsModels = await import("./models/models.html")
+  const SettingsEngines = await import("./engines/engines.html")
+  const SettingsSessions = await import("./sessions/sessions.html")
+  const Rail = await import("../../components/rail.html")
 
   const SECTIONS = [
     // Engines before Models: a provider can name an engine, so the thing it
     // names comes first. Resend and Authority are one section, Sessions —
-    // see `settings-sessions.html`.
+    // see `views/settings/sessions/sessions.html`.
     { value: "general", label: "General", icon: "i-sliders" },
     { value: "engines", label: "Engines", icon: "i-chip" },
     { value: "models", label: "Models", icon: "i-server" },
