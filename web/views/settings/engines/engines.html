@@ -4,8 +4,8 @@
   // and a profile that names it has it started before a session sends there.
   // See `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
   const { loadEngines, saveEngines, startEngine, stopEngine, installEngine, modelLabel } =
-    await import("../../../lib/engines.js")
-  const { openStarter } = await import("../../../lib/ui.js")
+    await import("@web/lib/engines.js")
+  const { openStarter } = await import("@web/lib/ui.js")
   const EngineForm = await import("./engine-form.html")
 
   let view = null
@@ -25,12 +25,12 @@
   }
   took(await loadEngines())
 
-  // Polled while this section is on screen, and only then: the pane's own id
-  // is what says so, the seam `modal.js` waits on for the same reason — jq79
-  // has no unmount hook a timer could be cleared from.
+  // Polled while this section is on screen, and only then: whether the pane is
+  // still in the document is what says so — jq79 has no unmount hook a timer
+  // could be cleared from.
   const tick = async () => {
-    const pane = document.getElementById("engines-pane")
-    if (!pane) return
+    const pane = $self(".engines-pane")
+    if (!pane?.isConnected) return
     // Mounted with the other sections and hidden behind them while another
     // is chosen: kept ticking, but not asking the server for what nobody sees.
     if (pane.closest(".section:not(.on)")) return setTimeout(tick, 2000)
@@ -68,7 +68,7 @@
     : (s.answering ? "answering, not luu's" : s.state))
 </script>
 
-<div id="engines-pane">
+<div class="engines-pane">
   <h3>Engines</h3>
   <p class="dim small">
     Model servers luu starts: <strong>llama-server</strong>,

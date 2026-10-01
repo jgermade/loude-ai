@@ -6,13 +6,12 @@
   // The binary is a choice among what the server found, luu's own copy, or a
   // path — and the path must end in the kind's own binary name, which the
   // server checks again: see `accepts_from_page` in `crate::engines`.
-  const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("../../../lib/engines.js")
-  const { state, loadProviders, saveProviders } = await import("../../../lib/store.js")
-  const { asModal, closing } = await import("../../../lib/modal.js")
+  const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("@web/lib/engines.js")
+  const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
+  const Modal = await import("@web/components/modal.html")
 
-  // Through `closing`, so it leaves animated however it is dismissed.
-  const dismiss = () => closing("engine-dialog", () => close?.())
-  asModal("engine-dialog", { close: dismiss })
+  // False once it should leave: `Modal` plays the exit, then `close` unmounts.
+  let open = true
 
   const current = editing ? view?.engines?.[editing] : null
   const quote = arg => (/\s/.test(arg) ? `"${arg}"` : arg)
@@ -128,15 +127,11 @@
       }
     }
     saving = false
-    dismiss()
+    open = false
   }
 </script>
 
-<dialog id="engine-dialog" class="modal narrow" @click.self="dismiss()">
-  <header class="modal-head">
-    <strong>{{ editing ? `Engine ${editing}` : "Add an engine" }}</strong>
-    <button type="button" class="link" @click="dismiss()">close</button>
-  </header>
+<Modal :title="editing ? 'Engine ' + editing : 'Add an engine'" width="34rem" :open="open" @close="close?.()">
   <section class="modal-body">
     <dl class="settings form">
       <dt>Name</dt>
@@ -276,14 +271,14 @@
 
     <div class="modal-foot">
       <div class="modal-actions">
-        <button type="button" @click="dismiss()">Cancel</button>
+        <button type="button" @click="open = false">Cancel</button>
         <button type="button" class="save" :disabled="!canSave" @click="save()">
           {{ saving ? "Saving…" : (editing ? "Save" : "Add engine") }}
         </button>
       </div>
     </div>
   </section>
-</dialog>
+</Modal>
 
 <style scoped>
   .form input:not([type]), .form select { width: 100%; }

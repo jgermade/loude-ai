@@ -9,14 +9,12 @@
   // turn picker. Nothing here is fetched: it is the turn `keepTurn` or a
   // reload already put in `state.history`, and the message beside it. See
   // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
-  const { state } = await import("../../lib/store.js")
-  const { ui, closeInspect } = await import("../../lib/ui.js")
-  const { asModal } = await import("../../lib/modal.js")
-  const { timing, seconds, speedLabel } = await import("../../helpers/timing.js")
-  const Segmented = await import("../../components/segmented.html")
+  const { state } = await import("@web/lib/store.js")
+  const { ui, closeInspect } = await import("@web/lib/ui.js")
+  const Modal = await import("@web/components/modal.html")
+  const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
+  const Segmented = await import("@web/components/segmented.html")
   const ContextView = await import("./context-view.html")
-
-  asModal("turn-dialog", { close: closeInspect })
 
   let tab = "context"
 
@@ -44,12 +42,10 @@
   ]
 </script>
 
-<dialog id="turn-dialog" class="modal wide" @click.self="closeInspect()">
-  <header class="modal-head">
-    <strong>Turn {{ ui.inspecting }}</strong>
+<Modal :title="'Turn ' + ui.inspecting" width="64rem" @close="closeInspect()">
+  <template :slot.head>
     <span :if="state.model" class="dim">{{ state.model }}</span>
-    <button type="button" class="link" @click="closeInspect()">close</button>
-  </header>
+  </template>
 
   <div class="facts">
     <div><span class="k">ended</span><b :class.warn="kept?.reason && kept.reason !== 'stop'">{{ kept?.reason || message?.reason || "—" }}</b></div>
@@ -104,10 +100,9 @@
       </div>
     </div>
   </section>
-</dialog>
+</Modal>
 
 <style scoped>
-  .modal.wide { width: min(64rem, calc(100vw - 2rem)); }
   .facts {
     display: flex;
     flex-wrap: wrap;

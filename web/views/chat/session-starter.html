@@ -3,15 +3,11 @@
   // switches inside a session — every per-turn number is backend-specific, and
   // one label over two backends is a comparison nobody can make. See
   // `RECORD/2026-09-07.the-first-run-has-no-provider.completed.md`.
-  const { state } = await import("../../lib/store.js")
+  const { state } = await import("@web/lib/store.js")
   const {
     ui, loadModels, editStarter, closeStarter, startSession, continueHere,
-  } = await import("../../lib/ui.js")
-  const { asModal } = await import("../../lib/modal.js")
-
-  // ESC, the focus trap and the backdrop come from `<dialog>` rather than from
-  // this file. See `modal.js`.
-  asModal("starter-dialog", { close: closeStarter })
+  } = await import("@web/lib/ui.js")
+  const Modal = await import("@web/components/modal.html")
 
   $: profileNames = Object.keys(state.providers?.providers || {})
   // Empty where nobody has written a posture down, and where a surface cannot
@@ -40,11 +36,7 @@
             : "")
 </script>
 
-<dialog id="starter-dialog" class="modal narrow" @click.self="closeStarter()">
-  <header class="modal-head">
-    <strong>Where a session sends</strong>
-    <button type="button" class="link" @click="closeStarter()">close</button>
-  </header>
+<Modal title="Where a session sends" width="34rem" @close="closeStarter()">
   <section class="modal-body">
     <p :if="!profileNames.length" class="refused">
       There are no providers in <code>config.toml</code> yet. Write one in
@@ -120,4 +112,4 @@
       </div>
     </div>
   </section>
-</dialog>
+</Modal>

@@ -11,8 +11,7 @@
 /// This is what is open on screen right now. See
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
-import { $reactive } from "../vendor/jq79.js"
-import { closing } from "./modal.js"
+import { $reactive } from "@web/vendor/jq79.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,
   newSession, resumeSession, apiHeaders,
@@ -164,10 +163,8 @@ export function editStarter(patch) {
 }
 
 export function closeStarter() {
-  closing("starter-dialog", () => {
-    ui.starter = null
-    ui.continuing = false
-  })
+  ui.starter = null
+  ui.continuing = false
 }
 
 export async function startSession() {
@@ -286,7 +283,7 @@ export function inspect(turn) {
 }
 
 export function closeInspect() {
-  closing("turn-dialog", () => { ui.inspecting = null })
+  ui.inspecting = null
 }
 
 // ---- the context so far -----------------------------------------------------
@@ -296,5 +293,5 @@ export function openContext() {
 }
 
 export function closeContext() {
-  closing("context-dialog", () => { ui.contextOpen = false })
+  ui.contextOpen = false
 }

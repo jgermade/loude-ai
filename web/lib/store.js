@@ -12,8 +12,7 @@
 //    exported with `ts-rs`, this file gets `// @ts-check` against the generated
 //    .d.ts; the templates stay untyped. Nothing here should need a DOM node.
 
-import { $reactive } from "../vendor/jq79.js"
-import { closing } from "./modal.js"
+import { $reactive } from "@web/vendor/jq79.js"
 
 // What this client speaks, sent on connect so a host that speaks something else
 // refuses it out loud rather than by misreading the next message. Kept beside
@@ -1080,7 +1079,7 @@ export async function saveAuthority(body) {
 }
 
 export function closeSettings() {
-  closing("settings-dialog", () => { state.settingsOpen = false })
+  state.settingsOpen = false
 }
 
 /// Just the read-only half, for after something changed it.

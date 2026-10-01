@@ -19,9 +19,9 @@
   // button says `loading 12s` until the engine answers — see `watchEngine`.
   // A turn sent before then waits for it on the server.
   const { state, loadProviders, providerModels, newSession, resumeSession } =
-    await import("../../lib/store.js")
-  const { ui, checkModel, openSettingsAt, switching: leavingFrom } = await import("../../lib/ui.js")
-  const { modelLabel } = await import("../../lib/engines.js")
+    await import("@web/lib/store.js")
+  const { ui, checkModel, openSettingsAt, switching: leavingFrom } = await import("@web/lib/ui.js")
+  const { modelLabel } = await import("@web/lib/engines.js")
 
   let open = false
   // Where the menu goes: fixed, from the button's own box, because the chat

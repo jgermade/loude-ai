@@ -5,11 +5,11 @@
   // from, and one server answers two people on two machines. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   const { prefs, setTheme, setEditor, setCode, setLayout, monacoAvailable } =
-    await import("../../../lib/prefs.js")
+    await import("@web/lib/prefs.js")
   const { workspace, openPicker, loadIconTheme, saveIconTheme, importIconTheme } =
-    await import("../../../lib/workspace.js")
-  const Segmented = await import("../../../components/segmented.html")
-  const SaveButton = await import("../../../components/save-button.html")
+    await import("@web/lib/workspace.js")
+  const Segmented = await import("@web/components/segmented.html")
+  const SaveButton = await import("@web/components/save-button.html")
 
   // The icon theme: the server's view of it, what is typed into the path, and
   // the last refusal, in the loader's own words.

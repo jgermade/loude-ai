@@ -390,7 +390,7 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await expect(builtin.locator(".tag")).toHaveText("running")
 
   await page.locator('.modal button.add:has-text("+ provider")').click()
-  const form = page.locator("#provider-dialog")
+  const form = page.getByRole("dialog", { name: "Add a provider" })
   await expect(form).toBeVisible()
   // A name the table already has is refused before it is sent.
   await form.locator("dd input").first().fill("here")
@@ -461,10 +461,10 @@ test("an engine is added with its provider, started, and stopped from Settings",
 
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Engines")')
-  await expect(page.locator("#engines-pane")).toContainText("None yet")
+  await expect(page.locator(".engines-pane")).toContainText("None yet")
 
-  await page.locator('#engines-pane button.add:has-text("+ engine")').click()
-  const form = page.locator("#engine-dialog")
+  await page.locator('.engines-pane button.add:has-text("+ engine")').click()
+  const form = page.getByRole("dialog", { name: "Add an engine" })
   await expect(form).toBeVisible()
   await form.locator("dd input").first().fill("fake")
   await form.locator("select").nth(1).selectOption("custom")
@@ -486,7 +486,7 @@ test("an engine is added with its provider, started, and stopped from Settings",
   expect(onDisk).toContain('url = "http://127.0.0.1:8097/v1"')
   expect(onDisk).toContain('engine = "fake"')
 
-  const card = page.locator("#engines-pane section.engine", { hasText: "fake" })
+  const card = page.locator(".engines-pane section.engine", { hasText: "fake" })
   await expect(card.locator(".state")).toHaveText("stopped")
   await expect(card).toContainText(fake)
 
@@ -596,8 +596,8 @@ test("the models on this machine are listed by where they came from", async ({ p
   // The engine form offers the two llama.cpp can load, and says why not the third.
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Engines")')
-  await page.locator("#engines-pane section.engine", { hasText: "fake" }).locator('button:has-text("edit")').click()
-  const form = page.locator("#engine-dialog")
+  await page.locator(".engines-pane section.engine", { hasText: "fake" }).locator('button:has-text("edit")').click()
+  const form = page.getByRole("dialog", { name: "Engine fake" })
   const models = form.locator("select").nth(2)
   await expect(models.locator("option")).toHaveText([
     "none — named in the arguments below",
@@ -612,7 +612,7 @@ test("the models on this machine are listed by where they came from", async ({ p
   await form.locator("button.save").click()
   await expect(form).toHaveCount(0)
   expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "ollama:tiny:1b"')
-  await expect(page.locator("#engines-pane section.engine", { hasText: "fake" })).toContainText("tiny:1b (ollama)")
+  await expect(page.locator(".engines-pane section.engine", { hasText: "fake" })).toContainText("tiny:1b (ollama)")
   await page.locator(".modal-head button.link", { hasText: "close" }).click()
 
   // And the chat's picker lists them under the provider that starts it.

@@ -259,60 +259,9 @@ pre {
    purpose — the first reads as a report, the second as a form. See
    RECORD/2026-09-07.configuring-from-the-browser.completed.md and
    RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md. */
-/* A `<dialog>` opened with `showModal()`, so ESC, the focus trap, `inert` on
-   everything behind it and the backdrop are the platform's rather than this
-   page's. The positioned backdrop div with a `z-index` that used to do the
-   dimming is gone; the top layer has no z-index to compete in. See
-   `web/modal.js`. */
-dialog.modal {
-  background: var(--panel);
-  color: var(--fg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  /* No padding of its own, deliberately: a click that lands on the dialog
-     rather than on a child is what `@click.self` reads as *outside the box*,
-     and padding would be a ring of "outside" inside the border. */
-  padding: 0;
-  /* The viewport is a dialog's containing block, so `100%` here is the window
-     and the gutter has to be taken off explicitly — it used to be the
-     backdrop's padding. */
-  width: min(72rem, calc(100vw - 2rem));
-  max-width: calc(100vw - 2rem);
-  /* Down from the top rather than centred, which is where the backdrop's
-     `align-items: flex-start` and `3rem` padding put it. */
-  margin: 3rem auto;
-  max-height: calc(100vh - 6rem);
-  flex-direction: column;
-}
-/* A dialog is `display: none` until it is open, and `display: flex` would
-   override that — the box would be on screen, unmodal, for the frame between
-   the template rendering and `showModal()`. */
-dialog.modal[open] { display: flex; }
-dialog.modal::backdrop { background: rgba(0, 0, 0, .55); }
-/* In and out: the box rises a few pixels and comes up to full size while the
-   backdrop darkens, and leaves the way it came. Closing is played by
-   `modal.js`'s `closing`, which adds `.closing` and unmounts the dialog once
-   `modal-out` (140ms, `CLOSE_MS` there) is over. */
-dialog.modal[open] { animation: modal-in .2s cubic-bezier(.2, .8, .2, 1); }
-dialog.modal[open]::backdrop { animation: backdrop-in .2s ease-out; }
-dialog.modal.closing { animation: modal-out .14s ease-in forwards; }
-dialog.modal.closing::backdrop { animation: backdrop-out .14s ease-in forwards; }
-@keyframes modal-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
-@keyframes modal-out { to { opacity: 0; transform: translateY(6px) scale(.985); } }
-@keyframes backdrop-in { from { opacity: 0; } }
-@keyframes backdrop-out { to { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) {
-  dialog.modal[open], dialog.modal[open]::backdrop,
-  dialog.modal.closing, dialog.modal.closing::backdrop { animation: none; }
-}
-.modal-head {
-  display: flex;
-  align-items: center;
-  gap: .5rem;
-  padding: .6rem 1rem;
-  border-bottom: 1px solid var(--line);
-}
-.modal-head .link { margin-left: auto; }
+/* The dialog itself — box, backdrop, the way in and out, and its head — is
+   `components/modal.html`. What is here is what goes *in* one: a modal's
+   content is its owner's, so its styles are the page's. */
 .modal-body { padding: 1rem; overflow: auto; }
 .modal-body h3 {
   font-size: 13px;
@@ -397,9 +346,6 @@ dialog.modal.closing::backdrop { animation: backdrop-out .14s ease-in forwards; 
 }
 .first-run p { margin: .4rem 0 0; font-size: 12px; line-height: 1.6; color: var(--dim); }
 .first-run code { color: var(--fg); }
-/* The session starter asks two questions; the providers table shows seven
-   columns. They should not be the same width. */
-dialog.modal.narrow { width: min(34rem, calc(100vw - 2rem)); }
 .refused {
   margin: .4rem 0;
   padding: .5rem .7rem;

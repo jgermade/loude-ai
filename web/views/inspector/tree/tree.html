@@ -4,7 +4,7 @@
   // one directory wide for the same reason. See
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
   const { workspace, openDir, toggleDir, refresh, showFile, loadStatus, loadIcons, iconFor } =
-    await import("../../../lib/workspace.js")
+    await import("@web/lib/workspace.js")
 
   // Rooted at the folder somebody chose, which is a subdirectory of the one
   // `luu serve` was started in. Paths stay relative to *that* base throughout —

@@ -4,18 +4,17 @@
   const { state, connect, send, cancel, playFixture, foldTranscript,
           approvePlan, declinePlan, requestPlan, closeJob, reopenJob,
           resumeSession, deleteSession, renameSession,
-          loadProviders, refreshSettings } = await import("./lib/store.js")
-  const { prefs, setPane, setInspector, setConfirm } = await import("./lib/prefs.js")
-  const { startDrag, nudge, resetWidth, widthStyle } = await import("./lib/resize.js")
+          loadProviders, refreshSettings } = await import("@web/lib/store.js")
+  const { prefs, setPane, setInspector, setConfirm } = await import("@web/lib/prefs.js")
+  const { startDrag, nudge, resetWidth, widthStyle } = await import("@web/lib/resize.js")
   const { workspace, loadRoot, openPicker, activate, closeTab, pinTab, showFile, showDiff } =
-    await import("./lib/workspace.js")
+    await import("@web/lib/workspace.js")
   const { ui, openSettingsAt, openStarter, openHistory, closeHistory, checkModel,
-          watchTurnEngine, inspect, LOADING, openContext } = await import("./lib/ui.js")
-  const { timing, seconds, speedLabel } = await import("./helpers/timing.js")
-  const { modelLabel } = await import("./lib/engines.js")
-  const { modalOpen } = await import("./lib/modal.js")
-  const Segmented = await import("./components/segmented.html")
-  const Dropup = await import("./components/dropup.html")
+          watchTurnEngine, inspect, LOADING, openContext } = await import("@web/lib/ui.js")
+  const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
+  const { modelLabel } = await import("@web/lib/engines.js")
+  const Segmented = await import("@web/components/segmented.html")
+  const Dropup = await import("@web/components/dropup.html")
 
   // The gate's two narrowings. `null` is *leave*, which is what almost every
   // approval means; the other two are a person deciding this job is not the
@@ -45,18 +44,18 @@
   // script has no static `import`. jq79's loader answers an `.html`
   // specifier with the component itself, not a module namespace, so there is
   // nothing to destructure off it.
-  const InspectorDebug = await import("./views/inspector/debug/debug.html")
-  const InspectorFiles = await import("./views/inspector/tree/tree.html")
-  const InspectorGit = await import("./views/inspector/version-control/version-control.html")
-  const ContentViewer = await import("./views/editor/editor.html")
-  const FolderPicker = await import("./views/inspector/tree/folder-picker.html")
-  const SettingsModal = await import("./views/settings/settings.html")
-  const ModelPicker = await import("./views/chat/model-picker.html")
-  const SessionStarter = await import("./views/chat/session-starter.html")
-  const ToolCall = await import("./views/chat/tool-call.html")
-  const TurnInspect = await import("./views/chat/turn-inspect.html")
-  const ContextModal = await import("./views/chat/context-modal.html")
-  const { segments } = await import("./helpers/segments.js")
+  const InspectorDebug = await import("@web/views/inspector/debug/debug.html")
+  const InspectorFiles = await import("@web/views/inspector/tree/tree.html")
+  const InspectorGit = await import("@web/views/inspector/version-control/version-control.html")
+  const ContentViewer = await import("@web/views/editor/editor.html")
+  const FolderPicker = await import("@web/views/inspector/tree/folder-picker.html")
+  const SettingsModal = await import("@web/views/settings/settings.html")
+  const ModelPicker = await import("@web/views/chat/model-picker.html")
+  const SessionStarter = await import("@web/views/chat/session-starter.html")
+  const ToolCall = await import("@web/views/chat/tool-call.html")
+  const TurnInspect = await import("@web/views/chat/turn-inspect.html")
+  const ContextModal = await import("@web/views/chat/context-modal.html")
+  const { segments } = await import("@web/helpers/segments.js")
 
   connect()
 
@@ -193,14 +192,14 @@
   //
   // **A modal is not in the list.** `<dialog>` cancels itself on ESC, and this
   // returns rather than acting so that one keypress does not both close the
-  // settings and swap the column underneath it. See `modal.js`.
+  // settings and swap the column underneath it. See `components/modal.html`.
   //
   // A *running turn* is deliberately not in the list either: it is the one
   // cancellable thing on this page whose undo costs work, and ESC is too easy
   // to hit for that. The composer's own button stays the way to stop one.
   const onKeydown = event => {
     if (event.key !== "Escape") return
-    if (modalOpen()) return
+    if (document.querySelector("dialog[open]")) return
     if (ui.history) return closeHistory()
     if (renaming) return cancelRename()
     if (armedClose) {

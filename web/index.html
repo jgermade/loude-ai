@@ -9,6 +9,10 @@
 </head>
 <body>
 <main id="app"></main>
+<!-- `@web/` is this folder, from wherever the importing file sits — so no
+     import climbs with `../`. Before the first module script, which is the
+     only place an import map is honoured. -->
+<script type="importmap">{ "imports": { "@web/": "./" } }</script>
 <script type="module">
   import { C79 } from "./vendor/jq79.js"
   C79.fetch("./app.html").mount("#app")

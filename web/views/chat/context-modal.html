@@ -6,12 +6,10 @@
   // next prompt rather than after it. Nothing is fetched: it is the budget
   // and the prompt the trace channel last sent. See
   // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
-  const { state } = await import("../../lib/store.js")
-  const { closeContext } = await import("../../lib/ui.js")
-  const { asModal } = await import("../../lib/modal.js")
+  const { state } = await import("@web/lib/store.js")
+  const { closeContext } = await import("@web/lib/ui.js")
+  const Modal = await import("@web/components/modal.html")
   const ContextView = await import("./context-view.html")
-
-  asModal("context-dialog", { close: closeContext })
 
   // `state.budget` is read where it is used, never copied into this
   // component's store: `$: budget = state.budget` put one store's object in
@@ -28,12 +26,10 @@
   $: notes = [state.settings?.authority?.draft?.text, state.settings?.authority?.plan?.text].filter(Boolean)
 </script>
 
-<dialog id="context-dialog" class="modal wide" @click.self="closeContext()">
-  <header class="modal-head">
-    <strong>Context</strong>
+<Modal title="Context" width="64rem" @close="closeContext()">
+  <template :slot.head>
     <span :if="turn !== null" class="dim">as of turn {{ turn }}</span>
-    <button type="button" class="link" @click="closeContext()">close</button>
-  </header>
+  </template>
 
   <div :if="state.budget" class="facts">
     <div><span class="k">context</span><b :class.warn="percent !== null && percent >= 80">{{ sent }} / {{ limit || "—" }}</b></div>
@@ -57,10 +53,9 @@
                  :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
                  :window="state.settings?.window || null" />
   </section>
-</dialog>
+</Modal>
 
 <style scoped>
-  .modal.wide { width: min(64rem, calc(100vw - 2rem)); }
   .facts {
     display: flex;
     flex-wrap: wrap;

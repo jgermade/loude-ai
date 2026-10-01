@@ -9,17 +9,8 @@
   // sandbox, and that is the one thing the workspace surface has never been.
   // See `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   const { workspace, openDir, browseTo, chooseRoot, closePicker } =
-    await import("../../../lib/workspace.js")
-  const { asModal } = await import("../../../lib/modal.js")
-
-  // **Forced is locked.** On a first visit there is nothing behind this to go
-  // back to, so `closePicker` refuses — and ESC has to refuse with it, or the
-  // browser would close a dialog the page still believes is open. See
-  // `modal.js`.
-  asModal("folder-dialog", {
-    close: closePicker,
-    locked: () => workspace.picker.forced,
-  })
+    await import("@web/lib/workspace.js")
+  const Modal = await import("@web/components/modal.html")
 
   openDir(workspace.picker.at || "")
 
@@ -44,15 +35,11 @@
   $: here = at || ""
 </script>
 
-<dialog id="folder-dialog" class="modal narrow" @click.self="closePicker()">
-  <header class="modal-head">
-    <strong>{{ workspace.picker.forced ? "Which folder?" : "Change folder" }}</strong>
-    <button
-      :if="!workspace.picker.forced"
-      type="button"
-      class="link"
-      @click="closePicker()">close</button>
-  </header>
+<!-- **Forced is locked.** On a first visit there is nothing behind this to go
+     back to, so `closePicker` refuses — and ESC has to refuse with it, or the
+     browser would close a dialog the page still believes is open. -->
+<Modal :title="workspace.picker.forced ? 'Which folder?' : 'Change folder'" width="34rem"
+       :locked="workspace.picker.forced" @close="closePicker()">
 
   <section class="modal-body">
     <p :if="workspace.picker.forced" class="dim small intro">
@@ -96,7 +83,7 @@
       </div>
     </div>
   </section>
-</dialog>
+</Modal>
 
 <style scoped>
   .intro { margin: 0 0 .8rem; line-height: 1.6; }

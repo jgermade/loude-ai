@@ -1032,22 +1032,22 @@ the far end to discover. A provider that did not answer at all: the foot says so
 stays enabled, because a provider that is starting up is an ordinary state and locking the
 composer over one would be wrong more often than right.
 
-**Every modal is a `<dialog>` opened with `showModal()`** — settings, the folder picker, the
-session starter — so ESC, the focus trap, everything behind it inert and the `::backdrop` are
-the platform's rather than three hand-built copies of a `z-index: 50` div. What the platform does
-not own is *whether* a modal is on screen, which is the page's state, so `modal.js` routes every
-native dismissal back to the same close function the close button calls; the folder picker on a
-first visit refuses both, because there is nothing behind it to go back to. **ESC walks a ladder**
-— a modal cancels itself and the page does nothing else on that keypress, then the history
-popover, a rename in progress, an armed delete, and finally, with nothing left to cancel and two
-columns on screen, it swaps content and chat. A running turn is deliberately not on it: it is the
-one cancellable thing whose undo costs work. `asModal` is called from a component's `:setup`,
-which runs to completion *before* the template renders, so it **waits across frames** for the
-element rather than looking once: looking once made opening the settings modal a race against its
-own setup — one `await import` per section, and jq79 renders only after all of them resolve. Two
-sections won that race and a third lost it, and losing it was silent, because a `<dialog>` that
-was never shown is in the document and invisible. See
-[`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md).
+**Every modal is a `<dialog>` opened with `showModal()`**, and every one is the same component,
+`components/modal.html` — so ESC, the focus trap, everything behind it inert and the `::backdrop`
+are the platform's, and the box, its head, its close button and the way in and out are written
+once. What the platform does not own is *whether* a modal is on screen, which is the page's state:
+the owner mounts `<Modal>` behind its own flag, and every way out — the close button, the
+backdrop, ESC, `:open` going false from a script that saved — plays the same exit and then emits
+`close`, which the owner answers by clearing the flag. `locked` refuses all of them and hides the
+close button: the folder picker on a first visit, which has nothing behind it to go back to.
+**No modal has an id.** The component finds its own `<dialog>` with `$self`, so the store's close
+functions only clear state and nothing outside a modal names it. **ESC walks a ladder** — a modal
+cancels itself and the page does nothing else on that keypress, then the history popover, a rename
+in progress, an armed delete, and finally, with nothing left to cancel and two columns on screen,
+it swaps content and chat. A running turn is deliberately not on it: it is the one cancellable
+thing whose undo costs work. See
+[`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md)
+and [`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md).
 
 **Settings is sections down the side**, not one scroll, because the sections are not steps:
 *General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*
@@ -1193,13 +1193,19 @@ process in the loop.
 | folder | what goes there | the test |
 |---|---|---|
 | `views/` | the components the page is composed of, one folder per view (`views/inspector/tree/tree.html`), with the parts only that view uses beside it | it is a place on the screen |
-| `components/` | components any view may use (`segmented`, `rail`, `save-button`, `dropup`) | it imports nothing from the page |
+| `components/` | components any view may use (`segmented`, `rail`, `save-button`, `dropup`, `modal`) | it imports nothing from the page |
 | `lib/` | shared modules that keep state or reach outside themselves: the stores, the API, the DOM, `localStorage` | it remembers, or it asks |
 | `helpers/` | pure functions (`segments`, `timing`, `prompt-parts`) | it keeps nothing and imports only other helpers |
 
 The shell (`index.html`, `app.html`, `app.css`) and `vendor/` stay at the top. A view's file is
 named after its folder, so a tab or a search result says which view it is. See
 [`RECORD/2026-10-01.a-file-lives-by-what-it-is.completed.md`](RECORD/2026-10-01.a-file-lives-by-what-it-is.completed.md).
+
+**`@web/` is that folder, from anywhere in it.** An import that leaves its own folder is written
+`@web/lib/store.js`, never `../../../lib/store.js`; one that stays beside the file
+(`./context-view.html`, `./general/general.html`) stays relative. It is an import map in
+`index.html`, so it is the browser's and not a build step's. See
+[`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md).
 
 Live channel — `WS /ws`:
 
@@ -1281,6 +1287,11 @@ Server stack: `axum` + `tokio`.
 `web/vendor/jq79.js`, version 0.7.2, which binds attributes one at a time (`:title="x"`); `:attrs`
 went in 0.7. See
 [`RECORD/2026-10-01.jq79-0.7.2.completed.md`](RECORD/2026-10-01.jq79-0.7.2.completed.md).
+**One line in it is luu's, not jq79's**: a bare `.html` specifier (`@web/components/modal.html`)
+is resolved with `import.meta.resolve`, so it goes through the import map the way a `.js` one
+does; 0.7.2 hands it to `fetch`, which never reads one. It goes upstream, and the vendored copy is
+replaced when it lands. See
+[`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
 frontend (Vite + React or otherwise) forces one of two bad options: `npm` inside `build.rs`, so
@@ -1340,8 +1351,8 @@ The rest follows from that:
   [`RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md`](RECORD/2026-10-01.a-slow-disk-is-one-slow-request.completed.md).
 - **Components**: `web/components/` holds components that import nothing from the page.
   Everything arrives as props or slots, everything leaves as `:model` or `$emit`, styles are
-  scoped, and page tokens are read with fallbacks. Three so far, each taking an idea from rare-ui
-  with none of its code: `Segmented` (a pill that slides to the chosen answer), `Rail` (a bar beside the chosen section that springs
+  scoped, and page tokens are read with fallbacks. `Modal` (the `<dialog>` every modal is) and
+  `Dropup` besides three that each take an idea from rare-ui with none of its code: `Segmented` (a pill that slides to the chosen answer), `Rail` (a bar beside the chosen section that springs
   to it; it was a dot until 2026-09-30) and `SaveButton` (a count of unsaved changes, and a tick once a
   save lands). Every segmented choice on the page is a `Segmented`, and the global `.choice` rule is
   gone. See

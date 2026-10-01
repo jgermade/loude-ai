@@ -263,7 +263,7 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(meta).toContainText("→")
   await expect(meta).toContainText("←")
   await meta.click()
-  const turn = page.locator("#turn-dialog")
+  const turn = page.getByRole("dialog", { name: /^Turn / })
   await expect(turn).toBeVisible()
   // Grouped by what each piece is, each in its bucket's colour: the tool
   // definitions under tools, the question under prompt.
@@ -283,7 +283,7 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   const ctx = page.locator("footer.chat-foot button.ctx")
   await expect(ctx).toBeEnabled()
   await ctx.click()
-  const context = page.locator("#context-dialog")
+  const context = page.getByRole("dialog", { name: "Context" })
   await expect(context).toBeVisible()
   await expect(context.locator('.group[data-bucket="prompt"] pre').last()).toHaveText("go on then")
   await context.locator(".modal-head button", { hasText: "close" }).click()
@@ -421,7 +421,7 @@ test("a session is started on a posture, and the page says which", async ({ page
   // a `+ New` button beside a dropdown in the page header; one session is on
   // screen, so the head names it and the strip became the history popover.
   await page.click('.chat .acts button[title*="New session"]')
-  const starter = page.locator(".modal.narrow")
+  const starter = page.getByRole("dialog", { name: "Where a session sends" })
   await expect(starter).toBeVisible()
 
   // Offered by name, out of config.toml. The page cannot add to the list: a
@@ -1061,7 +1061,7 @@ async function gateOnWidePosture(page) {
   await chooseFolder(page)
 
   await page.click('.chat .acts button[title*="New session"]')
-  const starter = page.locator(".modal.narrow")
+  const starter = page.getByRole("dialog", { name: "Where a session sends" })
   await expect(starter).toBeVisible()
   await starter.locator("select").last().selectOption("wide")
   await starter.locator('button:has-text("Start session")').click()

@@ -1,0 +1,129 @@
+<script :setup="{ title = '', width = '', open = true, locked = false }">
+  // A modal, as the element the platform already has: a `<dialog>` opened
+  // with `showModal()` brings ESC, a focus trap, everything behind it made
+  // inert, and a `::backdrop`. What it does *not* bring is the page's own
+  // state, so every way out — the close button, a click on the backdrop, ESC,
+  // `:open` going false — plays the same exit and then emits `close`, and the
+  // owner unmounts it the way it always did.
+  //
+  // **Self-contained**, like everything in `components/`. See
+  // `RECORD/2026-10-01.one-modal.completed.md`.
+  //
+  //   <Modal title="Add a provider" width="34rem" :open="open" @close="close?.()">
+  //     <template :slot.head><span class="dim">beside the title</span></template>
+  //     <section class="modal-body">…</section>
+  //   </Modal>
+  //
+  // `:open` is for a script: a form that saved sets it false and leaves the
+  // way a click on close does. `locked` refuses every dismissal and hides the
+  // close button — the folder picker on a first visit, which has nothing
+  // behind it to go back to. `width` is a length, capped at the window.
+
+  // How long it takes to leave; `modal-out` below is the same.
+  const CLOSE_MS = 140
+  let leaving = false
+
+  $: box = width ? `width:min(${width}, calc(100vw - 2rem))` : ""
+
+  const close = () => {
+    if (leaving || locked) return
+    const dialog = $self("dialog")
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    if (!dialog?.open || still) return $emit("close")
+    leaving = true
+    setTimeout(() => $emit("close"), CLOSE_MS)
+  }
+  $: open || close()
+
+  await $mounted()
+
+  // Mounted is not the same as in the document: this renders inside its
+  // owner's template, which may not be attached yet, and `showModal()` throws
+  // on a dialog that is not connected. About two seconds of frames, which is
+  // far longer than a template takes.
+  const show = (frames = 120) => {
+    const dialog = $self("dialog")
+    if (!dialog?.isConnected) {
+      if (frames > 0) requestAnimationFrame(() => show(frames - 1))
+      return
+    }
+    if (dialog.open) return
+
+    // `target` is checked because `close` is also the name this component
+    // emits, and an emit bubbles: a modal opened from inside this one would
+    // otherwise close both.
+    //
+    // ESC — and anything else the browser counts as a dismissal — fires
+    // `cancel` first, and it is always refused: the browser would close at
+    // once, with no exit to play.
+    dialog.addEventListener("cancel", event => {
+      if (event.target !== dialog) return
+      event.preventDefault()
+      close()
+    })
+    // Whatever else closed it, the owner is told rather than left holding a
+    // mounted component that is invisible and owns the top layer.
+    dialog.addEventListener("close", event => {
+      if (event.target !== dialog) return
+      if (locked) return dialog.showModal()
+      close()
+    })
+    dialog.showModal()
+  }
+  show()
+</script>
+
+<!-- `@click.self` is the backdrop: a click that lands on the dialog itself
+     rather than on anything inside it is a click outside the box, because the
+     dialog has no padding of its own for a click to land in. -->
+<dialog class="modal" :class.closing="leaving" :style="box" :aria-label="title"
+        @click.self="close()">
+  <header class="modal-head">
+    <strong>{{ title }}</strong>
+    <slot.head />
+    <button :if="!locked" type="button" class="link" @click="close()">close</button>
+  </header>
+  <slot />
+</dialog>
+
+<style scoped>
+  dialog {
+    background: var(--panel, #fff);
+    color: var(--fg, #1a1d23);
+    border: 1px solid var(--line, #d7dbe2);
+    border-radius: 6px;
+    /* No padding, deliberately: padding would be a ring of "outside" inside
+       the border for `@click.self` to read as the backdrop. */
+    padding: 0;
+    /* The viewport is a dialog's containing block, so the gutter is taken off
+       explicitly. */
+    width: min(72rem, calc(100vw - 2rem));
+    max-width: calc(100vw - 2rem);
+    margin: 3rem auto;
+    max-height: calc(100vh - 6rem);
+    flex-direction: column;
+  }
+  /* `display: none` until it is open: a `display: flex` that applied before
+     `showModal()` would put the box on screen, unmodal, for a frame. */
+  dialog[open] { display: flex; animation: modal-in .2s cubic-bezier(.2, .8, .2, 1); }
+  dialog::backdrop { background: rgba(0, 0, 0, .55); }
+  dialog[open]::backdrop { animation: backdrop-in .2s ease-out; }
+  dialog.closing { animation: modal-out .14s ease-in forwards; }
+  dialog.closing::backdrop { animation: backdrop-out .14s ease-in forwards; }
+  @keyframes modal-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+  @keyframes modal-out { to { opacity: 0; transform: translateY(6px) scale(.985); } }
+  @keyframes backdrop-in { from { opacity: 0; } }
+  @keyframes backdrop-out { to { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    dialog[open], dialog[open]::backdrop, dialog.closing, dialog.closing::backdrop { animation: none; }
+  }
+
+  .modal-head {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .6rem 1rem;
+    border-bottom: 1px solid var(--line, #d7dbe2);
+  }
+  .link { margin-left: auto; }
+</style>
