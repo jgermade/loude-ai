@@ -1,0 +1,33 @@
+<script :setup="{ x = false, y = false, background = '', max = '', frame = '' }">
+  // Something that scrolls, on a ground that does not.
+  //
+  //     <Scrollable :y="true" frame="well" max="16rem"><pre>…</pre></Scrollable>
+  //
+  // **Two elements because a bounce takes one with it.** Pulled past either
+  // end, a scroller's own background goes with its content — Chrome paints it
+  // on the layer that moves — and what shows in the gap is its parent's. So
+  // the ground is the outer element, which never scrolls, and the inner one
+  // scrolls with no ground of its own: the gap is always the content's colour.
+  //
+  // `x`, `y` — the axes that scroll. `background` — the ground, any CSS value;
+  // without one the ground is the `frame`'s, or whatever is behind. `max` — the
+  // scroller's cap, which is what makes it scroll vertically at all. `frame` —
+  // a global class for the ground's border and corners (`well`, in `app.css`):
+  // the host of a component lays out as `display: contents`, so a class on
+  // `<Scrollable>` itself would reach nothing.
+  //
+  // What goes inside is the caller's, and so are its styles — except that a
+  // `pre` in here stops being a scroller of its own (`app.css`), since this is.
+</script>
+
+<div class="ground" :class="frame" :style="background ? `background: ${background}` : ''">
+  <div class="scroller" data-scrollable :class.x="x" :class.y="y"
+       :style="max ? `max-height: ${max}` : ''"><slot /></div>
+</div>
+
+<style scoped>
+  .ground { min-width: 0; }
+  .scroller { overflow: hidden; }
+  .scroller.x { overflow-x: auto; }
+  .scroller.y { overflow-y: auto; }
+</style>

@@ -10,6 +10,7 @@
   // reload already put in `state.history`, and the message beside it. See
   // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
   const { state } = await import("@web/lib/store.js")
+  const Scrollable = await import("@web/components/scrollable.html")
   const { ui, closeInspect } = await import("@web/lib/ui.js")
   const Modal = await import("@web/components/modal.html")
   const { timing, seconds, speedLabel } = await import("@web/helpers/timing.js")
@@ -74,14 +75,15 @@
     <div :if="tab === 'context'">
       <p :if="asked" class="asked"><span class="k">asked</span> {{ asked.text }}</p>
 
-      <ContextView :prompt="kept?.prompt || ''" :budget="kept?.budget || null"
+      <ContextView :prompt="kept?.prompt || ''" :toolSpecs="kept?.toolSpecs || ''"
+                   :budget="kept?.budget || null"
                    :asked="asked?.text || ''" :extraCalls="kept?.extraCalls || []"
                    :notes="notes" :window="state.settings?.window || null" />
     </div>
 
     <div :if="tab === 'answer'">
       <p class="dim small">The answer as the model wrote it, tool blocks included.</p>
-      <pre class="raw">{{ message?.text || "" }}</pre>
+      <div class="well"><pre class="raw">{{ message?.text || "" }}</pre></div>
       <p :if="kept?.error" class="bad">{{ kept.error }}</p>
     </div>
 
@@ -94,9 +96,9 @@
           </span>
           <span :if="call.duration_ms != null" class="dim">· {{ call.duration_ms }} ms</span>
         </div>
-        <pre>{{ JSON.stringify(call.arguments, null, 2) }}</pre>
-        <pre :if="call.error" class="bad">{{ call.error }}</pre>
-        <pre :if="call.output">{{ call.output }}</pre>
+        <Scrollable :y="true" frame="well" max="28rem"><pre>{{ JSON.stringify(call.arguments, null, 2) }}</pre></Scrollable>
+        <Scrollable :if="call.error" :y="true" frame="well" max="28rem"><pre class="bad">{{ call.error }}</pre></Scrollable>
+        <Scrollable :if="call.output" :y="true" frame="well" max="28rem"><pre>{{ call.output }}</pre></Scrollable>
       </div>
     </div>
   </section>
@@ -123,12 +125,12 @@
   .asked { margin: 0 0 .8rem; overflow-wrap: anywhere; }
   .block { margin-bottom: .8rem; }
   .role { font-size: 11px; color: var(--dim); text-transform: lowercase; margin-bottom: .2rem; }
+  /* Its ground is its well's, a Scrollable's or the raw answer's. */
   pre {
     margin: 0;
     padding: .5rem .65rem;
-    background: var(--sunken);
-    border: 1px solid var(--line);
-    border-radius: 6px;
+    background: none;
+    border: 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     font-size: 12px;

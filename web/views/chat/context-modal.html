@@ -49,7 +49,8 @@
       Nothing has been sent in this session yet. The context is measured when a
       turn is built, so it is here from the first prompt on.
     </p>
-    <ContextView :if="state.budget" :prompt="state.prompt || ''" :budget="state.budget"
+    <ContextView :if="state.budget" :prompt="state.prompt || ''" :toolSpecs="state.toolSpecs || ''"
+                 :budget="state.budget"
                  :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
                  :window="state.settings?.window || null" />
   </section>

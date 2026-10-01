@@ -245,7 +245,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
   await expect(page.locator("#sessions-resend .waiting")).toContainText("results:")
   await expect(running.locator("dd").nth(2)).toContainText("cited_reads")
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   expect(errors).toEqual([])
@@ -316,7 +316,7 @@ test("an authority note is written from the page and reaches the live session", 
   const moved = await (await fetch(`${BASE}/api/authority`)).json()
   expect(moved.running.draft.position).toBe("prompt")
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   expect(errors).toEqual([])
@@ -370,7 +370,7 @@ test("an icon theme is imported from a picked folder and drawn at once", async (
   expect(onDisk).toContain("icon-themes/tiny-icons")
   expect(onDisk).toContain("[provider.here]")
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   // Drawn by the tree at once, under the theme's new revision.
   await expect(page.locator(".inspector img").first()).toHaveAttribute("src", /\?r=1$/)
 
@@ -442,7 +442,7 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await expect(model).toBeFocused()
   await expect(page.locator(".modal button.save .count")).toHaveText("1")
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   expect(errors).toEqual([])
@@ -516,7 +516,7 @@ test("an engine is added with its provider, started, and stopped from Settings",
   await page.click('.modal .rail button:has-text("Models")')
   await expect(page.locator(".modal table.providers .tag", { hasText: "engine" })).toHaveCount(1)
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
   expect(errors).toEqual([])
 })
@@ -555,7 +555,7 @@ test("a new default and the chat's picker both move the session without a restar
   const after = await (await fetch(`${BASE}/api/settings`)).json()
   expect(after.profile).toBe("here")
   expect(after.follows_default).toBe(true)
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   // The picker, in two columns: it opens on the session's own provider, with
@@ -628,7 +628,7 @@ test("the models on this machine are listed by where they came from", async ({ p
   await expect(form).toHaveCount(0)
   expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "ollama:tiny:1b"')
   await expect(page.locator(".engines-pane section.engine", { hasText: "fake" })).toContainText("tiny:1b (ollama)")
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
   // And the chat's picker lists them under the provider that starts it.
   await page.click(".options .dest")

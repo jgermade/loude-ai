@@ -1,4 +1,4 @@
-<script :setup="{ prompt = '', budget = null, asked = '', extraCalls = [], notes = [], window = null }">
+<script :setup="{ prompt = '', toolSpecs = '', budget = null, asked = '', extraCalls = [], notes = [], window = null }">
   // What a prompt was made of, grouped by what each piece *is* — the system
   // text, the tools, the map, the folded jobs, the earlier exchanges, this
   // turn's code, its question — each in its bucket's colour and under its
@@ -11,7 +11,7 @@
   // *scroll* (a box of its own, for a thousand lines of a file somebody wants
   // to look through without losing their place in the modal). See
   // `RECORD/2026-09-30.the-foot-and-the-turn.completed.md`.
-  const { paint, group, split } = await import("@web/helpers/prompt-parts.js")
+  const { paint, group, split, withSpecs } = await import("@web/helpers/prompt-parts.js")
 
   // Above either of these, a group starts clipped.
   const BIG_LINES = 24
@@ -21,7 +21,7 @@
   let modes = {}
   const mode = (name, value) => { modes = { ...modes, [name]: value } }
 
-  $: groups = group(paint(split(prompt || ""), asked || "", notes || []))
+  $: groups = withSpecs(group(paint(split(prompt || ""), asked || "", notes || [])), toolSpecs || "")
     .map(g => {
       const text = g.entries.map(e => e.text).join("\n")
       return {
@@ -34,11 +34,13 @@
     })
   $: buckets = (budget?.buckets || []).filter(b => b.tokens > 0)
   $: sent = buckets.filter(b => b.name !== "reserve").reduce((sum, b) => sum + b.tokens, 0)
-  // The tools bucket with no tools text in the prompt: the native transport,
-  // where the server's template renders them where this page cannot see.
+  // The tools bucket under the native transport: sent beside the prompt, and
+  // rendered by the server's template where this page cannot see. A turn
+  // recorded before the specs were traced has the count and nothing else.
   $: nativeTools = (() => {
     const tools = buckets.find(b => b.name === "tools")?.tokens || 0
-    return tools && !groups.some(g => g.bucket === "tools") ? tools : 0
+    const shown = groups.find(g => g.bucket === "tools")
+    return tools && (!shown || shown.native) ? tools : 0
   })()
 </script>
 
@@ -70,6 +72,7 @@
       <span class="swatch" :style="`background:var(--b-${g.bucket}, var(--dim))`"></span>
       <b :class="'b-' + g.bucket">{{ g.bucket }}</b>
       <span :if="g.tokens !== null" class="dim">{{ g.tokens }} tokens</span>
+      <span :if="g.native" class="dim">· the request's <code>tools</code> field</span>
       <span class="grow"></span>
       <button :if="g.big && !modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, 'all')">show all</button>
       <button :if="g.big && !modes[g.bucket]" type="button" class="link" @click="mode(g.bucket, 'scroll')">scroll</button>
@@ -86,7 +89,7 @@
   <p :if="nativeTools" class="note">
     <span class="swatch" style="background:var(--b-tools)"></span>
     <b>tools {{ nativeTools }}</b> — sent in the request's own <code>tools</code>
-    field, not in this text. The server's chat template renders them into the
+    field, not in the prompt's text. The server's chat template renders them into the
     prompt with the tool prompt the model was trained on, which is why the
     server's prompt count is higher than the sum of the text above.
   </p>

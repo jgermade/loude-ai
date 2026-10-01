@@ -512,7 +512,9 @@ The model never executes anything directly — it only emits a structured reques
   travel in the request's own `tools` field, so the server's chat template
   renders them with **the tool prompt the model was trained on**, and our
   fenced block leaves the system text. The `tools` bucket counts the specs'
-  JSON, which is what is sent. Nothing above the backend changed:
+  JSON, which is what is sent, and the trace's `prompt` line carries that JSON
+  beside the text as `tool_specs`, so the page's context view shows what the
+  bucket counted rather than only the count. Nothing above the backend changed:
   `backend::native` converts the history on the way out (an assistant message
   holding a call, followed by the user message that is its `[name]` result,
   becomes `tool_calls` plus a `tool` message, found from the alternation this
@@ -970,15 +972,18 @@ cost every column 3rem of height to say so, and it was the one thing on the page
 height, so the grid was `calc(100vh - 3rem)` — a magic number that was wrong the moment it
 wrapped. What each 40px carries now: the inspector's head is the `luu` logo (which is a control
 — it means *back to the conversation*) and the panel tabs, its foot the chosen folder, the
-status word and **settings**; the content column's head is one tab per open thing and its foot
-that thing's own facts — its icon (the tree's, with the language as its title), its path, a
-**diff button while git counts it as changed** (a modal, so the file stays on screen), and at
-the far right **the terminal**: a panel *under* that foot, with a foot of its own at the bottom
-of the column (the picker that moves the session, named by where each posture runs —
-`host`, `docker · luu-worker:dev` — with the posture and its file under each, and a runtime
-this machine lacks offered off — and a contained posture offered on every container runtime,
-since they share the image and the argv, while a host posture is offered once), holding a
-shell where the session runs, which hiding does not end
+status word and **settings**; the content column's head is one tab per open thing — each with
+its file's icon (the tree's, with the language as its title on the tab on screen) and, between
+the name and the close, a **diff button while git counts it as changed** (a modal, so the file
+stays on screen). The column has **one foot**, at its bottom: what a status bar says about the
+open thing (`cut at 512 KB`, a diff's two sides) and at the far right **the terminal**'s
+toggle, lit while it is up. The terminal is a panel, dark whatever the page is, *above* that
+foot, and while it is up the foot carries its controls too (the picker that moves the session,
+named by where each posture runs — `host`, `docker · luu-worker:dev` — with the posture and its
+file under each, and a runtime this machine lacks offered off — and a contained posture offered
+on every container runtime, since they share the image and the argv, while a host posture is
+offered once), holding a shell where the session runs, which hiding does not end and `exit`
+does — there is no button for it
 ([`RECORD/2026-10-01.the-foot-names-its-file.completed.md`](RECORD/2026-10-01.the-foot-names-its-file.completed.md)) — and, the way VS Code does it, a single click opens a **preview** tab, in
 italics, that the next single click replaces in place, while a double click (on the row, or on
 the tab) or the tree's pencil keeps it; the chat's head is the session's name, editable in place, beside
@@ -1130,8 +1135,10 @@ diff implementation.
 
 **The panels follow the disk.** `GET /api/workspace/events` is a server-sent event stream of
 what changed under the base, from the platform's own file events (`notify`: FSEvents, inotify,
-ReadDirectoryChangesW). The events come in batches 150 ms apart, so a save is one answer and a
-build is a few rather than thousands. Each batch is either the paths that changed, `git: true`
+ReadDirectoryChangesW). The events are debounced: a batch closes after 300 ms with none, or at
+2 s old while they keep coming, so a save is one answer and a build is one every couple of seconds
+rather than thousands. The page handles one batch at a time and folds whatever arrives meanwhile
+into the next. Each batch is either the paths that changed, `git: true`
 when only the index, `HEAD` or a ref moved, or `all` past a thousand paths. The page re-reads only
 what is on screen: the open directories each path sits under (a directory's row carries the
 loudest git letter beneath it), git at most once a second, and the active tab, quietly, without a

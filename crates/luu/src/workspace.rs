@@ -461,10 +461,16 @@ async fn git(base: &Path, args: &[&str]) -> Result<String, Error> {
 
 // ---- following the disk ----------------------------------------------------
 
-/// How long one batch stays open after its first event. A save is several
-/// events (a temp file, a rename, a chmod), and `cargo build` is thousands; the
-/// page wants one answer for each of those, not one per event.
-const BATCH: std::time::Duration = std::time::Duration::from_millis(150);
+/// A batch closes once the disk has been quiet this long — a debounce, not a
+/// fixed window. A save is several events (a temp file, a rename, a chmod), and
+/// `cargo build` is thousands; the page wants one answer for each of those, not
+/// one per event. A fixed 150 ms window after the first event answered a
+/// seven-second build nineteen times.
+const QUIET: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// And closes at this age whatever is still arriving, so a two-minute build
+/// moves the tree every couple of seconds rather than only once it ends.
+const MAX_BATCH: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// More paths than this in one batch and the page is told to re-read what it
 /// has open rather than handed the list: past it, naming each one costs more
@@ -538,22 +544,24 @@ impl Watch {
         })
     }
 
-    /// The next batch: waits for an event, then gathers for [`BATCH`].
-    /// `None` once the watcher has stopped. A batch whose every path was left
-    /// out is not answered — it waits for the next one instead.
+    /// The next batch: waits for an event, then gathers until [`QUIET`] passes
+    /// with none, or the batch is [`MAX_BATCH`] old. `None` once the watcher
+    /// has stopped. A batch whose every path was left out is not answered — it
+    /// waits for the next one instead.
     pub async fn next(&mut self) -> Option<Changes> {
         loop {
             let first = self.events.recv().await?;
             let mut raw = vec![first];
-            let deadline = tokio::time::sleep(BATCH);
-            tokio::pin!(deadline);
+            let cap = tokio::time::sleep(MAX_BATCH);
+            tokio::pin!(cap);
             loop {
                 tokio::select! {
                     more = self.events.recv() => match more {
                         Some(path) => raw.push(path),
                         None => break,
                     },
-                    _ = &mut deadline => break,
+                    _ = tokio::time::sleep(QUIET) => break,
+                    _ = &mut cap => break,
                 }
             }
             let changes = classify(&self.sandbox, &self.canonical, raw);

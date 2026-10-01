@@ -5,6 +5,7 @@
   // See `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
   const { loadEngines, saveEngines, startEngine, stopEngine, installEngine, modelLabel } =
     await import("@web/lib/engines.js")
+  const Scrollable = await import("@web/components/scrollable.html")
   const { openStarter } = await import("@web/lib/ui.js")
   const EngineForm = await import("./engine-form.html")
 
@@ -152,7 +153,7 @@
 
       <dt :if="view.engines[name].status.log.length">Output</dt>
       <dd :if="view.engines[name].status.log.length">
-        <pre class="log">{{ view.engines[name].status.log.join("\n") }}</pre>
+        <Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ view.engines[name].status.log.join("\n") }}</pre></Scrollable>
       </dd>
     </dl>
   </section>

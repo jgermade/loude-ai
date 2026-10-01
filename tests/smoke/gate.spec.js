@@ -186,7 +186,7 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
   await expect(page.locator(".first-run")).toBeVisible()
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   // The prompt runs, in the draft it opens, and the model's answer carries a
@@ -413,7 +413,7 @@ test("a session is started on a posture, and the page says which", async ({ page
   await expect(page.locator("dt", { hasText: "Posture" }).first()).toBeVisible()
   await expect(page.locator(".settings dd").filter({ hasText: "this server's own" }))
     .toBeVisible()
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   // The "+" in the chat's head. Sessions were a tab strip over the chat
@@ -727,7 +727,7 @@ test("the files panel lists the workspace, and a file opens in the viewer", asyn
   await expect(page.locator(".inspector .tree .node.ignored").first()).toBeVisible()
 
   await page.click('.inspector .tree .row:has-text("luu.toml")')
-  await expect(page.locator(".content .col-foot .path")).toHaveText("luu.toml")
+  await expect(page.locator(".content .tabs.files .tab.on .label")).toHaveText("luu.toml")
   // The real file's first line, so this fails if the viewer renders someone
   // else's bytes under that name.
   await expect(page.locator(".content .code-rows li").first())
@@ -763,7 +763,7 @@ test("the git panel lists changes, and one opens as a diff of hunks", async ({ p
     // and trimming it made every unstaged file look staged.
     await expect(page.locator(".inspector .changes .code").first()).toHaveText(/^[ MADRCU?!]{2}$/)
     await changes.first().click()
-    await expect(page.locator(".content .col-foot .path")).not.toBeEmpty()
+    await expect(page.locator(".content .tabs.files .tab.on .label")).not.toBeEmpty()
     // Either hunks, or the note that says why there are none (an untracked
     // file has no diff). An empty panel with neither is the failure.
     const hunks = page.locator(".content .hunk").first()
@@ -815,7 +815,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
   const icons = page.locator(".settings dt", { hasText: "Icons" }).locator("xpath=..")
   await expect(icons).toContainText("the tree's own two shapes")
   await expect(icons).toContainText("[ui] icon-theme")
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   // A Rust file, opened through the store the way a click does, because this
@@ -824,11 +824,11 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
     const { showFile } = await import("./lib/workspace.js")
     await showFile("crates/luu/src/highlight.rs")
   })
-  // The language is the foot's title now, under the file's icon rather than
-  // beside it as a word — and the icon is the tree's: the page's own shape,
-  // with no theme. See `RECORD/2026-10-01.the-foot-names-its-file.completed.md`.
-  await expect(page.locator(".content .col-foot .path")).toHaveAttribute("title", "rust")
-  await expect(page.locator('.content .col-foot svg.kind use[href="#i-file"]')).toHaveCount(1)
+  // The language is the title of the tab's icon — and the icon is the tree's:
+  // the page's own shape, with no theme. The foot named the file until the tab
+  // took the icon; see `RECORD/2026-10-01.the-foot-names-its-file.completed.md`.
+  await expect(page.locator(".content .tabs.files .tab.on .kind")).toHaveAttribute("title", "rust")
+  await expect(page.locator('.content .tabs.files .tab.on svg.kind use[href="#i-file"]')).toHaveCount(1)
   // Longer than the viewer's first block, which is what makes this worth
   // asserting: the page renders a screenful and fills in the rest one frame
   // later, so a tail that never arrives leaves a file that looks whole and is
@@ -849,7 +849,7 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
     const { showFile } = await import("./lib/workspace.js")
     await showFile("Makefile")
   })
-  await expect(page.locator(".content .col-foot .path")).toHaveAttribute("title", "make")
+  await expect(page.locator(".content .tabs.files .tab.on .kind")).toHaveAttribute("title", "make")
   await expect(page.locator(".content code.hl-function").first()).toBeVisible()
 
   // A file with no grammar takes the same path out: lines, no language.
@@ -857,8 +857,8 @@ test("a source file arrives highlighted, and an unthemed tree still has glyphs",
     const { showFile } = await import("./lib/workspace.js")
     await showFile(".gitignore")
   })
-  await expect(page.locator(".content .col-foot .path")).toHaveText(".gitignore")
-  await expect(page.locator(".content .col-foot .path")).toHaveAttribute("title", "")
+  await expect(page.locator(".content .tabs.files .tab.on .label")).toHaveText(".gitignore")
+  await expect(page.locator(".content .tabs.files .tab.on .kind")).toHaveAttribute("title", "")
   await expect(page.locator(".content .code-rows li").first()).toBeVisible()
 
   expect(errors, "the page logged errors").toEqual([])
@@ -908,13 +908,13 @@ test("the content column keeps one tab per open thing", async ({ page }) => {
   await expect(page.locator(".content .tabs.files .tab.preview")).toHaveCount(0)
   await page.click('.content .tabs.files .tab:has-text("Makefile") .pick')
 
-  // The one clicked is what the column is showing, and the foot says which.
+  // The one clicked is what the column is showing, and its tab says so.
   await expect(page.locator(".content .tabs.files .tab.on .label")).toHaveText("Makefile")
-  await expect(page.locator(".content .col-foot .path")).toHaveText("Makefile")
+  await expect(page.locator(".content .tabs.files .tab.on .label")).toHaveText("Makefile")
 
   // And the first is still there to go back to, which is the whole point.
   await page.click('.content .tabs.files .tab:has-text("luu.toml") .pick')
-  await expect(page.locator(".content .col-foot .path")).toHaveText("luu.toml")
+  await expect(page.locator(".content .tabs.files .tab.on .label")).toHaveText("luu.toml")
   await expect(page.locator(".content .code-rows li").first()).toContainText("luu's own sandbox")
 
   // Opening the same file again focuses the tab rather than adding a second.
@@ -925,7 +925,7 @@ test("the content column keeps one tab per open thing", async ({ page }) => {
   await page.hover(".content .tabs.files .tab.on")
   await page.click(".content .tabs.files .tab.on .close")
   await expect(page.locator(".content .tabs.files .tab")).toHaveCount(1)
-  await expect(page.locator(".content .col-foot .path")).toHaveText("Makefile")
+  await expect(page.locator(".content .tabs.files .tab.on .label")).toHaveText("Makefile")
 
   expect(errors, "the page logged errors").toEqual([])
 })
@@ -1021,7 +1021,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
   }
 
   await monaco.click()
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   await page.click('.inspector .tabs button:has-text("Files")')
@@ -1036,7 +1036,7 @@ test("the editor setting offers Monaco where it is installed and says so where i
   // element is a leak that only shows up after twenty tab switches.
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .seg button:has-text("This page")')
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("#monaco-host")).toHaveCount(0)
   await expect(page.locator(".content .code-rows li").first()).toBeVisible()
 

@@ -137,6 +137,10 @@ pub struct TurnView {
     /// The exact string handed to the model — the trace channel's, not a
     /// reconstruction. `None` when the turn was recorded without `--trace`.
     pub prompt_sent: Option<String>,
+    /// The tool specs sent beside it under the native transport — see
+    /// [`TraceMessage::Prompt`].
+    #[serde(default)]
+    pub tool_specs_sent: Option<String>,
     pub budget: Option<Budget>,
     /// What the prompt cache could reuse of the previous turn's prompt.
     pub prefix: Option<PrefixReuse>,
@@ -232,6 +236,7 @@ impl TurnView {
             usage: None,
             error: None,
             prompt_sent: None,
+            tool_specs_sent: None,
             budget: None,
             prefix: None,
             extra_calls: Vec::new(),
@@ -1198,9 +1203,14 @@ impl SessionView {
 
     pub fn apply_trace(&mut self, _at_ms: u64, message: &TraceMessage) {
         match message {
-            TraceMessage::Prompt { turn, text } => {
+            TraceMessage::Prompt {
+                turn,
+                text,
+                tool_specs,
+            } => {
                 if let Some(view) = self.turn_mut(*turn) {
                     view.prompt_sent = Some(text.clone());
+                    view.tool_specs_sent = tool_specs.clone();
                 }
             }
             TraceMessage::Budget {
@@ -1422,6 +1432,7 @@ mod tests {
                 message: TraceMessage::Prompt {
                     turn: 1,
                     text: "<|System|>\nx".into(),
+                    tool_specs: None,
                 },
             },
             RecordLine::Protocol {
@@ -1469,6 +1480,7 @@ mod tests {
                 message: TraceMessage::Prompt {
                     turn: 2,
                     text: "<|System|>\nx2".into(),
+                    tool_specs: None,
                 },
             },
             RecordLine::Trace {

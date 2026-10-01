@@ -6,6 +6,7 @@
   // the last three. See `RECORD/2026-10-01.runtimes-in-settings.completed.md`.
   const { loadRuntimes, loadTasks, buildImage, installRuntime, startRuntime, savePostures, saveHostShell } =
     await import("@web/lib/runtimes.js")
+  const Scrollable = await import("@web/components/scrollable.html")
 
   let view = null
   let error = ""
@@ -152,8 +153,8 @@
       <button :if="r.startable && taskOf('start', r.runtime)?.state !== 'running'" type="button" class="link"
               :disabled="!view.editable || !!busy" @click="start(r.runtime)">start it</button>
     </p>
-    <pre :if="showing(taskOf('install', r.runtime))" class="log">{{ taskOf("install", r.runtime).tail.join("\n") }}</pre>
-    <pre :if="showing(taskOf('start', r.runtime))" class="log">{{ taskOf("start", r.runtime).tail.join("\n") }}</pre>
+    <div :if="showing(taskOf('install', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("install", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
+    <div :if="showing(taskOf('start', r.runtime))" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ taskOf("start", r.runtime).tail.join("\n") }}</pre></Scrollable></div>
     <p :if="r.path && r.gap" class="dim small">{{ r.gap }}</p>
     <ul :if="r.answers" class="images">
       <li :each="i in r.images" :key="i.image">
@@ -164,8 +165,7 @@
                 :disabled="!view.editable || !!busy" @click="build(r.runtime, i.image)">build</button>
         <span :if="buildOf(r.runtime, i.image)?.state === 'running'" class="state">building…</span>
         <span :if="buildOf(r.runtime, i.image)?.state === 'failed'" class="state down">the last build failed</span>
-        <pre :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'"
-             class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre>
+        <div :if="buildOf(r.runtime, i.image) && buildOf(r.runtime, i.image).state !== 'done'" class="log-well"><Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ buildOf(r.runtime, i.image).tail.join("\n") }}</pre></Scrollable></div>
       </li>
       <li :if="!r.images.length" class="dim small">No policy file here names an image.</li>
     </ul>
@@ -244,9 +244,10 @@
   .state.down { color: var(--warn); }
   .images { list-style: none; margin: .4rem 0 0; padding: 0; }
   .images li { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: 12px; }
+  /* The well holds the place in the row; the `pre` in it scrolls. */
+  .log-well { flex-basis: 100%; margin: .3rem 0 0; }
   .log {
-    flex-basis: 100%;
-    margin: .3rem 0 0;
+    margin: 0;
     font-size: 11px;
     max-height: 10rem;
     overflow: auto;

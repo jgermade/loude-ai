@@ -49,12 +49,10 @@
     requestAnimationFrame(async () => {
       const host = document.getElementById("monaco-host")
       if (!host) return
-      const dark = document.documentElement.getAttribute("data-theme") !== "light"
       const ok = await paint(host, {
         text: textOf(content.lines),
         language: content.language,
-        dark,
-        code: prefs.code,
+        tone: prefs.editorTone,
         path: content.path,
       })
       if (!ok) monacoBroken = true
@@ -69,7 +67,7 @@
     prefs.editor === "monaco" && monacoHere && !monacoBroken && shown?.kind === "file"
   // Disposed the moment the column stops using it: an editor left attached to a
   // detached element is a leak that only shows up after twenty tab switches.
-  $: attached = monacoing ? draw((prefs.theme, prefs.code, shown)) : (dispose(), "")
+  $: attached = monacoing ? draw((prefs.editorTone, shown)) : (dispose(), "")
 
   // ---- the own viewer ---------------------------------------------------
   //

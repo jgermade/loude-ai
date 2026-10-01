@@ -81,16 +81,20 @@
   <header class="modal-head">
     <strong>{{ title }}</strong>
     <slot.head />
-    <button :if="!locked" type="button" class="link" @click="close()">close</button>
+    <!-- An icon, and the word kept for whoever cannot see it. -->
+    <button :if="!locked" type="button" class="close" title="Close" @click="close()">
+      <svg class="ic"><use href="#i-close"/></svg><span class="unseen">close</span>
+    </button>
   </header>
   <slot />
 </dialog>
 
 <style scoped>
   dialog {
-    background: var(--panel, #fff);
+    background: var(--tree-bg, #ededed);
     color: var(--fg, #1a1d23);
-    border: 1px solid var(--line, #d7dbe2);
+    /* Where the modal ends, like where a column does. */
+    border: 1px solid var(--divider, #3a3a3a);
     border-radius: 6px;
     /* No padding, deliberately: padding would be a ring of "outside" inside
        the border for `@click.self` to read as the backdrop. */
@@ -123,7 +127,32 @@
     align-items: center;
     gap: .5rem;
     padding: .6rem 1rem;
-    border-bottom: 1px solid var(--line, #d7dbe2);
+    border-bottom: 1px solid var(--line, #c8c8c8);
+    /* Dark, like the columns' heads: under light it takes the dark palette
+       (`app.css`), so this is its own ground and ink. Rounded with the box,
+       which does not clip. */
+    background: var(--panel);
+    color: var(--fg);
+    border-radius: 5px 5px 0 0;
   }
-  .link { margin-left: auto; }
+  .close {
+    display: flex;
+    margin-left: auto;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    padding: .25rem;
+    cursor: pointer;
+  }
+  .close:hover { color: var(--fg); background: var(--bg); }
+  .close .ic { width: 16px; height: 16px; }
+  .unseen {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 </style>

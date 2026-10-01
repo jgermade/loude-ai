@@ -102,11 +102,13 @@ test("a terminal opens in the session's container, survives being hidden, and en
   await expect(button).toHaveAttribute("title", "Open a terminal in the session's container")
   await button.click()
   const panel = page.locator(".content .terminal")
+  // The terminal's controls are in the column's foot, under the panel.
+  const foot = page.locator(".content .col-foot")
   const rows = panel.locator(".xterm-rows")
-  await expect(panel.locator('.state.open[data-place="container"]')).toHaveCount(1, { timeout: 15_000 })
+  await expect(foot.locator('.state.open[data-place="container"]')).toHaveCount(1, { timeout: 15_000 })
   // Named by where it runs, the posture under it, and the one posture that
   // runs elsewhere offered beside it.
-  await expect(panel.locator(".dropup .face")).toHaveText("docker · luu-worker:dev")
+  await expect(foot.locator(".dropup .face")).toHaveText("docker · luu-worker:dev")
 
   // The worker's uid, the base at its own path, and the colours the page draws.
   const uid = execSync("id -u").toString().trim()
@@ -127,35 +129,38 @@ test("a terminal opens in the session's container, survives being hidden, and en
   // and the shell opens again on this machine. `/.dockerenv` is the one fact
   // that tells the two apart on any host, Linux included.
   const where = "test -f /.dockerenv && echo IN=con''tainer || echo IN=ho''st\n"
-  await panel.locator(".dropup .face").click()
-  await expect(panel.locator(".dropup .opt .hint", { hasText: "host · luu.toml" })).toHaveCount(1)
-  await panel.locator(".dropup .opt", { has: page.locator(".label", { hasText: /^host$/ }) }).click()
-  await expect(panel.locator('.state.open[data-place="host"]')).toHaveCount(1, { timeout: 15_000 })
-  await expect(panel.locator(".dropup .face")).toHaveText("host")
+  await foot.locator(".dropup .face").click()
+  await expect(foot.locator(".dropup .opt .hint", { hasText: "host · luu.toml" })).toHaveCount(1)
+  await foot.locator(".dropup .opt", { has: page.locator(".label", { hasText: /^host$/ }) }).click()
+  await expect(foot.locator('.state.open[data-place="host"]')).toHaveCount(1, { timeout: 15_000 })
+  await expect(foot.locator(".dropup .face")).toHaveText("host")
   await panel.locator(".host").click()
   await page.keyboard.type(where)
   await expect(rows).toContainText("IN=host")
   // And back, into a container of its own — the first one went with the move.
-  await panel.locator(".dropup .face").click()
+  await foot.locator(".dropup .face").click()
   // Every container runtime is offered for the container posture, and the
   // ones this machine lacks are there, off, saying so.
   for (const runtime of ["podman", "nerdctl", "colima", "container"]) {
-    const option = panel.locator(".dropup .opt", { has: page.locator(".label", { hasText: `${runtime} · luu-worker:dev` }) })
+    const option = foot.locator(".dropup .opt", { has: page.locator(".label", { hasText: `${runtime} · luu-worker:dev` }) })
     if (!execSync(`command -v ${runtime} || true`, { shell: "/bin/sh" }).toString().trim()) {
       await expect(option).toBeDisabled()
       await expect(option.locator(".hint")).toContainText("not installed")
     }
   }
-  await panel.locator(".dropup .opt", { has: page.locator(".label", { hasText: "docker · luu-worker:dev" }) }).click()
-  await expect(panel.locator('.state.open[data-place="container"]')).toHaveCount(1, { timeout: 30_000 })
+  await foot.locator(".dropup .opt", { has: page.locator(".label", { hasText: "docker · luu-worker:dev" }) }).click()
+  await expect(foot.locator('.state.open[data-place="container"]')).toHaveCount(1, { timeout: 30_000 })
   await panel.locator(".host").click()
   await page.keyboard.type(where)
   await expect(rows).toContainText("IN=container")
   await page.keyboard.type("sleep 900 &\n")
   await expect.poll(() => inside()).toContain("sleep")
 
-  // Ended: nothing it started is left in a container that outlives it.
-  await panel.locator('button[title="End the shell"]').click()
+  // Ended from inside — there is no button for it — and nothing it started is
+  // left in a container that outlives it.
+  await page.keyboard.type("exit\n")
+  await expect(foot.locator(".state.ended")).toHaveCount(1, { timeout: 15_000 })
+  await button.click()
   await expect(panel).toHaveCount(0)
   await expect.poll(() => inside().filter(name => name === "bash" || name === "sleep"), { timeout: 10_000 })
     .toEqual([])

@@ -2987,11 +2987,16 @@ pub async fn run() -> Result<()> {
                 }));
             }
             let text = rendered(&selection.messages);
+            let tool_specs = context.native_tools().map(str::to_string);
             let reuse = prefix
                 .lock()
                 .expect("the prefix tracker is never held across an await")
                 .measure(turn, &text, counter.as_ref());
-            recorder.write(&Event::Trace(TraceMessage::Prompt { turn, text }));
+            recorder.write(&Event::Trace(TraceMessage::Prompt {
+                turn,
+                text,
+                tool_specs,
+            }));
             if let Some(reuse) = reuse {
                 recorder.write(&Event::Trace(reuse));
             }

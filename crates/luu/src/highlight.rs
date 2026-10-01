@@ -334,18 +334,29 @@ fn language_for(path: &str) -> Option<(&'static str, &'static HighlightConfigura
 /// can say `rust` or `rs` and mean the same thing. An unknown one is left as
 /// text, which is what a fence in a language nobody installed should be.
 fn injected(name: &str) -> Option<&'static HighlightConfiguration> {
+    // Asked for by the block grammar and run by `markdown` instead: as an
+    // injection it parses and then highlights nothing, so running it here
+    // would only be a second parse of every paragraph.
+    if name.trim().eq_ignore_ascii_case("markdown_inline") {
+        return None;
+    }
+    fence_language(name).map(|(_, config)| config)
+}
+
+/// A fence's info string, read the way [`injected`] reads it: the grammar's own
+/// name, then the name as an extension, with the shell's other names. Named as
+/// well as found, because a reply's snippet says which language it was taken
+/// for.
+fn fence_language(name: &str) -> Option<(&'static str, &'static HighlightConfiguration)> {
     let name = name.trim().to_ascii_lowercase();
     let name = match name.as_str() {
         "shell" | "console" => "bash",
-        // Asked for by the block grammar and run by `markdown` instead: as an
-        // injection it parses and then highlights nothing, so running it here
-        // would only be a second parse of every paragraph.
-        "markdown_inline" => return None,
         other => other,
     };
     GRAMMARS
-        .get(name)
-        .or_else(|| GRAMMARS.get(language_of(&format!("x.{name}"))?))
+        .get_key_value(name)
+        .map(|(name, config)| (*name, config))
+        .or_else(|| language_for(&format!("x.{name}")))
 }
 
 /// The cap above which a file is served unhighlighted.
@@ -362,10 +373,24 @@ pub const MAX_HIGHLIGHT_BYTES: usize = 256 * 1024;
 /// chunk per line with no kind, so the viewer has one code path instead of
 /// three.
 pub fn lines(path: &str, text: &str) -> (Option<&'static str>, Vec<Vec<Chunk>>) {
+    run(language_for(path), text)
+}
+
+/// The same lines for a fenced block in a reply, whose language is the fence's
+/// info string rather than a path: `rust`, `rs`, `sh`. An unknown or empty one
+/// is plain text, as it is in a Markdown file.
+pub fn fenced(language: &str, text: &str) -> (Option<&'static str>, Vec<Vec<Chunk>>) {
+    run(fence_language(language), text)
+}
+
+fn run(
+    language: Option<(&'static str, &'static HighlightConfiguration)>,
+    text: &str,
+) -> (Option<&'static str>, Vec<Vec<Chunk>>) {
     if text.len() > MAX_HIGHLIGHT_BYTES {
         return (None, plain(text));
     }
-    let Some((name, config)) = language_for(path) else {
+    let Some((name, config)) = language else {
         return (None, plain(text));
     };
     let highlighted = match name {
@@ -639,6 +664,23 @@ mod tests {
                 "fence `{fence}`: {lines:?}"
             );
         }
+    }
+
+    /// A reply's snippet is found by the same names a Markdown fence is, and
+    /// says which language it was taken for; an unknown one is plain text.
+    #[test]
+    fn a_reply_snippet_is_highlighted_by_its_fence() {
+        for fence in ["rust", "rs", " Rust "] {
+            let (language, lines) = fenced(fence, "fn main() {}");
+            assert_eq!(language, Some("rust"), "fence `{fence}`");
+            assert_eq!(kind_of(&lines, "fn"), Some("keyword"), "fence `{fence}`");
+        }
+        let (language, _) = fenced("shell", "echo hi");
+        assert_eq!(language, Some("bash"));
+        let (language, lines) = fenced("nonesuch", "fn main() {}");
+        assert_eq!(language, None);
+        assert_eq!(kind_of(&lines, "fn"), None);
+        assert_eq!(fenced("", "x").0, None);
     }
 
     /// TypeScript's query inherits JavaScript's; alone it found two keywords

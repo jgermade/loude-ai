@@ -1,75 +1,13 @@
 <script :setup>
   // The terminal panel under the editor: a shell where the live session's
-  // commands run, opened from the content column's foot, and the place to
-  // move the session somewhere else. What lives here is the box; the shell
-  // itself lives in `lib/terminal.js`, so hiding the panel does not end it.
-  // See `RECORD/2026-10-01.a-terminal-in-the-container.completed.md` and
+  // commands run, opened from the content column's foot. What lives here is
+  // the box; the shell itself lives in `lib/terminal.js`, so hiding the panel
+  // does not end it, and its controls are in the column's foot
+  // (`terminal-foot.html`), under it. Dark whatever the page is: a shell's
+  // colours are written for a dark ground. See
+  // `RECORD/2026-10-01.a-terminal-in-the-container.completed.md` and
   // `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
-  const { terminal, attach, restartTerminal, endTerminal, moveSession } =
-    await import("@web/lib/terminal.js")
-  const { toggleTerminal } = await import("@web/lib/ui.js")
-  const { state, loadPostures } = await import("@web/lib/store.js")
-  const Dropup = await import("@web/components/dropup.html")
-
-  if (!state.postures) loadPostures()
-
-  // The server's own policy file, and every `[posture.<name>]` in
-  // `config.toml` — what a page may choose is bounded by what somebody typed
-  // on this machine. **Named by where it runs**, because that is the question
-  // a terminal answers; which posture and which file are the line under it.
-  // A runtime this machine does not have is offered, off, saying so. See
-  // `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
-  const runs = place => !place ? "?"
-    : place.runtime === "direct" ? "direct (no container)"
-    : place.image ? `${place.runtime} · ${place.image}` : place.runtime
-  //
-  // **A contained posture is offered on every container runtime**, its own
-  // first: one image and one argv but for its first word. A host posture is
-  // offered once, because its paths are on this machine. The value is
-  // `posture|runtime`, with the runtime empty where it is the posture's own.
-  const option = (name, label, place, declared) => ({
-    value: `${name}|${place?.runtime === declared ? "" : place?.runtime}`,
-    label: runs(place),
-    title: place?.missing
-      ? `${label} — ${place.missing}`
-      : `${label} · ${place?.policy || ""}${place?.gap ? " · the container keeps its network" : ""}`,
-    disabled: !!place?.missing,
-  })
-  const variants = (name, label, places) =>
-    (places || []).map(place => option(name, label, place, places[0]?.runtime))
-  $: environments = [
-    ...variants("", "server default", state.postures?.own),
-    ...Object.keys(state.postures?.postures || {}).flatMap(name =>
-      variants(name, name, state.postures?.places?.[name])),
-  ]
-  $: choosable = !!state.postures?.choosable
-  // Which option the live session is: its posture, and — where it runs on a
-  // runtime other than the one that posture names — that runtime. The label
-  // is `docker (luu-worker:dev)` or `host`; its first word is the runtime.
-  const declaredOf = name => (name ? state.postures?.places?.[name] : state.postures?.own)?.[0]?.runtime
-  $: liveRuntime = (terminal.info?.posture?.runtime || "").split(" ")[0]
-  $: liveName = terminal.info?.posture?.name || ""
-  $: here = `${liveName}|${liveRuntime && liveRuntime !== declaredOf(liveName) ? liveRuntime : ""}`
-  // Only what the picker does not already say: an open shell needs no word.
-  $: said = terminal.moving
-    ? "moving the session…"
-    : (terminal.status === "open" ? "" : terminal.status)
-
-  const end = () => {
-    endTerminal()
-    toggleTerminal()
-  }
-  // Against what the server last said and not against `here`: the dropup
-  // writes its model back before it emits, so `here` is already the new name.
-  const move = value => {
-    const [name, runtime] = value.split("|")
-    const live = terminal.info?.posture
-    const liveWord = (live?.runtime || "").split(" ")[0]
-    const same = name === (live?.name || "")
-      && (runtime || declaredOf(name)) === liveWord
-    if (same) return
-    moveSession(name, runtime || null, $self(".host"))
-  }
+  const { terminal, attach } = await import("@web/lib/terminal.js")
 
   await $mounted()
   // The host is a plain element xterm draws into, attached by hand for the
@@ -95,30 +33,6 @@
     <code>npm install</code> in <code>web/</code>) and reload.
   </p>
   <div class="host"></div>
-  <!-- The terminal's own foot, under it, the height of every other foot on
-       the page. Where the session's commands run, and the way to move them:
-       moving is the session's, not only the terminal's, so the model's next
-       command runs there too. The picker opens upward, which a foot wants. -->
-  <footer class="foot">
-    <span class="title">Terminal</span>
-    <Dropup :if="choosable" class="env" :options="environments" :model="here"
-            :disabled="terminal.moving" title="Where this session's commands run"
-            @change="move($event.detail)" />
-    <span class="dim state" :class="terminal.status" :data-place="terminal.info?.place || ''">{{ said }}</span>
-    <!-- Icons, with what each one does on its title: open again, end for
-         good, and put away without ending. -->
-    <button :if="terminal.status === 'ended'" type="button" class="icon"
-            title="Open a new shell" aria-label="Open a new shell" @click="restartTerminal()">
-      <svg class="ic"><use href="#i-refresh"/></svg>
-    </button>
-    <button type="button" class="icon" title="End the shell" aria-label="End the shell" @click="end()">
-      <svg class="ic"><use href="#i-trash"/></svg>
-    </button>
-    <button type="button" class="icon" title="Hide the panel; the shell keeps running"
-            aria-label="Hide the panel" @click="toggleTerminal()">
-      <svg class="ic"><use href="#i-chevron-down"/></svg>
-    </button>
-  </footer>
 </section>
 
 <style scoped>
@@ -130,36 +44,8 @@
     min-height: 6rem;
     border-top: 1px solid var(--line);
     background: var(--bg);
+    color: var(--fg);
   }
-  .foot {
-    display: flex;
-    align-items: center;
-    gap: .6rem;
-    flex: none;
-    height: var(--chrome-h);
-    padding: 0 .6rem;
-    font-size: 12px;
-    border-top: 1px solid var(--line);
-    background: var(--panel);
-    overflow: hidden;
-  }
-  .title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
-  .state { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .state.ended { color: var(--warn); }
-  /* The content column's `.foot-btn`, for the reason the two feet are the
-     same height: one bar's controls should not look like another's. */
-  .icon {
-    display: flex;
-    flex: none;
-    background: none;
-    border: 0;
-    border-radius: 6px;
-    color: var(--dim);
-    padding: .2rem;
-    cursor: pointer;
-  }
-  .icon:hover { color: var(--fg); background: var(--bg); }
-  .icon .ic { width: 14px; height: 14px; }
   .note { margin: 0; padding: .6rem .8rem; font-size: 12px; line-height: 1.5; }
   .warn { color: var(--warn); }
   .host { flex: 1; min-height: 0; padding: .2rem 0 0 .4rem; overflow: hidden; }

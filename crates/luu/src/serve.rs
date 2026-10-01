@@ -1315,6 +1315,9 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/workspace/git-status", get(get_workspace_git_status))
         .route("/api/workspace/git-diff", get(get_workspace_git_diff))
         .route("/api/workspace/events", get(get_workspace_events))
+        // A fenced block out of a reply, coloured by the same highlighter as a
+        // file: the reply is already the page's, so this reads nothing on disk.
+        .route("/api/highlight", post(post_highlight))
         // The icon theme this machine named, if it named one. `{id}` is an id
         // out of the manifest and never a path — see `crate::icons`.
         .route("/api/icons/manifest", get(get_icons_manifest))
@@ -3000,7 +3003,7 @@ async fn begin_turn(
     // turn may read is decided by the plan when there is one and by this when
     // there is not.
     let agency = app.agency().await;
-    let (turn, job, cancel_rx, selection, prompt_sent, reuse, code) = {
+    let (turn, job, cancel_rx, selection, prompt_sent, tool_specs, reuse, code) = {
         let mut session = app.session.lock().await;
         if let Some(running) = session.current {
             drop(session);
@@ -3127,11 +3130,21 @@ async fn begin_turn(
         // Measured under the same lock, so two turns cannot interleave and
         // measure themselves against each other's prompt.
         let prompt_sent = rendered(&selection.messages);
+        let tool_specs = session.context.native_tools().map(str::to_string);
         let reuse = session
             .prefix
             .measure(turn, &prompt_sent, sending.counter.as_ref());
         let job = session.context.live_job();
-        (turn, job, rx, selection, prompt_sent, reuse, code)
+        (
+            turn,
+            job,
+            rx,
+            selection,
+            prompt_sent,
+            tool_specs,
+            reuse,
+            code,
+        )
     };
 
     // The user's ask, not the instruction fused in front of it: `prompt` is
@@ -3177,6 +3190,7 @@ async fn begin_turn(
     app.publish(Event::Trace(TraceMessage::Prompt {
         turn,
         text: prompt_sent,
+        tool_specs,
     }))
     .await;
     if let Some(reuse) = reuse {
@@ -3612,6 +3626,21 @@ async fn get_workspace_file(
         Ok(file) => Json(file).into_response(),
         Err(error) => workspace_error(error),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct HighlightRequest {
+    /// The fence's info string: `rust`, `rs`, `sh`, or empty.
+    #[serde(default)]
+    language: String,
+    text: String,
+}
+
+/// `{ language, lines }`, the shape `/api/workspace/file` gives its lines in,
+/// so a snippet in the chat is drawn by the viewer's own classes.
+async fn post_highlight(Json(request): Json<HighlightRequest>) -> Response {
+    let (language, lines) = crate::highlight::fenced(&request.language, &request.text);
+    Json(serde_json::json!({ "language": language, "lines": lines })).into_response()
 }
 
 async fn get_workspace_git_status(State(state): State<AppRouterState>) -> Response {

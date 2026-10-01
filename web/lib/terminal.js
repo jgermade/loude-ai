@@ -69,9 +69,10 @@ function xterm() {
   return loaded
 }
 
-/// The page's own colours, so the terminal follows the light/dark toggle.
-function theme() {
-  const css = getComputedStyle(document.documentElement)
+/// The panel's own colours, read where xterm draws: the panel is dark whatever
+/// the page is (`app.css`), so the page's root is not where to ask.
+function theme(host) {
+  const css = getComputedStyle(host)
   const token = name => css.getPropertyValue(name).trim()
   return {
     background: token("--bg"),
@@ -120,7 +121,7 @@ export async function attach(host) {
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: 12,
       cursorBlink: true,
-      theme: theme(),
+      theme: theme(host),
     })
     fit = new FitAddon()
     term.loadAddon(fit)
@@ -129,7 +130,7 @@ export async function attach(host) {
     term.open(host)
     connect()
   } else {
-    term.options.theme = theme()
+    term.options.theme = theme(host)
     if (term.element && term.element.parentElement !== host) host.appendChild(term.element)
   }
   observer?.disconnect()
