@@ -74,8 +74,12 @@ pub struct Ask<'a> {
 
 /// What the model is told when a person was asked and said no. Not the floor's
 /// text: a small model that reads *the floor grants no writes* tries another
-/// door, and one that reads that a person refused has been answered.
-pub const PERSON_REFUSED: &str = "a person was asked and refused this call";
+/// door. And not only *a person refused* either, which is what this said first:
+/// `qwen2.5-coder:7b` read it and called `run_command echo "Permission denied"`
+/// seven times, to the step limit. Told to answer in plain text, it does, in one
+/// line. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`, *the run,
+/// and the no that was not heard*.
+pub const PERSON_REFUSED: &str = "a person was asked and refused this call. Do not retry it or call another tool about it: answer them in plain text.";
 
 /// How many tool calls one turn may make before it has to answer.
 ///
