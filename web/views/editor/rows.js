@@ -96,6 +96,9 @@ function spaceFor(spacer, rows) {
 /// and never to the one that was.
 export function paintFile(ol, spacer, lines, alive) {
   ol.replaceChildren()
+  // The gutter as wide as the last line's number and no wider: known before a
+  // row is built, so the first block is already laid out at its final width.
+  ol.style.setProperty("--digits", String(String(Math.max(lines.length, 1)).length))
   const head = Math.min(FIRST_ROWS, lines.length)
   appendRows(ol, lines, 0, head)
   if (head === lines.length) return spaceFor(spacer, 0)

@@ -57,8 +57,15 @@
   const TurnInspect = await import("@web/views/chat/turn-inspect.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
   const DiffModal = await import("@web/views/editor/diff-modal.html")
+  const DiffStrip = await import("@web/views/editor/diff-strip.html")
+  const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
   const TerminalPanel = await import("@web/views/editor/terminal.html")
+  const TerminalFoot = await import("@web/views/editor/terminal-foot.html")
   const { segments } = await import("@web/helpers/segments.js")
+  const { keeper } = await import("@web/helpers/rows.js")
+  const { snippets } = await import("@web/helpers/snippets.js")
+  const Scrollable = await import("@web/components/scrollable.html")
+  const { snippet, snippetHtml, copySnippet, previewable, previewSnippet } = await import("@web/lib/snippet.js")
 
   connect()
 
@@ -72,19 +79,70 @@
   // width, because a wide screen with a wide chat on it is a legitimate case
   // the breakpoint cannot know about.
   const WIDE = 1260
+  // A phone: below this, the three columns are slides — the chat, the
+  // inspector, the content, left to right, a screen wide each, swiped between
+  // and snapping to one. The chat is first because it is what a phone is for.
+  const NARROW = 760
   let wide = window.innerWidth >= WIDE
-  window.addEventListener("resize", () => { wide = window.innerWidth >= WIDE })
+  let mobile = window.innerWidth < NARROW
+  window.addEventListener("resize", () => {
+    wide = window.innerWidth >= WIDE
+    mobile = window.innerWidth < NARROW
+  })
 
-  $: columns = prefs.layout === "two" || !wide ? 2 : 3
-  $: showContent = columns === 3 || prefs.pane === "content"
-  $: showChat = columns === 3 || prefs.pane === "chat"
+  // On a phone every column is drawn, and `columns` says three, so nothing
+  // offers a switch between two: the swipe is the switch.
+  $: columns = mobile ? 3 : prefs.layout === "two" || !wide || ui.twoColumns ? 2 : 3
+  $: layout = mobile ? "slides" : String(columns)
+  // Moving to a column, on a phone, when the page asks for one: a file opened
+  // goes to the content, the logo and every other way to the chat to the chat.
+  const slideTo = which => {
+    const column = document.querySelector(`.app .col.${which}`)
+    column?.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" })
+  }
+  window.addEventListener("luu:pane", event => { if (mobile) slideTo(event.detail) })
+  // The chat head's switch between three columns and two, where the width
+  // allows three and the setting asks for them. It does not touch the
+  // setting: it is for now, and the setting is for always.
+  $: canNarrow = prefs.layout === "responsive" && wide
+  const toggleColumns = () => {
+    ui.twoColumns = !ui.twoColumns
+    // The switch is in the chat's head, so the chat is what stays.
+    if (ui.twoColumns) setPane("chat")
+  }
+
+  // The conversation as text: the prompts quoted, the answers as written.
+  let copiedChat = false
+  const copyChat = async () => {
+    const text = state.messages
+      .filter(m => m.text)
+      .map(m => m.role === "user" ? m.text.split("\n").map(line => `> ${line}`).join("\n") : m.text)
+      .join("\n\n")
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      return
+    }
+    copiedChat = true
+    setTimeout(() => { copiedChat = false }, 1500)
+  }
+  $: showContent = mobile || columns === 3 || prefs.pane === "content"
+  $: showChat = mobile || columns === 3 || prefs.pane === "chat"
+
+  // The chat, shown and typed into: every way to it — the logo, the column's
+  // switch, ESC — ends in the composer, because a person who brings the chat
+  // back has come to write in it. A frame later, because a chat that was
+  // hidden has no composer until it is drawn.
+  const focusChat = () =>
+    requestAnimationFrame(() => document.querySelector(".composer input")?.focus())
+  const showChatPane = () => {
+    setPane("chat")
+    focusChat()
+  }
 
   // The logo means *take me back to the conversation* — a switch where there
   // are two columns, a focus where there are three.
-  const toChat = () => {
-    setPane("chat")
-    document.querySelector(".composer input")?.focus()
-  }
+  const toChat = () => showChatPane()
 
   // ---- what the columns hold ---------------------------------------------
 
@@ -200,8 +258,15 @@
   // A *running turn* is deliberately not in the list either: it is the one
   // cancellable thing on this page whose undo costs work, and ESC is too easy
   // to hit for that. The composer's own button stays the way to stop one.
+  //
+  // With nothing left to cancel, ESC goes **to the composer** first: a chat
+  // on screen takes the focus, and only from the composer does ESC swap the
+  // columns. A terminal and the editor keep their ESC — it is a key a shell
+  // and vim are owed.
   const onKeydown = event => {
     if (event.key !== "Escape") return
+    if (event.defaultPrevented) return
+    if (event.target.closest?.(".terminal, #monaco-host")) return
     if (document.querySelector("dialog[open]")) return
     if (ui.history) return closeHistory()
     if (renaming) return cancelRename()
@@ -209,9 +274,12 @@
       armedClose = ""
       return
     }
+    const composer = document.querySelector(".composer input")
+    if (showChat && composer && document.activeElement !== composer) return focusChat()
     // Three columns are all on screen, so there is nothing to swap.
     if (columns !== 2) return
-    setPane(prefs.pane === "chat" ? "content" : "chat")
+    if (prefs.pane === "chat") setPane("content")
+    else showChatPane()
   }
   document.addEventListener("keydown", onKeydown)
 
@@ -350,16 +418,30 @@
   // where `keepTurn` and a reload both put them.
   // The three arguments after the list are unused but read on purpose: they
   // are what make `$:` run again when a call lands or a turn is kept.
-  const withParts = (list, _tools, _history, _turn) => list.map(entry =>
-    entry.kind === "message" && entry.message.role === "assistant"
-      ? { ...entry, ...partsOf(entry.message) }
-      : entry)
+  //
+  // Every row and every part goes through `transcriptRows`, so a token changes
+  // the fields it changed and leaves the rows standing — see `helpers/rows.js`.
+  const transcriptRows = keeper()
+  const withParts = (list, _tools, _history, _turn) => {
+    const rows = list.map(entry => {
+      if (entry.kind !== "message" || entry.message.role !== "assistant") return transcriptRows.keep(entry.id, entry)
+      const { parts, live, timing } = partsOf(entry.message)
+      const kept = parts.map(part => transcriptRows.keep(`${entry.id}:${part.i}`, part))
+      return transcriptRows.keep(entry.id, { ...entry, parts: kept, live, timing })
+    })
+    transcriptRows.sweep()
+    return rows
+  }
   const partsOf = message => {
     const live = message.turn != null && message.turn === state.turn && !message.reason
     const tools = live
       ? state.tools
       : state.history.find(kept => kept.turn === message.turn)?.tools || []
-    const parts = segments(message.text || "", tools, live).map((part, i) => ({ ...part, i, live }))
+    // And the prose between the calls cut at its fenced blocks, so a snippet
+    // is drawn as code — see `snippets.js`.
+    const parts = segments(message.text || "", tools, live)
+      .flatMap(part => part.kind === "text" ? snippets(part.text) : [part])
+      .map((part, i) => ({ ...part, i, live }))
     return { parts, live, timing: timing(message, tools) }
   }
 
@@ -386,19 +468,25 @@
 
   $: entries = withParts(foldTranscript(state.messages, state.jobs || state.tasks, expanded), state.tools, state.history, state.turn)
 
-  // The content column's foot: the open tab's own facts. They were a head, and
-  // the head is tabs now — `path`, `language` and `cut at 512 KB` are what a
-  // status bar is for, and moving them is what freed the head to hold more than
-  // one file at a time.
+  // The open tab and what it shows. The tab names its file now — the theme's
+  // icon and the name — so the column's foot keeps only what a status bar is
+  // for: `cut at 512 KB`, a diff's two sides, and the terminal's controls.
   $: picked = workspace.selected
   $: shown = workspace.content
-  // The tab's own file, by the tree's rules: a debug tab has a title and no
-  // file, so it gets the page's shape.
-  $: footIcon = picked && picked.kind !== "debug"
-    ? iconFor(picked.path.split("/").pop() || picked.path, false)
+  // A file tab's icon, by the tree's rules; a diff or a debug tab keeps the
+  // page's shape for what it is.
+  const tabIcon = tab => tab.kind === "file"
+    ? iconFor(tab.path.split("/").pop() || tab.path, false)
     : null
   // A file git counts as changed. Not on a diff tab, which already is one.
-  $: footChanged = picked?.kind === "file" && !!workspace.status[picked.path]
+  const tabChanged = tab => tab.kind === "file" && !!workspace.status[tab.path]
+  // The active tab, when it is a file git counts as changed: the strip under
+  // the head is drawn for it.
+  const activeChanged = (tabs, active) => {
+    const tab = tabs.find(t => t.id === active)
+    return !!tab && tabChanged(tab)
+  }
+  $: changedHere = activeChanged(workspace.tabs, workspace.active, workspace.status)
 
   // Whether the live session has a container to open a shell in. Asked again
   // when the session or its posture moves, and memoized on those, because
@@ -506,14 +594,17 @@
        a prompt in a window for the terminal. -->
   <symbol id="i-diff" viewBox="0 0 24 24"><path d="M12 4.5v7M8.5 8h7M8.5 17.5h7"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7 9.5 3 2.5-3 2.5M12.5 15H17"/></symbol>
-  <!-- The terminal foot's two: a bin for ending the shell, which is what
-       ends it for good, and a chevron down for putting the panel away, which
-       does not. Different shapes because they are different promises. -->
-  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.8 12.2A1.5 1.5 0 0 0 8.8 20.6h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7M10.2 10.5v6.5M13.8 10.5v6.5"/></symbol>
-  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6.5 9.5 5.5 5.5 5.5-5.5"/></symbol>
   <!-- Settings → Runtimes: a box, for what a container is. -->
   <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 3.5 19.5 7.5v9L12 20.5 4.5 16.5v-9z"/><path d="M4.5 7.5 12 11.5l7.5-4M12 11.5v9"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.5 12a7.5 7.5 0 0 1-7.5 7.5H4.5l2.1-2.8A7.5 7.5 0 1 1 20.5 12Z"/></symbol>
+  <!-- A snippet's head: two sheets for copying it, a tick once it is, and an
+       eye for opening an HTML block as the page it is. -->
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <!-- The chat head's column switch: Chrome's devtools "dock to right", a
+       window with a panel down its right side. -->
+  <symbol id="i-dock" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/><path d="M14.5 4.5H19a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-4.5z" style="fill: currentColor; stroke: none"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
 </svg>
 
 <!-- Three columns that each have a head, a body and a foot, and the heads and
@@ -521,7 +612,7 @@
      that used to sit above them was a strip of *other columns'* controls, and
      it cost every column 3rem of height to say so. See
      `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`. -->
-<div class="app" :data-columns="columns" :style="widthStyle()">
+<div class="app" :data-columns="layout" :style="widthStyle()">
 
   <!-- The left rail. Three things a person looks at while an agent works —
        the workspace, what changed in it, and what the context manager did —
@@ -539,7 +630,16 @@
       <!-- The corner a logo has always been in, and the column that is always
            on screen. It is a control: it means *take me back to the
            conversation*. -->
-      <button type="button" class="logo" title="Back to the chat" @click="toChat()">luu</button>
+      <button type="button" class="logo" title="Back to the chat" aria-label="luu" @click="toChat()">
+        <!-- `logo.svg` without its ground, and the letters in the page's own
+             ink, so the mark reads on the light page as on the dark one. -->
+        <svg viewBox="86 120 340 270" aria-hidden="true" fill="none" stroke-width="40"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path stroke="#f5a524" d="M116 150v210"/>
+          <path stroke="currentColor" d="M196 215v105a40 40 0 0 0 80 0V215M316 215v105a40 40 0 0 0 80 0V215"/>
+          <circle cx="356" cy="296" r="13" fill="#f5a524" stroke="none"/>
+        </svg>
+      </button>
       <nav class="tabs">
         <button type="button" :class.on="prefs.inspector === 'files'" @click="setInspector('files')">Files</button>
         <button type="button" :class.on="prefs.inspector === 'git'" @click="setInspector('git')">Git</button>
@@ -583,9 +683,15 @@
           :class.preview="tab.preview">
           <!-- A preview tab is in italics until something keeps it: a double
                click here, or on the row that opened it. See `openTab`. -->
+          <!-- The icon's title is the language, on the tab that has one on
+               screen: the word the foot used to carry beside the path. -->
           <button type="button" class="pick" :title="tab.path"
                   @click="activate(tab.id)" @dblclick="pinTab(tab.id)">
-            <svg class="ic kind"><use :href="tab.kind === 'diff' ? '#i-refresh' : (tab.kind === 'debug' ? '#i-sliders' : '#i-file')"/></svg>
+            <img :if="tabIcon(tab)" class="kind" alt=""
+                 :src="`./api/icons/${tabIcon(tab)}?r=${workspace.icons.revision || 0}`"
+                 :title="tab.id === workspace.active ? (shown?.language || '') : ''">
+            <svg :if="!tabIcon(tab)" class="ic kind"
+                 :title="tab.id === workspace.active ? (shown?.language || '') : ''"><use :href="tab.kind === 'diff' ? '#i-refresh' : (tab.kind === 'debug' ? '#i-sliders' : '#i-file')"/></svg>
             <span class="label">{{ tab.title }}</span>
           </button>
           <button type="button" class="close" title="Close this tab" @click="closeTab(tab.id)">
@@ -594,35 +700,45 @@
         </span>
         <span :if="!workspace.tabs.length" class="none">Nothing open</span>
       </div>
-      <!-- Only where there are two columns: with three, both are on screen and
-           a toggle would be a control with nothing to do. -->
-      <button
-        :if="columns === 2"
-        type="button"
-        class="swap"
-        title="Show the chat instead"
-        @click="setPane('chat')">
-        <svg class="ic"><use href="#i-chat"/></svg>
-      </button>
+      <!-- The chat head's own buttons, in the same `.acts`, so each is the same
+           control in both heads and looks it. Only where there are two
+           columns: with three, both are on screen and the swap would have
+           nothing to do, and the column switch is the chat head's alone. -->
+      <div :if="columns === 2" class="acts">
+        <!-- The swap, whose icon is the column it goes to. -->
+        <button
+          type="button"
+          class="swap"
+          title="Show the chat instead"
+          @click="showChatPane()"><svg class="ic"><use href="#i-chat"/></svg></button>
+        <!-- The column switch, while it is on: two columns chosen from the
+             chat's head have to be undoable from the content, which is the
+             column on screen half the time. -->
+        <button
+          :if="canNarrow && ui.twoColumns"
+          type="button"
+          class="columns"
+          :class.on="ui.twoColumns"
+          :aria-pressed="ui.twoColumns ? 'true' : 'false'"
+          :title="ui.twoColumns ? 'Three columns: the content beside the chat' : 'Two columns: the content or the chat'"
+          @click="toggleColumns()"><svg class="ic"><use href="#i-dock"/></svg></button>
+      </div>
     </header>
 
+    <!-- The file's changes, and the way into the diff: under the head, in the
+         flow, so the file moves down rather than being covered. -->
+    <DiffStrip :if="changedHere" />
     <div class="col-main"><ContentViewer /></div>
 
+    <!-- Between the file and the foot: hiding it leaves the shell running. -->
+    <TerminalPanel :if="ui.terminal" />
+
+    <!-- One foot for the column, under the terminal when it is up: the
+         terminal's controls wherever there is a terminal to open, up or put
+         away, then what a status bar says about the open thing, then the
+         toggle. Not in a replay, which has no terminal and no server to ask. -->
     <footer class="col-foot">
-      <!-- What the file is, as the tree draws it rather than as a word: the
-           theme's icon where it has one, this page's shape where it has none.
-           The language name it replaced is still the icon's title. -->
-      <img :if="footIcon" class="kind" :src="`./api/icons/${footIcon}?r=${workspace.icons.revision || 0}`"
-           alt="" :title="shown?.language || ''">
-      <svg :if="picked && !footIcon" class="ic kind"><use :href="picked?.kind === 'debug' ? '#i-sliders' : '#i-file'"/></svg>
-      <span :if="picked" class="path" :title="shown?.language || ''">{{ picked?.path }}</span>
-      <span :if="!picked" class="dim small">no file open</span>
-      <!-- Only where git says the file changed, and as a glance: the modal
-           leaves the file on screen, which a diff tab would not. -->
-      <button :if="footChanged" type="button" class="foot-btn" title="Show the changes (git diff)"
-              @click="openDiff(picked?.path)">
-        <svg class="ic"><use href="#i-diff"/></svg>
-      </button>
+      <TerminalFoot :if="terminalReady || ui.terminal" />
       <!-- How much of the file this is, not just that it is not all of it: the
            server counts the lines before it cuts, so the panel can say what it
            is leaving out instead of leaving the reader to wonder. -->
@@ -639,9 +755,9 @@
       <button :if="picked?.kind === 'diff'" type="button" class="link"
               @click="showFile(picked?.path)">open the file</button>
       <!-- At the far right, whatever is open or not: a shell where the
-           session's commands run, its container or this machine. Off, and
-           saying why, only where `[terminal] host` keeps a host shell from
-           this request. See
+           session's commands run, its container or this machine — lit while it
+           is up. Off, and saying why, only where `[terminal] host` keeps a host
+           shell from this request. See
            `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`. -->
       <button type="button" class="foot-btn term" :class.on="ui.terminal"
               :aria-disabled="!terminalReady && !ui.terminal"
@@ -650,10 +766,6 @@
         <svg class="ic"><use href="#i-terminal"/></svg>
       </button>
     </footer>
-    <!-- Under the file's foot, so the foot stays with the file it describes
-         and the terminal reads as a second thing below it, with a foot of its
-         own. Hiding it leaves the shell running. -->
-    <TerminalPanel :if="ui.terminal" />
   </section>
 
   <!-- The conversation. No tabs: one session is on screen, and its name says
@@ -683,12 +795,25 @@
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
         <button type="button" title="Earlier sessions"
                 @click="ui.history ? closeHistory() : openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+        <button type="button" class="copy-chat" :disabled="!state.messages.length"
+                :title="copiedChat ? 'Copied' : 'Copy the conversation'"
+                :aria-label="copiedChat ? 'Copied' : 'Copy the conversation'"
+                @click="copyChat()"><svg class="ic"><use :href="copiedChat ? '#i-check' : '#i-copy'"/></svg></button>
         <button
           :if="columns === 2"
           type="button"
           class="swap"
           title="Show the content instead"
           @click="setPane('content')"><svg class="ic"><use href="#i-file"/></svg></button>
+        <!-- Last, at the far right: three columns or two, for now. -->
+        <button
+          :if="canNarrow"
+          type="button"
+          class="columns"
+          :class.on="ui.twoColumns"
+          :aria-pressed="ui.twoColumns ? 'true' : 'false'"
+          :title="ui.twoColumns ? 'Three columns: the content beside the chat' : 'Two columns: the content or the chat'"
+          @click="toggleColumns()"><svg class="ic"><use href="#i-dock"/></svg></button>
       </div>
 
       <!-- The old tab strip, as a popover. Switching and deleting, which are
@@ -732,7 +857,10 @@
         <button type="button" class="save" @click="openSettingsAt('models')">Configure models</button>
       </div>
 
-      <div :if="!noProviders" class="transcript">
+      <!-- Follows the end while it is at the end: a reply streaming in stays on
+           screen, and a person who scrolled up to read is left where they are. -->
+      <Scrollable :if="!noProviders" :y="true" :fill="true" autoscroll="bottom">
+      <div class="transcript">
         <div :each="entry in entries" :key="entry.id">
           <article :if="entry.kind === 'message'" :class="entry.message.role" :class.evicted="entry.message.evicted">
             <!-- No speaker label: the user's text is in the accent colour and an
@@ -759,6 +887,27 @@
             <div :if="entry.parts" class="parts">
               <div :each="part in entry.parts" :key="part.i">
                 <div :if="part.kind === 'text'" class="text">{{ part.text }}</div>
+                <!-- A fenced block: plain markup rather than a component, so a
+                     token updates it in place instead of mounting it again —
+                     see `lib/snippet.js`. Coloured as it streams. -->
+                <figure :if="part.kind === 'code'" class="snippet">
+                  <figcaption>
+                    <span class="lang">{{ part.lang || "code" }}</span>
+                    <!-- HTML, opened as the page it is, in a sandboxed frame. -->
+                    <button :if="previewable(part.lang)" type="button" class="open"
+                            title="Open as a page" aria-label="Open as a page"
+                            @click="previewSnippet(part.text)">
+                      <svg class="ic"><use href="#i-eye"/></svg>
+                    </button>
+                    <button type="button" class="copy" :class.done="snippet.copied[`${entry.id}:${part.i}`]"
+                            :title="snippet.copied[`${entry.id}:${part.i}`] ? 'Copied' : 'Copy the code'"
+                            :aria-label="snippet.copied[`${entry.id}:${part.i}`] ? 'Copied' : 'Copy the code'"
+                            @click="copySnippet(`${entry.id}:${part.i}`, part.text)">
+                      <svg class="ic"><use :href="snippet.copied[`${entry.id}:${part.i}`] ? '#i-check' : '#i-copy'"/></svg>
+                    </button>
+                  </figcaption>
+                  <Scrollable :x="true" background="var(--code-ground)"><pre><code :html="snippetHtml(`${entry.id}:${part.i}`, part, snippet.lit)"></code></pre></Scrollable>
+                </figure>
                 <ToolCall :if="part.kind === 'tool'" :part="part" :live="part.live" />
               </div>
             </div>
@@ -834,7 +983,7 @@
                 :disabled="replaying"
                 @click="reopenJob((entry.job || entry.task).id)">reopen</button>
             </div>
-            <pre class="summary">{{ (entry.job || entry.task).summary }}</pre>
+            <div class="summary"><Scrollable :y="true" frame="well" max="22rem"><pre>{{ (entry.job || entry.task).summary }}</pre></Scrollable></div>
           </div>
         </div>
 
@@ -846,6 +995,7 @@
           Nothing yet. Send a prompt.
         </p>
       </div>
+      </Scrollable>
 
       <!-- Between the transcript and the composer, and outside the scroll: a
            gate that scrolled away from the conversation it stopped is one
@@ -936,11 +1086,11 @@
                job is not the session. -->
           <div class="narrow" :if="!replaying">
             <span class="dim">network</span>
-            <Segmented size="small" :options="NETWORK" :model="network" />
+            <Segmented size="small" label="network" :options="NETWORK" :model="network" />
           </div>
           <div class="narrow" :if="!replaying">
             <span class="dim">enforcement</span>
-            <Segmented size="small" :options="ENFORCEMENT" :model="enforcement" />
+            <Segmented size="small" label="enforcement" :options="ENFORCEMENT" :model="enforcement" />
           </div>
           <!-- The one field here that narrows backwards: `kernel` is a
                tightening and needs no permission, `best-effort` asks the policy
@@ -1093,6 +1243,7 @@
 <TurnInspect :if="ui.inspecting != null" />
 <ContextModal :if="ui.contextOpen" />
 <DiffModal :if="ui.diff" />
+<SnippetPreview :if="snippet.preview !== null" />
 
 <!-- The shell's own styles, and nothing else's. `scoped` rewrites every
      selector below to also match `[data-jq79="…"]`, the attribute jq79 stamps
@@ -1155,11 +1306,11 @@
     bottom: 0;
     left: 3px;
     width: 2px;
-    background: var(--accent);
+    background: var(--divider);
     opacity: 0;
     transition: opacity .12s;
   }
-  .resize:hover::after, .resize:focus-visible::after { opacity: .6; }
+  .resize:hover::after, .resize:focus-visible::after { opacity: 1; }
   .resize:focus-visible { outline: none; }
 
   .col-head, .col-foot {
@@ -1170,6 +1321,9 @@
     height: var(--chrome-h);
     padding: 0 .6rem;
     background: var(--panel);
+    /* Its own ink, not the body's: under light the bar re-points `--fg` to
+       the dark theme's, and `color` inherited from the body would not. */
+    color: var(--fg);
     /* The chrome is a bar, not a paragraph: nothing in it wraps into a second
        row, because a second row is the page-wide header's mistake again. */
     overflow: hidden;
@@ -1178,10 +1332,38 @@
   .col-foot { border-top: 1px solid var(--line); font-size: 12px; color: var(--dim); }
   .col-main { flex: 1; min-height: 0; overflow: auto; }
 
-  .inspector { border-right: 1px solid var(--line); background: var(--panel); }
+  .inspector { border-right: 1px solid var(--divider); background: var(--tree-bg); }
   .inspector .col-main { padding: 1rem; }
-  .content { border-right: 1px solid var(--line); }
+  .content { border-right: 1px solid var(--divider); }
+  /* The chat's ground is `.col.chat` in `app.css`, shared with modal feet. */
   .app[data-columns="2"] .content { border-right: 0; }
+
+  /* ---- a phone: three slides, the chat first ---------------------------- */
+  /* One row a screen wide per column, scrolled sideways and snapping to one
+     — CSS scroll snap, no script in the swipe. The order is the chat, the
+     inspector, the content: set here with `order` rather than in the markup,
+     which keeps the desktop's left-to-right. */
+  .app[data-columns="slides"] {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .app[data-columns="slides"]::-webkit-scrollbar { display: none; }
+  .app[data-columns="slides"] > .col {
+    flex: 0 0 100%;
+    width: 100%;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    border-right: 0;
+  }
+  .app[data-columns="slides"] > .chat { order: 0; }
+  .app[data-columns="slides"] > .inspector { order: 1; }
+  .app[data-columns="slides"] > .content { order: 2; }
+  /* Widths are swiped, not dragged. */
+  .app[data-columns="slides"] .resize { display: none; }
 
   /* ---- the inspector's head: the logo, then the panels ------------------ */
   .logo {
@@ -1194,7 +1376,10 @@
     letter-spacing: .02em;
     padding: .15rem .35rem;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
   }
+  .logo svg { display: block; height: 18px; width: auto; }
   .logo:hover { color: var(--accent); background: var(--bg); }
 
   .tabs { display: flex; align-items: stretch; gap: .1rem; margin-left: auto; height: 100%; }
@@ -1242,7 +1427,8 @@
   }
   .tabs.files .tab .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tabs.files .tab.preview .label { font-style: italic; }
-  .tabs.files .tab .kind { width: 13px; height: 13px; opacity: .7; }
+  .tabs.files .tab .kind { width: 13px; height: 13px; flex: none; opacity: .7; }
+  .tabs.files .tab img.kind { opacity: 1; }
   .tabs.files .tab:hover { color: var(--fg); }
   .tabs.files .tab.on { color: var(--fg); border-bottom-color: var(--accent); }
   .tabs.files .tab .close {
@@ -1260,26 +1446,8 @@
   .tabs.files .tab .close:hover { opacity: 1; background: var(--bg); }
   .tabs.files .tab .close .ic { width: 12px; height: 12px; }
 
-  .swap {
-    flex: none;
-    background: none;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    color: var(--dim);
-    display: flex;
-    align-items: center;
-    padding: .25rem;
-    cursor: pointer;
-  }
-  .swap:hover { color: var(--fg); border-color: var(--accent); }
 
   /* ---- the content column's foot: the open thing's own facts ------------ */
-  .content .col-foot .path {
-    font-family: ui-monospace, monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .which { display: flex; gap: .2rem; margin-left: auto; }
   .which button {
     background: none;
@@ -1292,7 +1460,6 @@
     cursor: pointer;
   }
   .which button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-  .content .col-foot .kind { width: 14px; height: 14px; flex: none; }
   .foot-btn {
     display: flex;
     flex: none;
@@ -1305,6 +1472,8 @@
   }
   .foot-btn:hover, .foot-btn.on { color: var(--fg); background: var(--bg); }
   .foot-btn .ic { width: 14px; height: 14px; }
+  /* Lit while the terminal is up, as a pressed control is. */
+  .foot-btn.term.on { color: var(--accent); background: var(--selected); }
   /* The last thing in the foot, pushed right by itself: the controls before
      it keep their own places whether or not a diff tab drew them. */
   .foot-btn.term { margin-left: auto; }
@@ -1395,6 +1564,9 @@
   }
   .acts button:hover { color: var(--fg); background: var(--bg); }
   .acts .swap { border: 1px solid var(--line); margin-left: .2rem; }
+  .acts button:disabled { opacity: .4; cursor: default; background: none; }
+  /* Two columns chosen here: lit, so the head says the page is narrowed. */
+  .acts .columns.on { color: var(--accent); }
 
   /* The old tab strip, as a popover under the clock. */
   .history {
@@ -1451,7 +1623,7 @@
 
   /* ---- the chat's body ------------------------------------------------- */
   .chat-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .transcript { flex: 1; overflow-y: auto; padding: 1rem; min-height: 0; }
+  .transcript { padding: 1rem; }
   .chat-pinned { flex: none; }
 
   .nothing {
@@ -1487,6 +1659,48 @@
   .gone { color: var(--warn); text-transform: none; letter-spacing: 0; }
   .cited { color: var(--dim); text-transform: none; letter-spacing: 0; }
   .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* A fenced block in a reply: code on a card of its own, its language and a
+     copy button over it, scrolled sideways rather than wrapped. */
+  .snippet {
+    margin: .4rem 0;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
+    overflow: hidden;
+  }
+  .snippet figcaption {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    padding: .15rem .3rem .15rem .6rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--dim);
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+  }
+  .snippet .lang { flex: 1; }
+  .snippet :is(.copy, .open) {
+    display: flex;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: var(--dim);
+    padding: .2rem;
+    cursor: pointer;
+  }
+  .snippet :is(.copy, .open):hover { color: var(--fg); background: var(--bg); }
+  .snippet .copy.done { color: var(--ok); }
+  .snippet :is(.copy, .open) .ic { width: 13px; height: 13px; }
+  /* In the code theme's ink, on its ground — Monokai's colours are made for a
+     dark one. The Scrollable around it carries the ground and the scroll. */
+  .snippet pre {
+    padding: .5rem .6rem;
+    color: var(--code-ink);
+    white-space: pre;
+    overflow-wrap: normal;
+    font-size: 12px;
+    line-height: 1.5;
+  }
   .meta {
     margin-top: .3rem;
     font: inherit;
@@ -1499,7 +1713,6 @@
     border: 1px solid transparent;
     border-radius: 6px;
     padding: .1rem .35rem;
-    margin-left: -.35rem;
     text-align: left;
     cursor: pointer;
   }
@@ -1518,9 +1731,12 @@
   .meta .sym { font-weight: 600; }
   .meta .sym.then { font-weight: 400; }
   .meta .sym, .meta .clock { transition: color .15s; }
-  .meta:hover .clock, .meta:focus-visible .clock { color: var(--warn); }
-  .meta:hover .sym.out, .meta:focus-visible .sym.out { color: var(--accent); }
-  .meta:hover .sym.in, .meta:focus-visible .sym.in { color: var(--b-history); }
+  /* Their own vivid shades rather than the chat's inks, which are darkened for
+     text until their hue barely shows: the same hues at full saturation, as
+     light as 4.5:1 on the hover's ground allows. */
+  .meta:hover .clock, .meta:focus-visible .clock { color: #945e00; }
+  .meta:hover .sym.out, .meta:focus-visible .sym.out { color: #145bff; }
+  .meta:hover .sym.in, .meta:focus-visible .sym.in { color: #337a00; }
   .waiting { display: flex; align-items: center; gap: .45rem; font-size: 12px; color: var(--dim); }
   .waiting .dot {
     width: 7px; height: 7px; border-radius: 50%; flex: none;
@@ -1538,6 +1754,9 @@
     padding: 0 .6rem;
   }
   .composer { display: flex; align-items: center; gap: .4rem; height: var(--chrome-h); }
+  /* The chat's grey, in the dark foot: its ink is the chat's, not the bar's. */
+  .composer input { background: var(--chat-bg); color: var(--chat-fg); border-color: var(--chat-bg); }
+  .composer input::placeholder { color: var(--chat-dim); }
   .options {
     display: flex;
     align-items: center;
@@ -1575,7 +1794,8 @@
     align-items: center;
     gap: .45rem;
     background: none;
-    border: 1px solid transparent;
+    /* Bordered like the dropups beside it, so it reads as a control. */
+    border: 1px solid #4a4a4a;
     border-radius: 6px;
     color: var(--dim);
     font: inherit;
@@ -1583,18 +1803,24 @@
     padding: .15rem .4rem;
     cursor: pointer;
   }
-  .ctx:hover:not(:disabled) { border-color: var(--line); color: var(--fg); background: var(--bg); }
+  .ctx:hover:not(:disabled) { border-color: var(--accent); color: var(--fg); background: var(--bg); }
   .ctx:disabled { cursor: default; opacity: .6; }
+  /* Light on the dark foot: the groove is a light grey rather than a well
+     below the bar, and the two buckets that are dark shades of their family
+     (the map, the folds) are lifted, so every part of the bar is seen. */
   .ctx-bar {
     display: flex;
     width: 56px;
-    height: 6px;
-    border-radius: 3px;
+    height: 8px;
+    border-radius: 4px;
     overflow: hidden;
-    background: var(--sunken);
+    background: #6e6e6e;
+    --b-map: #5cc6de;
+    --b-summaries: #94c472;
+    --b-reserve: #9e9e9e;
   }
   .ctx-bar span { min-width: 1px; }
-  .ctx-free { background: var(--sunken); }
+  .ctx-free { background: #6e6e6e; }
   .ctx-count { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .ctx-count.warn { color: var(--warn); }
   .ctx-count.bad { color: var(--bad); }
@@ -1656,4 +1882,5 @@
   /* The same caret the tree uses, at the size of the line it opens. */
   .disclose { display: flex; align-items: center; gap: .35rem; }
   .disclose .ic { width: 12px; height: 12px; }
-  .fold .summary { margin: .4rem 0 0; white-space: pre-wrap; font-size: 12px; color: var(--dim); }</style>
+  .fold .summary { margin: .4rem 0 0; }
+  .fold .summary pre { white-space: pre-wrap; font-size: 12px; color: var(--dim); }</style>

@@ -1,0 +1,28 @@
+<script :setup>
+  // An HTML block from a reply, drawn as the page it is. The frame is
+  // `sandbox`ed without `allow-same-origin`, so the page has an origin of its
+  // own and cannot reach this one; `previewDocument` adds the policy that keeps
+  // it off the network but for `https:`. See `lib/snippet.js`.
+  const { snippet, closePreview, previewDocument } = await import("@web/lib/snippet.js")
+  const Modal = await import("@web/components/modal.html")
+</script>
+
+<Modal title="Preview" width="64rem" @close="closePreview()">
+  <iframe class="page" title="The block, drawn as a page"
+          sandbox="allow-scripts allow-modals"
+          referrerpolicy="no-referrer"
+          :srcdoc="previewDocument(snippet.preview || '')"></iframe>
+</Modal>
+
+<style scoped>
+  /* White whatever the page's theme is: it is a web page, and a page that sets
+     no background of its own is drawn on white everywhere else. */
+  .page {
+    display: block;
+    width: 100%;
+    height: min(72vh, 48rem);
+    border: 0;
+    background: #fff;
+    border-radius: 0 0 5px 5px;
+  }
+</style>

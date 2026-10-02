@@ -164,13 +164,17 @@ fn open(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     let mut size = winsize(cols, rows);
     // SAFETY: out-pointers to two ints, no name buffer, default termios, and a
     // `winsize` that outlives the call.
+    //
+    // The size goes as a raw pointer, not `&mut`: `libc` declares it `*mut` on
+    // macOS and `*const` on Linux, and a `*mut` is what both accept — where
+    // `&mut` is, since Rust 1.99, clippy's `unnecessary_mut_passed` on Linux.
     let done = unsafe {
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut size,
+            std::ptr::addr_of_mut!(size),
         )
     };
     if done < 0 {

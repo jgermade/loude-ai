@@ -5,153 +5,49 @@
   // difference between a form that works and one that looks like it did. See
   // `RECORD/2026-09-07.configuring-from-the-browser.completed.md`.
   const { state, saveProviders, loadProviders, refreshSettings } = await import("@web/lib/store.js")
+  const Scrollable = await import("@web/components/scrollable.html")
   const { ui, openStarter } = await import("@web/lib/ui.js")
-  const SaveButton = await import("@web/components/save-button.html")
   const ProviderForm = await import("./provider-form.html")
-
-  // `config` is a *copy* of the providers file: typing into the server's own
-  // answer would make an unsaved change look saved. Rows carry an id because a
-  // row's name is editable and a new one has none, so neither is a key.
-  let config = null
-  let rowId = 0
-  // What the server asked to have typed back, when it refused a write: the one
-  // refusal a person can answer rather than only read. `{ profile, host }`.
-  let declaration = null
-  let typed = ""
-  let saving = false
-
-  // `nextId` is only swapped out by `changes` below, which must not bump
-  // `rowId`: an effect that writes what it reads never settles.
-  const toDraft = (view, nextId = () => ++rowId) => ({
-    default: view?.default || "",
-    profiles: Object.entries(view?.providers || {}).map(([name, p]) => ({
-      id: nextId(),
-      name,
-      backend: p.backend || "ollama",
-      url: p.url || "",
-      model: p.model || "",
-      contextLimit: p["context-limit"] ?? "",
-      keyFile: p["key-file"] || "",
-      // Carried through untouched. The editor never *invents* this word — the
-      // server asks for the host to be typed and only then does it go in.
-      remote: !!p.remote,
-      // Also carried through untouched: which `[engine.*]` this profile
-      // starts is written by Settings → Engines, and a table that dropped it
-      // would unlink the two the first time somebody saved a URL.
-      engine: p.engine || "",
-      // How tool calls travel: "" (fenced, the default — written as nothing)
-      // or "native". See `RECORD/2026-09-30.native-tool-calls.completed.md`.
-      toolCalls: p["tool-calls"] === "native" ? "native" : "",
-    })),
-  })
-
-  const fromDraft = it => ({
-    default: it.default || null,
-    providers: Object.fromEntries(
-      it.profiles.filter(p => p.name.trim()).map(p => [p.name.trim(), {
-        ...(p.backend ? { backend: p.backend } : {}),
-        ...(p.url.trim() ? { url: p.url.trim() } : {}),
-        ...(p.model.trim() ? { model: p.model.trim() } : {}),
-        ...(String(p.contextLimit).trim() ? { "context-limit": Number(p.contextLimit) } : {}),
-        ...(p.keyFile.trim() ? { "key-file": p.keyFile.trim() } : {}),
-        ...(p.remote ? { remote: true } : {}),
-        ...(p.engine ? { engine: p.engine } : {}),
-        ...(p.toolCalls === "native" ? { "tool-calls": "native" } : {}),
-      }]),
-    ),
-  })
 
   // **Asked here, awaited here.** `openSettings` only sets the flag that mounts
   // this component, so the data is fetched by the section that draws it — and
-  // in a `:setup`, which jq79 runs to completion before the template renders,
-  // so the draft below is a draft of something. The version that built it in a
-  // reactive statement instead was an effect writing what the component read,
-  // and jq79 gave up on it settling after 100 passes with an error that named
-  // neither the line nor this file. See
-  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  // in a `:setup`, which jq79 runs to completion before the template renders.
+  // See `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   await refreshSettings()
   await loadProviders()
-  config = toDraft(state.providers)
 
-  // **In place, not a new row.** jq79's keyed `:each` keeps a row's elements
-  // only while its item is the *same object*: rebuilding every row on each
-  // keystroke rebuilt its `<input>` too, and the field being typed in lost the
-  // focus after one letter. The store is deep, so `changes` still follows.
-  const edit = (id, field, value) => {
-    const row = config.profiles.find(p => p.id === id)
-    if (row) row[field] = value
-  }
-  // A new provider is a form in a modal (`provider-form.html`), which writes
-  // it on its own and hands the name back. It is merged into the draft rather
-  // than the draft being rebuilt from the file, so an edit half-made in the
-  // table survives somebody adding a provider beside it.
-  let adding = false
-  const added = async (name, isDefault) => {
-    refreshSettings()
-    const [row] = toDraft({ providers: { [name]: state.providers?.providers?.[name] || {} } }).profiles
-    config = {
-      ...config,
-      profiles: [...config.profiles, row],
-      default: isDefault ? name : config.default,
-    }
-  }
-  const removeProfile = id => {
-    const gone = config.profiles.find(p => p.id === id)
-    config = {
-      ...config,
-      profiles: config.profiles.filter(p => p.id !== id),
-      default: gone && gone.name === config.default ? "" : config.default,
-    }
-  }
-  const chooseDefault = name => {
-    config = { ...config, default: name }
-    declaration = null
-    typed = ""
-  }
-  // `declaring` retries the same write with the word the person just typed the
-  // host to earn. Nothing else adds it.
-  const saveConfig = async declaring => {
-    saving = true
-    const body = fromDraft(declaring
-      ? { ...config, profiles: config.profiles.map(p =>
-          p.name.trim() === declaration.profile ? { ...p, remote: true } : p) }
-      : config)
-    const result = await saveProviders(body)
-    saving = false
-    // What the live session sends to may have moved with the file.
+  // **The list is read-only; a provider is written from its own form.** It
+  // was a table of inputs over a draft of the file, with a save button under
+  // it. Each row now opens `provider-form.html`, which adds, edits, renames
+  // and removes one profile and writes it at once; the list is the file as
+  // the server last answered it. `form` is `{ editing, defaulting }`, or
+  // `null` while no form is open.
+  let form = null
+  const openForm = (editing = "", defaulting = false) => { form = { editing, defaulting } }
+  const saved = () => { refreshSettings() }
+
+  // The default is the one thing changed from the list, because it is the one
+  // thing changed often, and it is written at once. A default off this
+  // machine needs its host typed — the same declaration `-p` is on the
+  // command line — so that refusal opens the profile's form with *default*
+  // ticked, where the question is asked.
+  let defaultError = null
+  const makeDefault = async name => {
+    defaultError = null
+    const result = await saveProviders({ default: name || null, providers: state.providers?.providers || {} })
     await refreshSettings()
-    if (result.ok) {
-      config = toDraft(state.providers)
-      declaration = null
-      typed = ""
-    } else {
-      declaration = result.declaration
-      typed = ""
-    }
-    return !!result.ok
+    if (result?.ok) return
+    if (result?.declaration && name) return openForm(name, true)
+    defaultError = state.providersError || "the write was refused"
   }
 
   $: profileNames = Object.keys(state.providers?.providers || {})
-  $: takenNames = (config?.profiles || []).map(p => p.name.trim()).filter(Boolean)
   // The built-in mock is not a profile and was never a row, so a server that
   // fell back to it showed a table with nothing chosen while the mock answered
   // every turn. It is a row now: "no default" in the file *is* the mock, and
   // choosing it writes exactly that.
   $: runningMock = !state.providers?.running && state.settings?.backend === "mock"
   $: editable = !!state.providers?.editable
-  // How many profiles the draft adds, removes or edits, plus one if the default
-  // moved. Compared as what would be written, so a row with no name, which the
-  // write drops, is not a change.
-  $: changes = (() => {
-    if (!config) return 0
-    const mine = fromDraft(config)
-    const file = fromDraft(toDraft(state.providers, () => 0))
-    const names = new Set([...Object.keys(mine.providers), ...Object.keys(file.providers)])
-    const edited = [...names].filter(name =>
-      JSON.stringify(mine.providers[name]) !== JSON.stringify(file.providers[name])).length
-    return edited + (mine.default !== file.default ? 1 : 0)
-  })()
-  $: canDeclare = !!declaration && typed.trim() === declaration.host
   $: windowSource = ({
     flag: "--context-limit",
     profile: "the profile's context-limit",
@@ -238,7 +134,7 @@
   </dd>
 
   <dt>Sandbox</dt>
-  <dd><pre class="sandbox">{{ state.settings.sandbox }}</pre></dd>
+  <dd><Scrollable :y="true" frame="well" max="22rem"><pre class="sandbox">{{ state.settings.sandbox }}</pre></Scrollable></dd>
 </dl>
 
 <h3>Providers</h3>
@@ -259,117 +155,78 @@
 </p>
 <p :if="state.providersError" class="error">{{ state.providersError }}</p>
 
-<table class="providers" :if="config">
-  <thead>
-    <tr>
-      <th>Default</th><th>Name</th><th>Backend</th><th>URL</th>
-      <th>Model</th><th>Window</th><th>Key file</th><th>Tool calls</th><th></th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr class="builtin">
-      <td>
-        <input type="radio" name="default" :disabled="!editable"
-               :checked="!config.default"
-               @change="chooseDefault('')">
-      </td>
-      <td>mock</td>
-      <td>mock</td>
-      <td colspan="5" class="dim">
-        built in — what a run with no default falls back to. It answers in
-        sentences and sends nowhere.
-      </td>
-      <td>
-        <span :if="runningMock" class="tag" title="What this server is sending to">running</span>
-      </td>
-    </tr>
-    <tr :each="row in config?.profiles || []" :key="row.id">
-      <td>
-        <input type="radio" name="default" :disabled="!editable || !row.name"
-               :checked="config.default === row.name"
-               @change="chooseDefault(row.name)">
-      </td>
-      <td><input class="w-name" :value="row.name" :disabled="!editable"
-                 @input="edit(row.id, 'name', $event.target.value)"></td>
-      <td>
-        <select :value="row.backend" :disabled="!editable"
-                @change="edit(row.id, 'backend', $event.target.value)">
-          <option value="ollama">ollama</option>
-          <option value="openai">openai</option>
-          <option value="mock">mock</option>
-        </select>
-      </td>
-      <td><input class="w-url" :value="row.url" :disabled="!editable"
-                 placeholder="http://127.0.0.1:11434"
-                 @input="edit(row.id, 'url', $event.target.value)"></td>
-      <td><input class="w-model" :value="row.model" :disabled="!editable"
-                 @input="edit(row.id, 'model', $event.target.value)"></td>
-      <td><input class="w-num" :value="row.contextLimit" :disabled="!editable"
-                 placeholder="—" title="The window the server was started with"
-                 @input="edit(row.id, 'contextLimit', $event.target.value)"></td>
-      <td>
-        <input class="w-key" :value="row.keyFile" :disabled="!editable"
-               placeholder="~/.luu/that.key"
-               title="A path. Never the key itself: a key in this file is a key in every backup."
-               @input="edit(row.id, 'keyFile', $event.target.value)">
-      </td>
-      <!-- Fenced writes nothing, so a file that never said stays byte-for-byte
-           what it was. Native is the server's own `tools` field, rendered with
-           the tool prompt the model was trained on. -->
-      <td>
-        <select :value="row.toolCalls" :disabled="!editable || row.backend === 'mock'"
-                title="fenced: the tools as text in our system prompt, a ```tool block back. native: the server's tools field and its own tool prompt."
-                @change="edit(row.id, 'toolCalls', $event.target.value)">
-          <option value="">fenced</option>
-          <option value="native">native</option>
-        </select>
-      </td>
-      <td>
-        <span :if="row.name && row.name === state.providers?.running" class="tag"
-              title="What this server is sending to">running</span>
-        <span :if="row.remote" class="tag warn" title="Declared as off this machine">remote</span>
-        <span :if="row.engine" class="tag"
-              :title="`luu starts [engine.${row.engine}] before a session sends here`">engine</span>
-        <!-- Only for a profile that is in the file: this starts a session
-             against what the server can resolve, not against an unsaved
-             row. -->
-        <button type="button" class="link" :if="profileNames.includes(row.name)"
-                title="Start a session on this provider"
-                @click="openStarter(row.name)">use →</button>
-        <button type="button" class="link" :disabled="!editable"
-                @click="removeProfile(row.id)">remove</button>
-      </td>
-    </tr>
-  </tbody>
-</table>
+<p :if="defaultError" class="error">{{ defaultError }}</p>
+
+<!-- One row per profile in the file, read-only: a click on *edit* opens its
+     form. The built-in mock first, because "no default" in the file is it. -->
+<ul class="providers">
+  <li class="builtin" :class.default="!state.providers?.default">
+    <div class="who">
+      <strong>mock</strong>
+      <span class="dim">built in — what a run with no default falls back to. It answers in
+        sentences and sends nowhere.</span>
+    </div>
+    <div class="tags">
+      <span :if="!state.providers?.default" class="tag default">default</span>
+      <span :if="runningMock" class="tag" title="What this server is sending to">running</span>
+    </div>
+    <div class="acts">
+      <button type="button" class="link" :if="state.providers?.default" :disabled="!editable"
+              @click="makeDefault('')">make default</button>
+    </div>
+  </li>
+  <li :each="name in profileNames" :key="name" class="profile"
+      :class.default="state.providers?.default === name">
+    <div class="who">
+      <strong class="name">{{ name }}</strong>
+      <span class="dim">
+        {{ state.providers.providers[name].backend || "ollama" }}
+        <span :if="state.providers.providers[name].url">· {{ state.providers.providers[name].url }}</span>
+        <span :if="state.providers.providers[name].model">· {{ state.providers.providers[name].model }}</span>
+        <span :if="state.providers.providers[name]['context-limit']">· {{ state.providers.providers[name]["context-limit"] }} tokens</span>
+        <span :if="state.providers.providers[name]['tool-calls'] === 'native'">· native tools</span>
+      </span>
+    </div>
+    <div class="tags">
+      <span :if="state.providers?.default === name" class="tag default">default</span>
+      <span :if="name === state.providers?.running" class="tag" title="What this server is sending to">running</span>
+      <span :if="state.providers.providers[name].remote" class="tag warn" title="Declared as off this machine">remote</span>
+      <span :if="state.providers.providers[name].engine" class="tag"
+            :title="`luu starts [engine.${state.providers.providers[name].engine}] before a session sends here`">engine</span>
+    </div>
+    <div class="acts">
+      <button type="button" class="link" :if="state.providers?.default !== name" :disabled="!editable"
+              @click="makeDefault(name)">make default</button>
+      <button type="button" class="link" title="Start a session on this provider"
+              @click="openStarter(name)">use →</button>
+      <button type="button" class="link edit" :disabled="!editable" @click="openForm(name)">edit</button>
+    </div>
+  </li>
+</ul>
 
 <div class="modal-foot">
-  <!-- The one refusal a person can answer. The browser never decides that a
-       URL is off the machine — the server refuses the write and names the
-       host, and typing it is the declaration, exactly as `-p` is on the
-       command line. -->
-  <div :if="declaration" class="declare">
-    <p>
-      <strong>{{ declaration.profile }}</strong> sends to
-      <strong>{{ declaration.host }}</strong>, which is not this machine, and
-      it is about to become the default — so every run that names no provider
-      goes there. Type the host to confirm.
-    </p>
-    <input :value="typed" :placeholder="declaration.host"
-           @input="typed = $event.target.value">
-    <button type="button" :disabled="!canDeclare || saving"
-            @click="saveConfig(true)">Confirm and save</button>
-  </div>
-
-  <div class="modal-actions" :if="config">
-    <button type="button" class="add" :disabled="!editable" @click="adding = true">+ provider</button>
-    <SaveButton :action="() => saveConfig(false)" :changes="changes" :disabled="!editable" />
+  <div class="modal-actions" :if="state.providers">
+    <button type="button" class="add" :disabled="!editable" @click="openForm()">+ provider</button>
   </div>
 </div>
 
-<ProviderForm :if="adding" :taken="takenNames" :added="added" :close="() => { adding = false }" />
+<ProviderForm :if="form" :taken="profileNames" :editing="form.editing" :defaulting="form.defaulting"
+              :saved="saved" :close="() => { form = null }" />
 
 <style scoped>
   h3:first-child { margin-top: 0; }
-  .builtin td { color: var(--dim); }
+  .providers { list-style: none; margin: .4rem 0 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; }
+  .providers li {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    padding: .5rem .7rem;
+    font-size: 13px;
+  }
+  .providers li + li { border-top: 1px solid var(--line); }
+  .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+  .who .dim { font-size: 12px; overflow-wrap: anywhere; }
+  .tags, .acts { display: flex; gap: .4rem; align-items: center; flex: none; }
+  .tag.default { border-color: var(--accent); color: var(--accent); }
+  .builtin .who strong { color: var(--dim); }
 </style>

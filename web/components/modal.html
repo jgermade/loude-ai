@@ -18,15 +18,74 @@
   // way a click on close does. `locked` refuses every dismissal and hides the
   // close button — the folder picker on a first visit, which has nothing
   // behind it to go back to. `width` is a length, capped at the window.
+  //
+  // **A modal opened inside another is its child, and stays inside it**: no
+  // head of its own, a sheet that comes down out of the parent's head, and an
+  // overlay over the parent's body only — the parent's head stays lit, so it
+  // is still clear whose form this is. The provider and engine forms over
+  // Settings are the case.
+  //
+  // **And the parent's head still works**: its close button closes both. So
+  // a child is opened with `show()`, not `showModal()` — a second modal would
+  // make everything under it inert, the parent's head included. The parent
+  // stays the modal, and what the child takes over is done here instead: the
+  // rest of the parent's content is made `inert` (all of it but the head and
+  // the child), the overlay is an element of its own over the parent's body,
+  // and ESC is caught before it reaches the parent, so it closes the child
+  // alone.
 
   // How long it takes to leave; `modal-out` below is the same.
   const CLOSE_MS = 140
   let leaving = false
 
-  $: box = width ? `width:min(${width}, calc(100vw - 2rem))` : ""
+  // The parent dialog, when this one opened inside one, and the parent's
+  // body in the viewport's pixels — where the sheet and its overlay go.
+  let parent = null
+  let room = null
+  // What `veil` made inert, to give back.
+  let veiled = []
+  // A child's ESC, on the window; see `show`.
+  let escape = () => {}
+
+  // Everything in the parent but its head and the way down to this one:
+  // at each level on the way up, the siblings that are not on it.
+  const veil = (dialog, cover) => {
+    for (let at = dialog; at && at !== parent; at = at.parentElement) {
+      for (const sibling of at.parentElement?.children || []) {
+        if (sibling === at || sibling === cover || sibling.inert) continue
+        if (at.parentElement === parent && sibling.matches(".modal-head")) continue
+        sibling.inert = true
+        veiled.push(sibling)
+      }
+    }
+  }
+  const unveil = () => {
+    for (const element of veiled) element.inert = false
+    veiled = []
+  }
+
+  const fitted = (room, width) =>
+    `--top:${room.top}px;--left:${room.left}px;--w:${room.width}px;--h:${room.height}px;` +
+    `--box:min(${width || "34rem"}, ${room.width}px - 2rem)`
+  $: box = parent && room ? fitted(room, width) : width ? `width:min(${width}, calc(100vw - 2rem))` : ""
+
+  let watching = null
+  const fit = () => {
+    if (!parent?.open) return
+    const outer = parent.getBoundingClientRect()
+    const head = parent.querySelector(":scope > .modal-head")?.getBoundingClientRect()
+    const top = head ? head.bottom : outer.top
+    room = {
+      top,
+      left: outer.left + parent.clientLeft,
+      width: parent.clientWidth,
+      height: outer.bottom - parent.clientTop - top,
+    }
+  }
 
   const close = () => {
     if (leaving || locked) return
+    unveil()
     const dialog = $self("dialog")
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches
     if (!dialog?.open || still) return $emit("close")
@@ -49,6 +108,22 @@
     }
     if (dialog.open) return
 
+    parent = dialog.parentElement?.closest("dialog.modal[open]") ?? null
+    if (parent) {
+      fit()
+      watching = new ResizeObserver(fit)
+      watching.observe(parent)
+      window.addEventListener("resize", fit)
+      $destroyed(() => {
+        watching.disconnect()
+        window.removeEventListener("resize", fit)
+        window.removeEventListener("keydown", escape, true)
+        // However the child went — closed, or unmounted by its owner without
+        // a close — the parent is given back.
+        unveil()
+      })
+    }
+
     // `target` is checked because `close` is also the name this component
     // emits, and an emit bubbles: a modal opened from inside this one would
     // otherwise close both.
@@ -68,7 +143,24 @@
       if (locked) return dialog.showModal()
       close()
     })
-    dialog.showModal()
+    if (!parent) return dialog.showModal()
+
+    // ESC is the parent's `cancel` while the parent is the modal, so it is
+    // taken first, on the way down, and spent on the child.
+    escape = event => {
+      if (event.key !== "Escape" || !dialog.open || leaving) return
+      event.preventDefault()
+      event.stopPropagation()
+      close()
+    }
+    window.addEventListener("keydown", escape, true)
+    // A frame later, so the box above is drawn — headless and in its place —
+    // before it is on screen.
+    requestAnimationFrame(() => {
+      if (!dialog.isConnected || dialog.open) return
+      veil(dialog, $self(".veil"))
+      dialog.show()
+    })
   }
   show()
 </script>
@@ -76,21 +168,27 @@
 <!-- `@click.self` is the backdrop: a click that lands on the dialog itself
      rather than on anything inside it is a click outside the box, because the
      dialog has no padding of its own for a click to land in. -->
-<dialog class="modal" :class.closing="leaving" :style="box" :aria-label="title"
-        @click.self="close()">
-  <header class="modal-head">
+<!-- A child's overlay, over the parent's body and not its head. -->
+<div :if="parent" class="veil" :class.closing="leaving" :style="box" @click="close()"></div>
+<dialog class="modal" :class.closing="leaving" :class.child="!!parent" :style="box"
+        :aria-label="title" @click.self="close()">
+  <header :if="!parent" class="modal-head">
     <strong>{{ title }}</strong>
     <slot.head />
-    <button :if="!locked" type="button" class="link" @click="close()">close</button>
+    <!-- An icon, and the word kept for whoever cannot see it. -->
+    <button :if="!locked" type="button" class="close" title="Close" @click="close()">
+      <svg class="ic"><use href="#i-close"/></svg><span class="unseen">close</span>
+    </button>
   </header>
   <slot />
 </dialog>
 
 <style scoped>
   dialog {
-    background: var(--panel, #fff);
+    background: var(--tree-bg, #ededed);
     color: var(--fg, #1a1d23);
-    border: 1px solid var(--line, #d7dbe2);
+    /* Where the modal ends, like where a column does. */
+    border: 1px solid var(--divider, #3a3a3a);
     border-radius: 6px;
     /* No padding, deliberately: padding would be a ring of "outside" inside
        the border for `@click.self` to read as the backdrop. */
@@ -118,12 +216,85 @@
     dialog[open], dialog[open]::backdrop, dialog.closing, dialog.closing::backdrop { animation: none; }
   }
 
+  /* ---- a child: a sheet out of the parent's head, over the parent's body */
+  dialog.child {
+    /* Not in the top layer — it is not modal — so placed by hand, over the
+       parent's content and its pinned foot. */
+    position: fixed;
+    z-index: 11;
+    inset: auto;
+    top: var(--top);
+    left: calc(var(--left) + (var(--w) - var(--box)) / 2);
+    width: var(--box);
+    max-width: none;
+    margin: 0;
+    max-height: calc(var(--h) - 2rem);
+    /* Fastened to the head it comes out of: no top edge, square top corners. */
+    border-top: 0;
+    border-radius: 0 0 6px 6px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+  }
+  .veil {
+    position: fixed;
+    z-index: 10;
+    top: var(--top);
+    left: var(--left);
+    width: var(--w);
+    height: var(--h);
+    background: rgba(0, 0, 0, .45);
+    border-radius: 0 0 5px 5px;
+    animation: backdrop-in .2s ease-out;
+  }
+  .veil.closing { animation: backdrop-out .14s ease-in forwards; }
+  dialog.child[open] { animation: sheet-in .26s cubic-bezier(.32, .72, 0, 1); }
+  dialog.child.closing { animation: sheet-out .14s ease-in forwards; }
+  /* Down out of the head's bottom edge: the part still above it is clipped, so
+     it reads as coming from behind the head rather than over it. Both ends are
+     an `inset()`, because one to `none` does not interpolate and snaps
+     halfway; the negative sides leave the shadow out of the clip. */
+  @keyframes sheet-in {
+    from { transform: translateY(-100%); clip-path: inset(100% -2rem -2rem -2rem); }
+    to { transform: none; clip-path: inset(0 -2rem -2rem -2rem); }
+  }
+  @keyframes sheet-out {
+    from { transform: none; clip-path: inset(0 -2rem -2rem -2rem); }
+    to { transform: translateY(-100%); clip-path: inset(100% -2rem -2rem -2rem); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    dialog.child[open], dialog.child.closing, .veil, .veil.closing { animation: none; }
+  }
+
   .modal-head {
     display: flex;
     align-items: center;
     gap: .5rem;
     padding: .6rem 1rem;
-    border-bottom: 1px solid var(--line, #d7dbe2);
+    border-bottom: 1px solid var(--line, #c8c8c8);
+    /* Dark, like the columns' heads: under light it takes the dark palette
+       (`app.css`), so this is its own ground and ink. Rounded with the box,
+       which does not clip. */
+    background: var(--panel);
+    color: var(--fg);
+    border-radius: 5px 5px 0 0;
   }
-  .link { margin-left: auto; }
+  .close {
+    display: flex;
+    margin-left: auto;
+    background: none;
+    border: 0;
+    border-radius: 6px;
+    color: var(--dim);
+    padding: .25rem;
+    cursor: pointer;
+  }
+  .close:hover { color: var(--fg); background: var(--bg); }
+  .close .ic { width: 16px; height: 16px; }
+  .unseen {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 </style>

@@ -38,6 +38,16 @@ function keptWidth(key) {
   }
 }
 
+/// Any string, or the fallback: for a value whose allowed set is the server's
+/// to say, and checked against it where it is used.
+function keptText(key, fallback) {
+  try {
+    return localStorage.getItem(key) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
 function keep(key, value) {
   try {
     localStorage.setItem(key, value)
@@ -52,16 +62,21 @@ export const prefs = $reactive({
   /// this repo was taken against it, and a default that followed the OS would
   /// quietly reinterpret all of them. `auto` is a choice, not the absence of
   /// one.
-  theme: kept("luu.theme", ["auto", "light", "dark"], "dark"),
+  // Light only, for now: the dark theme is off while the page's palette is
+  // reworked. Its tokens stay in `app.css`, because the columns' heads and
+  // feet are drawn with them.
+  theme: "light",
   /// `own` | `monaco`. What draws a file in the content column. `monaco` is an
   /// npm dependency of this directory rather than a payload in the tree, so it
   /// is only offered where somebody installed it — see `monacoAvailable`.
   editor: kept("luu.editor", ["own", "monaco"], "own"),
-  /// `page` | `monokai`. The colours code is drawn in. `page` is the page's own
-  /// palette and follows the light/dark toggle; `monokai` is Sublime Text 3's
-  /// Monokai, which brings its own dark ground, so it reads the same on a light
-  /// page. It covers this page's viewer and Monaco alike.
-  code: kept("luu.code", ["page", "monokai"], "page"),
+  /// `dark` | `light`. Code is drawn in Monokai everywhere, in one of its two
+  /// tones: Sublime Text 3's own on its dark ground, or the same hues darkened
+  /// to read on white. The editor — this page's viewer and Monaco alike — is
+  /// dark unless somebody asks; a snippet in a reply sits in a light chat, so
+  /// it is light unless somebody asks.
+  editorTone: kept("luu.editor-tone", ["dark", "light"], "dark"),
+  snippetTone: kept("luu.snippet-tone", ["dark", "light"], "light"),
   /// `responsive` | `two`. `responsive` is three columns above 1260px and two
   /// below; `two` pins the two-column layout at any width, which is what
   /// somebody on a wide screen who wants the chat wide is asking for.
@@ -87,46 +102,37 @@ export const prefs = $reactive({
   /// cannot squeeze the content column out of a narrow one.
   inspectorWidth: keptWidth("luu.width.inspector"),
   chatWidth: keptWidth("luu.width.chat"),
+  /// Where the last session ran, as `posture|runtime` (see `lib/places.js`):
+  /// what a new session is offered first. Set when a session is started and
+  /// when one is moved, and checked against `/api/postures` before it is
+  /// offered, because a posture can leave `config.toml` and a runtime this
+  /// machine.
+  place: keptText("luu.place", "|"),
 })
 
-/// Dark is `:root`'s own palette in `app.css`, so it is the *absence* of the
-/// attribute rather than a value of it — one source for "what dark is", not
-/// two. `auto` is resolved here rather than in a second copy of the light
-/// palette under a media query: the page already knows how to be light, and a
-/// duplicated set of forty tokens is a set that drifts.
-const wantsLight = window.matchMedia?.("(prefers-color-scheme: light)")
-
+/// Dark is `:root`'s own palette in `app.css`, so light is the attribute. Set
+/// unconditionally while the dark theme is off — see `prefs.theme`.
 function paint() {
-  const resolved = prefs.theme === "auto"
-    ? (wantsLight?.matches ? "light" : "dark")
-    : prefs.theme
-  if (resolved === "light") document.documentElement.setAttribute("data-theme", "light")
-  else document.documentElement.removeAttribute("data-theme")
+  document.documentElement.setAttribute("data-theme", "light")
 }
 
-function paintCode() {
-  if (prefs.code === "page") document.documentElement.removeAttribute("data-code-theme")
-  else document.documentElement.setAttribute("data-code-theme", prefs.code)
+function paintTones() {
+  document.documentElement.setAttribute("data-editor-tone", prefs.editorTone)
+  document.documentElement.setAttribute("data-snippet-tone", prefs.snippetTone)
 }
 
 paint()
-paintCode()
-// Only `auto` cares, and it cares while the page is open: somebody who switches
-// their machine to night mode should not have to reload.
-wantsLight?.addEventListener?.("change", () => {
-  if (prefs.theme === "auto") paint()
-})
-
-export function setTheme(which) {
-  prefs.theme = which
-  keep("luu.theme", which)
-  paint()
+paintTones()
+export function setEditorTone(which) {
+  prefs.editorTone = which
+  keep("luu.editor-tone", which)
+  paintTones()
 }
 
-export function setCode(which) {
-  prefs.code = which
-  keep("luu.code", which)
-  paintCode()
+export function setSnippetTone(which) {
+  prefs.snippetTone = which
+  keep("luu.snippet-tone", which)
+  paintTones()
 }
 
 export function setEditor(which) {
@@ -139,9 +145,18 @@ export function setLayout(which) {
   keep("luu.layout", which)
 }
 
+export function setPlace(value) {
+  prefs.place = value
+  keep("luu.place", value)
+}
+
 export function setPane(which) {
   prefs.pane = which
   keep("luu.pane", which)
+  // Said as well as stored: on a phone every column is on screen, side by
+  // side, and asking for one is moving to it — even the one already chosen,
+  // which a stored value that did not change could not say. See `app.html`.
+  window.dispatchEvent(new CustomEvent("luu:pane", { detail: which }))
 }
 
 export function setInspector(which) {

@@ -40,7 +40,17 @@ pub enum TraceMessage {
     /// The exact string handed to the model, before any of it was generated.
     /// The panel that diffs this against the previous turn is the one that
     /// shows how much of the stable prefix survived.
-    Prompt { turn: TurnId, text: String },
+    ///
+    /// `tool_specs` is the request's own `tools` field under the native
+    /// transport — counted in the `tools` bucket and absent from `text`, so
+    /// without it a reader sees the count and never what was counted. `None`
+    /// under the fenced transport, where the tools are in `text` already.
+    Prompt {
+        turn: TurnId,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_specs: Option<String>,
+    },
     /// How the context was spent, decided before the call rather than reported
     /// after it — so a cancelled turn has a budget too.
     ///

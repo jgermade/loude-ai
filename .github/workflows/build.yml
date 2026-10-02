@@ -166,7 +166,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: tests/smoke/package-lock.json
+          cache-dependency-path: |
+            tests/smoke/package-lock.json
+            web/package-lock.json
       - name: Smoke-test the page
         working-directory: tests/smoke
         run: |
@@ -178,6 +180,17 @@ jobs:
       # tool call, against a live `luu serve` on the mock. The static twin above
       # has no server behind it, so it cannot reach any of them — and every UI
       # bug this repository has had lived exactly there.
+      # The page's optional dependencies, as `make install` fetches them:
+      # xterm.js, which draws the terminal panel, and Monaco. The live server
+      # serves them from disk, and without them the terminal panel only says
+      # how to install it — so the tests that open a shell on the host failed
+      # here from the day they were written, and passed on every machine that
+      # had run `make install`. After the site is assembled, which leaves
+      # `node_modules` out: the static twin stays the page without them.
+      - name: The page's optional dependencies
+        working-directory: web
+        run: npm ci
+
       - name: Smoke-test the gate against a live server
         working-directory: tests/smoke
         env:

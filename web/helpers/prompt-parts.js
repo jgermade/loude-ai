@@ -114,6 +114,31 @@ export function group(painted) {
     }))
 }
 
+/// [`group`]'s groups with the native transport's tool specs added as the
+/// `tools` group, one entry per tool: its name and description, then its
+/// parameters. `specs` is the request's `tools` field as the trace sent it —
+/// OpenAI's `[{ type: "function", function: { name, description, parameters
+/// } }]`. Under the fenced transport the tools are in the prompt and there are
+/// no specs, so the groups come back as they were; specs that do not parse are
+/// shown as sent rather than dropped.
+export function withSpecs(groups, specs) {
+  if (!specs || groups.some(g => g.bucket === "tools")) return groups
+  let entries
+  try {
+    entries = JSON.parse(specs).map(spec => {
+      const { name, description, parameters } = spec.function || spec
+      const head = description ? `${name} — ${description}` : String(name)
+      return { role: "tools", text: `${head}\n${JSON.stringify(parameters ?? {}, null, 2)}` }
+    })
+  } catch {
+    entries = [{ role: "tools", text: specs }]
+  }
+  const tools = { bucket: "tools", entries, native: true }
+  const order = ORDER.indexOf("tools")
+  const at = groups.findIndex(g => ORDER.indexOf(g.bucket) > order)
+  return at < 0 ? [...groups, tools] : [...groups.slice(0, at), tools, ...groups.slice(at)]
+}
+
 /// The prompt as sent, cut at the role markers the renderer wrote
 /// (`<|System|>`, `<|User|>`, `<|Assistant|>`). A prompt with no markers —
 /// another renderer — is one block.

@@ -47,86 +47,110 @@ export function ensureMonaco() {
       amd.config({ paths: { vs: "./vendor/monaco" } })
       await new Promise(done => amd(["vs/editor/editor.main"], done))
       defineThemes(window.monaco)
+      defineLanguages(window.monaco)
       return window.monaco
     })().catch(() => null)
   }
   return loading
 }
 
-/// Two themes built from this page's own tokens, read off the live stylesheet
-/// rather than written out again here.
-///
-/// The same rule the highlighter follows: the capture names map to the page's
-/// palette, so the viewer follows the light/dark toggle without acquiring a
-/// second theme system. A Monaco that shipped its own would be the one thing on
-/// the page that did not change with the toggle.
-function tokenOf(name, fallback) {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-  // Monaco wants `rrggbb` with no `#`, and refuses anything else.
-  const hex = value.replace("#", "")
-  return /^[0-9a-fA-F]{6}$/.test(hex) ? hex : fallback
-}
-
+/// Monokai in its two tones, the ones `app.css` draws this page's viewer and a
+/// reply's snippets in: Sublime Text 3's own on its dark ground, and the same
+/// hues darkened to read at 5:1 on white. Written out rather than read off the
+/// stylesheet, because Monaco wants them before anything is on screen and
+/// they are fixed colours, not the page's.
 function defineThemes(monaco) {
-  for (const [name, base] of [["luu-dark", "vs-dark"], ["luu-light", "vs"]]) {
-    monaco.editor.defineTheme(name, {
-      base,
-      inherit: true,
-      rules: [
-        { token: "keyword", foreground: tokenOf("--hl-keyword", "bb9af7") },
-        { token: "string", foreground: tokenOf("--hl-string", "9ece6a") },
-        { token: "comment", foreground: tokenOf("--hl-comment", "6b7487"), fontStyle: "italic" },
-        { token: "number", foreground: tokenOf("--hl-number", "ff9e64") },
-        { token: "type", foreground: tokenOf("--hl-type", "2ac3de") },
-        { token: "tag", foreground: tokenOf("--hl-tag", "f7768e") },
-        { token: "attribute.name", foreground: tokenOf("--hl-attribute", "e0af68") },
-      ],
-      colors: {
-        "editor.background": `#${tokenOf("--bg", "14161a")}`,
-        "editor.foreground": `#${tokenOf("--fg", "e6e8ec")}`,
-        "editorLineNumber.foreground": `#${tokenOf("--dim", "98a0ad")}`,
-        "editorGutter.background": `#${tokenOf("--bg", "14161a")}`,
-      },
-    })
-  }
-  // Monokai as Sublime Text 3 ships it, for the `code` preference. Written out
-  // rather than read off the stylesheet, because it is the one set of colours
-  // that is not the page's.
-  monaco.editor.defineTheme("luu-monokai", {
-    base: "vs-dark",
+  const tone = ({ base, ground, ink, gutter, line, selection, red, yellow, grey, purple, green, blue }) => ({
+    base,
     inherit: true,
     rules: [
-      { token: "", foreground: "f8f8f2" },
-      { token: "keyword", foreground: "f92672" },
-      { token: "operator", foreground: "f92672" },
-      { token: "tag", foreground: "f92672" },
-      { token: "string", foreground: "e6db74" },
-      { token: "attribute.value", foreground: "e6db74" },
-      { token: "comment", foreground: "75715e", fontStyle: "italic" },
-      { token: "number", foreground: "ae81ff" },
-      { token: "constant", foreground: "ae81ff" },
-      { token: "type", foreground: "66d9ef", fontStyle: "italic" },
-      { token: "attribute.name", foreground: "a6e22e" },
-      { token: "delimiter", foreground: "f8f8f2" },
+      { token: "", foreground: ink },
+      { token: "keyword", foreground: red },
+      { token: "operator", foreground: red },
+      { token: "tag", foreground: red },
+      { token: "string", foreground: yellow },
+      { token: "attribute.value", foreground: yellow },
+      { token: "comment", foreground: grey, fontStyle: "italic" },
+      { token: "number", foreground: purple },
+      { token: "constant", foreground: purple },
+      { token: "type", foreground: blue, fontStyle: "italic" },
+      { token: "attribute.name", foreground: green },
+      { token: "function", foreground: green },
+      { token: "delimiter", foreground: ink },
     ],
     colors: {
-      "editor.background": "#272822",
-      "editor.foreground": "#f8f8f2",
-      "editor.lineHighlightBackground": "#3e3d32",
-      "editor.selectionBackground": "#49483e",
-      "editorCursor.foreground": "#f8f8f0",
-      "editorLineNumber.foreground": "#90908a",
-      "editorGutter.background": "#272822",
-      "editorIndentGuide.background": "#464741",
-      "editorWhitespace.foreground": "#3b3a32",
+      "editor.background": `#${ground}`,
+      "editor.foreground": `#${ink}`,
+      "editor.lineHighlightBackground": `#${line}`,
+      "editor.selectionBackground": `#${selection}`,
+      "editorCursor.foreground": `#${ink}`,
+      "editorLineNumber.foreground": `#${gutter}`,
+      "editorGutter.background": `#${ground}`,
     },
   })
+  monaco.editor.defineTheme("luu-monokai", tone({
+    base: "vs-dark", ground: "111111", ink: "f8f8f2", gutter: "90908a", line: "3e3d32", selection: "49483e",
+    red: "f92672", yellow: "e6db74", grey: "75715e", purple: "ae81ff", green: "a6e22e", blue: "66d9ef",
+  }))
+  monaco.editor.defineTheme("luu-monokai-light", tone({
+    base: "vs", ground: "ffffff", ink: "1a1d23", gutter: "7c8088", line: "f4f4ee", selection: "e6e4d4",
+    red: "dc0653", yellow: "7a7016", grey: "736f5d", purple: "8541ff", green: "577a11", blue: "0f7a8e",
+  }))
 }
 
 /// The server's own language names, which are `crate::highlight`'s, mapped to
 /// Monaco's. Only where the two disagree — everything else is already the same
 /// word, and a table that restated the agreements would be a table that drifts.
-const LANGUAGES = { tsx: "typescript", bash: "shell" }
+const LANGUAGES = { tsx: "typescript", bash: "shell", make: "makefile" }
+
+/// The two languages `crate::highlight` colours and Monaco ships nothing for:
+/// TOML and Make. Small Monarch grammars, emitting the token names the two
+/// Monokai themes above already colour — so a key reads like an attribute, a
+/// table header like a type, a target like a function — and nothing more: the
+/// viewer is read-only, and this is colour, not a language service.
+function defineLanguages(monaco) {
+  monaco.languages.register({ id: "toml", extensions: [".toml"] })
+  monaco.languages.setMonarchTokensProvider("toml", {
+    tokenizer: {
+      root: [
+        [/#.*$/, "comment"],
+        [/^\s*\[\[?[^\]]*\]\]?/, "type"],
+        [/[A-Za-z0-9_\-.]+(?=\s*=)/, "attribute.name"],
+        [/"""/, "string", "@basic"],
+        [/'\'\'/, "string", "@literal"],
+        [/"([^"\\]|\\.)*"/, "string"],
+        [/'[^']*'/, "string"],
+        [/\b(true|false)\b/, "keyword"],
+        [/\d{4}-\d{2}-\d{2}([T ][\d:.]+)?(Z|[+-]\d{2}:\d{2})?/, "number"],
+        [/[+-]?(0x[\da-fA-F_]+|0o[0-7_]+|0b[01_]+|\d[\d_]*(\.\d[\d_]*)?([eE][+-]?\d+)?|inf|nan)\b/, "number"],
+        [/[=,{}\[\]]/, "delimiter"],
+      ],
+      basic: [[/"""/, "string", "@pop"], [/[^"]+|"/, "string"]],
+      literal: [[/'\'\'/, "string", "@pop"], [/[^']+|'/, "string"]],
+    },
+  })
+  monaco.languages.register({ id: "makefile", filenames: ["Makefile", "makefile", "GNUmakefile"], extensions: [".mk"] })
+  monaco.languages.setMonarchTokensProvider("makefile", {
+    tokenizer: {
+      root: [
+        [/#.*$/, "comment"],
+        [/^(ifeq|ifneq|ifdef|ifndef|else|endif|include|-include|sinclude|define|endef|export|unexport|override|vpath)\b/, "keyword"],
+        [/^\s*\.?[A-Za-z_][\w.]*(?=\s*(::=|:=|\?=|\+=|!=|=))/, "attribute.name"],
+        [/^\.[A-Z]+(?=\s*:)/, "keyword"],
+        [/^[^\s:#=][^:#=]*?(?=\s*::?(?!=))/, "function"],
+
+        [/\$\(|\$\{/, "constant", "@reference"],
+        [/\$[@<^+*?%$]/, "constant"],
+        [/"([^"\\]|\\.)*"|'[^']*'/, "string"],
+      ],
+      reference: [
+        [/[)}]/, "constant", "@pop"],
+        [/\$\(|\$\{/, "constant", "@push"],
+        [/[^)}$]+/, "constant"],
+      ],
+    },
+  })
+}
 
 let editor = null
 let attachedTo = null
@@ -139,10 +163,10 @@ let paintedPath = null
 /// half, and a tab switch that disposed and rebuilt it would spend that cost
 /// every time. `attachedTo` is the host it was built into, because the host
 /// element is recreated whenever the column's body re-renders.
-export async function paint(host, { text, language, dark, code, path }) {
+export async function paint(host, { text, language, tone, path }) {
   const monaco = await ensureMonaco()
   if (!monaco || !host) return false
-  const theme = code === "monokai" ? "luu-monokai" : dark ? "luu-dark" : "luu-light"
+  const theme = tone === "light" ? "luu-monokai-light" : "luu-monokai"
   if (editor && attachedTo !== host) {
     editor.dispose()
     editor = null

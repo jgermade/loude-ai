@@ -4,7 +4,7 @@
   // which editor draws a file are facts about the screen somebody is reading
   // from, and one server answers two people on two machines. See
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
-  const { prefs, setTheme, setEditor, setCode, setLayout, monacoAvailable } =
+  const { prefs, setEditor, setEditorTone, setSnippetTone, setLayout, monacoAvailable } =
     await import("@web/lib/prefs.js")
   const { workspace, openPicker, loadIconTheme, saveIconTheme, importIconTheme } =
     await import("@web/lib/workspace.js")
@@ -58,14 +58,9 @@
     event.target.value = ""
   }
 
-  const THEMES = [
-    { value: "auto", label: "Auto" },
-    { value: "light", label: "Light" },
+  const TONES = [
     { value: "dark", label: "Dark" },
-  ]
-  const CODES = [
-    { value: "page", label: "This page" },
-    { value: "monokai", label: "Monokai" },
+    { value: "light", label: "Light" },
   ]
   const LAYOUTS = [
     { value: "responsive", label: "Responsive" },
@@ -84,24 +79,11 @@
   ]
 </script>
 
-<h3>Theme</h3>
-<dl class="settings">
-  <dt>Appearance</dt>
-  <dd>
-    <Segmented :options="THEMES" :model="prefs.theme" @change="setTheme($event.detail)" />
-  </dd>
-  <dd class="note">
-    <b>Auto</b> follows this machine, live — no reload. <b>Dark</b> is what a
-    browser with nothing remembered gets, and stays so on purpose: every
-    screenshot in this repository was taken against it.
-  </dd>
-</dl>
-
 <h3>Editor</h3>
 <dl class="settings">
   <dt>Files are drawn by</dt>
   <dd>
-    <Segmented :options="editors" :model="prefs.editor" @change="setEditor($event.detail)" />
+    <Segmented label="Files are drawn by" :options="editors" :model="prefs.editor" @change="setEditor($event.detail)" />
   </dd>
   <dd :if="monacoHere === false" class="caveat">
     Monaco is not installed. It is a node dependency of
@@ -115,15 +97,19 @@
     Ctrl+F. Monaco is here for what it can do that the other cannot — folding,
     and jumping to a symbol.
   </dd>
-  <dt>Colours</dt>
+  <dt>Editor colours</dt>
   <dd>
-    <Segmented :options="CODES" :model="prefs.code" @change="setCode($event.detail)" />
+    <Segmented label="Editor colours" :options="TONES" :model="prefs.editorTone" @change="setEditorTone($event.detail)" />
+  </dd>
+  <dt>Snippet colours</dt>
+  <dd>
+    <Segmented label="Snippet colours" :options="TONES" :model="prefs.snippetTone" @change="setSnippetTone($event.detail)" />
   </dd>
   <dd class="note">
-    <b>This page</b> draws code in the page's own palette and follows the
-    theme above. <b>Monokai</b> is Sublime Text 3's, on its own dark ground,
-    so it reads the same on a light page. Either way it applies to this
-    page's viewer and to Monaco.
+    Code is drawn in Sublime Text 3's <b>Monokai</b>: <b>Dark</b> is its own,
+    on its dark ground; <b>Light</b> is the same hues darkened to read on
+    white. The editor is this page's viewer and Monaco alike; snippets are the
+    code blocks in the chat's replies.
   </dd>
 </dl>
 
@@ -131,7 +117,7 @@
 <dl class="settings">
   <dt>Columns</dt>
   <dd>
-    <Segmented :options="LAYOUTS" :model="prefs.layout" @change="setLayout($event.detail)" />
+    <Segmented label="Columns" :options="LAYOUTS" :model="prefs.layout" @change="setLayout($event.detail)" />
   </dd>
   <dd class="note">
     <b>Responsive</b> is three columns — inspector, content, chat — above

@@ -23,6 +23,13 @@
   $: percent = limit ? Math.round((sent / limit) * 100) : null
   $: turn = state.history.length ? state.history[state.history.length - 1].turn : null
   $: asked = [...state.messages].reverse().find(m => m.role === "user")?.text || ""
+  // The reply to that prompt, streaming or done: the one thing the context as
+  // it stands has that the prompt it was measured from cannot.
+  const replyTo = (messages, turn) => {
+    const last = messages[messages.length - 1]
+    return last?.role === "assistant" && (turn === null || last.turn === turn) ? last.text || "" : ""
+  }
+  $: answer = replyTo(state.messages, turn)
   $: notes = [state.settings?.authority?.draft?.text, state.settings?.authority?.plan?.text].filter(Boolean)
 </script>
 
@@ -49,9 +56,10 @@
       Nothing has been sent in this session yet. The context is measured when a
       turn is built, so it is here from the first prompt on.
     </p>
-    <ContextView :if="state.budget" :prompt="state.prompt || ''" :budget="state.budget"
+    <ContextView :if="state.budget" :prompt="state.prompt || ''" :toolSpecs="state.toolSpecs || ''"
+                 :budget="state.budget"
                  :asked="asked" :extraCalls="state.extraCalls || []" :notes="notes"
-                 :window="state.settings?.window || null" />
+                 :window="state.settings?.window || null" :answer="answer" />
   </section>
 </Modal>
 

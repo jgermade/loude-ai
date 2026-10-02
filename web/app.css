@@ -3,24 +3,44 @@
    arrived by making dark the special case would quietly reinterpret all of
    them. Light is a `[data-theme="light"]` override, set from the preferences
    menu and remembered in `localStorage` — see
-   RECORD/2026-09-15.a-three-pane-inspector.completed.md. */
-:root {
+   RECORD/2026-09-15.a-three-pane-inspector.completed.md.
+   **The dark theme is off for now**: `prefs.js` always sets light, and this
+   block is what the dark heads and feet are drawn with.
+   The ground is #111111, the editor's, and every other dark grey is that
+   neutral a step up or down — no blue cast under the code. The pastels stay:
+   they were picked against a near-black and still clear 4.5:1 on this one.
+   The columns' heads and feet are dark in **both** themes: under light they
+   take this whole block, not only its `--panel`, so everything inside a bar —
+   its text, its tabs, the composer, a dropup opened from it — is drawn with
+   the dark ink that belongs on that ground. The terminal panel is dark the
+   same way: a shell's colours are written for a dark ground. And so are the
+   editor and a reply's snippets when their tone is dark (Settings → General):
+   Monokai's own colours, and everything around them in the dark ink. Custom properties inherit, so
+   setting them on the bar is enough. */
+:root,
+:root[data-theme="light"] :is(.col-head, .col-foot, .modal-head, .terminal),
+:root[data-editor-tone="dark"] .col.content,
+:root[data-snippet-tone="dark"] .snippet {
   /* One number for every column head and every column foot on the page. The
      chat's foot is twice it, and that is the only exception — see
      RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md. */
   --chrome-h: 40px;
-  --bg: #14161a;
-  --panel: #1b1e24;
-  --line: #2b3038;
-  --fg: #e6e8ec;
-  --dim: #98a0ad;
+  --bg: #111111;
+  /* The bars' ground: the columns' heads and feet, a modal's head. Its own
+     name because the light theme re-points `--panel` on the root and not
+     this, so the root can be painted with it — see `html` below. */
+  --bar: #191919;
+  --panel: var(--bar);
+  --line: #2c2c2c;
+  --fg: #e6e6e6;
+  --dim: #9e9e9e;
   --accent: #7aa2f7;
   --warn: #e0af68;
   --bad: #f7768e;
   /* Text on an accent-filled button. A token rather than a literal because it
      is the one colour that has to move *against* the theme: dark ink on a
      light-blue button, light ink on a dark-blue one. */
-  --on-accent: #10131a;
+  --on-accent: #111111;
   /* A **selected row in a list**, which is not the same thing as a pressed
      control. A control that is on says so with the accent filled in and
      `--on-accent` over it; a row in the file tree or the git panel is content
@@ -32,14 +52,14 @@
      a near-white bar on a dark rail, a near-black one on a white rail. A tint
      of the accent over `--panel` — 18% here, 12% there, the dark side needing
      more to register — lands just off the panel instead. Measured, panel = 1:
-     hover 1.08, selected 1.38, both 1.61 on dark; 1.09, 1.19, 1.30 on light.
+     hover 1.09, selected 1.37, both 1.61 on dark; 1.09, 1.19, 1.30 on light.
      Small on purpose, monotone, and all four states distinct. */
-  --selected: #2c364a;
-  --selected-hover: #34405b;
+  --selected: #2a3241;
+  --selected-hover: #323d53;
   /* Wells — a bar's groove, a `pre`'s ground: below the page, not on it. */
-  --sunken: #0e1014;
+  --sunken: #0a0a0a;
   /* Raised-but-quiet blocks: a panel that is about another turn, a fold. */
-  --raised: #12151a;
+  --raised: #0e0e0e;
   /* The ground under anything bordered in `--warn`: the gate, a refusal. */
   --warn-bg: #1a1712;
   /* One colour per bucket, so a bar and its legend agree. Named after the
@@ -59,39 +79,41 @@
   --b-summaries: #5c7f45;
   --b-code: #bb9af7;
   --b-prompt: #e0af68;
-  --b-reserve: #3b4048;
-  /* Syntax highlighting. Deliberately the page's own palette rather than a
-     second theme system: the viewer follows the light/dark toggle for free,
-     and there is one set of colours to argue about. The capture names are
+  --b-reserve: #3a3a3a;
+  /* Syntax highlighting: Monokai, as Sublime Text 3 ships it, on its own
+     ground — the dark tone of the code, wherever this block applies (the
+     editor and a snippet set to dark take it whole). The capture names are
      `crate::highlight`'s NAMES. */
-  --hl-keyword: #bb9af7;
-  --hl-string: #9ece6a;
-  --hl-comment: #6b7487;
-  --hl-number: #ff9e64;
-  --hl-function: #7aa2f7;
-  --hl-type: #2ac3de;
-  --hl-constant: #ff9e64;
-  --hl-variable: #e6e8ec;
-  --hl-property: #73daca;
-  --hl-operator: #89ddff;
-  --hl-punctuation: #8b93a3;
-  --hl-attribute: #e0af68;
-  --hl-tag: #f7768e;
-  --hl-constructor: #2ac3de;
-  /* Markdown's: prose rather than code. */
-  --hl-heading: #7aa2f7;
-  --hl-literal: #9ece6a;
-  --hl-link: #73daca;
+  --code-ground: #111111;
+  --code-ink: #f8f8f2;
+  --code-gutter: #90908a;
+  --hl-keyword: #f92672;
+  --hl-operator: #f92672;
+  --hl-tag: #f92672;
+  --hl-string: #e6db74;
+  --hl-literal: #e6db74;
+  --hl-comment: #75715e;
+  --hl-number: #ae81ff;
+  --hl-constant: #ae81ff;
+  --hl-function: #a6e22e;
+  --hl-attribute: #a6e22e;
+  --hl-heading: #a6e22e;
+  --hl-type: #66d9ef;
+  --hl-constructor: #66d9ef;
+  --hl-link: #66d9ef;
+  --hl-variable: #f8f8f2;
+  --hl-property: #f8f8f2;
+  --hl-punctuation: #f8f8f2;
   color-scheme: dark;
 }
 
 /* The same names, re-pointed. Every bucket colour darkens: the dark palette's
-   pastels are legible on #14161a and wash out on white, and a legend whose
+   pastels are legible on #111111 and wash out on white, and a legend whose
    swatch cannot be told from its neighbour is not a legend. */
 :root[data-theme="light"] {
   --bg: #f4f5f8;
   --panel: #ffffff;
-  --line: #d7dbe2;
+  --line: #c8c8c8;
   --fg: #1a1d23;
   --dim: #5b6472;
   --accent: #2f5bbd;
@@ -112,25 +134,79 @@
   --b-code: #6f3fb5;
   --b-prompt: #8a5d12;
   --b-reserve: #c3c9d3;
-  --hl-keyword: #7a29b8;
-  --hl-string: #35701a;
-  --hl-comment: #6b7280;
-  --hl-number: #a04a06;
-  --hl-function: #2f5bbd;
-  --hl-type: #06697d;
-  --hl-constant: #a04a06;
-  --hl-variable: #1a1d23;
-  --hl-property: #0b6b5e;
-  --hl-operator: #0d5f86;
-  --hl-punctuation: #6b7280;
-  --hl-attribute: #8a5d12;
-  --hl-tag: #b8253f;
-  --hl-constructor: #06697d;
-  --hl-heading: #2f5bbd;
-  --hl-literal: #35701a;
-  --hl-link: #0b6b5e;
+  /* Monokai's light tone: the same hues darkened until each reads at 5:1 on
+     white, and its near-white foreground the page's ink. */
+  --code-ground: #ffffff;
+  --code-ink: #1a1d23;
+  --code-gutter: #7c8088;
+  --hl-keyword: #dc0653;
+  --hl-operator: #dc0653;
+  --hl-tag: #dc0653;
+  --hl-string: #7a7016;
+  --hl-literal: #7a7016;
+  --hl-comment: #736f5d;
+  --hl-number: #8541ff;
+  --hl-constant: #8541ff;
+  --hl-function: #577a11;
+  --hl-attribute: #577a11;
+  --hl-heading: #577a11;
+  --hl-type: #0f7a8e;
+  --hl-constructor: #0f7a8e;
+  --hl-link: #0f7a8e;
+  --hl-variable: var(--code-ink);
+  --hl-property: var(--code-ink);
+  --hl-punctuation: var(--code-ink);
   color-scheme: light;
 }
+
+/* The page's own greys, light theme only for now: on the root alone, so the
+   dark heads and feet do not take them. The dividers between the columns and
+   their resize handles are dark; the inspector's ground is a light grey and
+   the chat's a slightly darker one. The chat carries its own inks, darker
+   than the page's and fully saturated, for 7:1 rather than 4.5:1: each clears
+   7.2:1 on #dddddd (the text itself 13.7:1) and more on the white of a card
+   inside it. A modal is the inspector's grey with a dark head, like the
+   columns', a white foot, and — in Settings — a side menu in the chat's grey.
+   Borders are neutral greys to match: `--line` between light surfaces,
+   `--chat-line` on the chat's grey, `--divider` where a column or a modal
+   ends. */
+:root {
+  --divider: #3a3a3a;
+  --tree-bg: #ededed;
+  --chat-bg: #dddddd;
+  --chat-fg: #111317;
+  --chat-dim: #3a414c;
+  --chat-accent: #0035b2;
+  --chat-warn: #613e00;
+  --chat-bad: #8f0018;
+  --chat-ok: #244c00;
+  /* Borders on the chat's grey: the page's line vanishes on it. A hover there
+     is a lighter grey, as it is on the tree's. */
+  --chat-line: #a8a8a8;
+  --chat-hover: #ececec;
+}
+
+/* The chat's ground, and its inks re-pointed for it. A bar inside sets its own
+   tokens, so the chat's head and foot keep theirs. Settings' side menu is the
+   same ground, so it is the same rule. */
+.col.chat, .rail-col {
+  background: var(--chat-bg);
+  color: var(--chat-fg);
+  --line: var(--chat-line);
+  --bg: var(--chat-hover);
+  --fg: var(--chat-fg);
+  --dim: var(--chat-dim);
+  --accent: var(--chat-accent);
+  --warn: var(--chat-warn);
+  --bad: var(--chat-bad);
+  --ok: var(--chat-ok);
+}
+
+/* The page's own ground, under everything: a bounce at the end of any scroller
+   carries on into the page, which is pulled off this. The bars' grey, so the
+   dark heads and feet at the window's edges run on into it rather than off a
+   white one. */
+html { background: var(--bar); }
 
 * { box-sizing: border-box; }
 
@@ -213,6 +289,26 @@ pre {
   overflow-y: auto;
 }
 
+/* A well: the frame and ground of a block of the machine's words, for a
+   `<Scrollable frame="well">` (`components/scrollable.html`) — the ground on
+   the element that does not scroll, so a bounce shows the same ground. */
+.well {
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+/* A `pre` inside a Scrollable is not a scroller of its own: the Scrollable is.
+   Twice the attribute, to outrank a component's own `pre` rule, which keeps
+   its padding, its wrapping and its type. */
+[data-scrollable][data-scrollable] > pre {
+  margin: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  max-height: none;
+  overflow: visible;
+}
+
 /* ---- the words' three volumes -------------------------------------------
    `--dim` is *secondary*, `--warn` is *this may not be what you think*, and
    `--bad` is *this failed*. They are one-word classes used in nine components,
@@ -268,6 +364,16 @@ pre {
    `components/modal.html`. What is here is what goes *in* one: a modal's
    content is its owner's, so its styles are the page's. */
 .modal-body { padding: 1rem; overflow: auto; }
+/* A body with a pinned foot keeps its grey, which moves with it; what a bounce
+   uncovers is the parent's, and the parent is grey above and white below — the
+   top of the content and the white foot at its bottom. Normally covered whole
+   by the head and the body, so seen only past either end. */
+/* A foot on screen: Settings keeps every section it has drawn, hidden, and
+   only the one shown counts. */
+.modal-body:has(.modal-foot:not([aria-hidden="true"] *)) { background: var(--tree-bg); }
+:is(dialog, .sections):has(> .modal-body .modal-foot:not([aria-hidden="true"] *)) {
+  background: linear-gradient(var(--tree-bg) 50%, var(--panel) 50%);
+}
 .modal-body h3 {
   font-size: 13px;
   text-transform: uppercase;
@@ -366,11 +472,14 @@ pre {
    pinned footer for that reason. */
 .modal-foot {
   position: sticky;
-  bottom: 0;
+  bottom: -1rem;
   background: var(--panel);
   border-top: 1px solid var(--line);
-  padding-top: .2rem;
-  margin-top: .8rem;
+  /* Edge to edge and down to the bottom: out over the body's 1rem padding on
+     three sides, so the grey is a band across the modal's foot rather than a
+     block floating inside it. */
+  margin: .8rem -1rem -1rem;
+  padding: .2rem 1rem 0;
 }
 .modal-actions {
   display: flex;
@@ -408,8 +517,11 @@ pre {
   counter-increment: line;
   content: counter(line);
   flex: none;
-  width: 3.5rem;
-  padding-right: .8rem;
+  /* As many digits as the file's last line has (`--digits`, set by
+     `views/editor/rows.js`), a margin on the left and the gap on the right. */
+  box-sizing: content-box;
+  width: calc(var(--digits, 3) * 1ch);
+  padding: 0 .8rem 0 .6rem;
   text-align: right;
   color: var(--dim);
   opacity: .6;
@@ -422,38 +534,13 @@ pre {
 /* One class per capture `crate::highlight` emits. Global rather than scoped to
    the viewer because the chunks are plain `<code>` elements and a future panel
    that shows code should colour it the same way. */
-/* Monokai, as Sublime Text 3 ships it: the code theme somebody chose in
-   Settings → General instead of the page's palette. It is a second set of
-   colours, which the note on the palette above argues against, and it stays
-   opt-in for that reason: the default is still the page's own. It brings its
-   own ground, because its yellow and green are unreadable on the light page. See
-   RECORD/2026-09-28.components-of-our-own.completed.md. */
-:root[data-code-theme="monokai"] {
-  --hl-keyword: #f92672;
-  --hl-operator: #f92672;
-  --hl-tag: #f92672;
-  --hl-string: #e6db74;
-  --hl-literal: #e6db74;
-  --hl-comment: #75715e;
-  --hl-number: #ae81ff;
-  --hl-constant: #ae81ff;
-  --hl-function: #a6e22e;
-  --hl-attribute: #a6e22e;
-  --hl-heading: #a6e22e;
-  --hl-type: #66d9ef;
-  --hl-constructor: #66d9ef;
-  --hl-link: #66d9ef;
-  --hl-variable: #f8f8f2;
-  --hl-property: #f8f8f2;
-  --hl-punctuation: #f8f8f2;
-}
-:root[data-code-theme="monokai"] .col.content .col-main,
-:root[data-code-theme="monokai"] .code-rows {
-  background: #272822;
-  color: #f8f8f2;
-}
-:root[data-code-theme="monokai"] .code-rows li::before { color: #90908a; opacity: 1; }
-:root[data-code-theme="monokai"] .hl-type { font-style: italic; }
+/* Code's ground and gutter, from the tone of where it is: the editor's column
+   (on the column itself, which does not scroll — see `components/
+   scrollable.html` for why the ground goes there) and its rows. */
+.col.content { background: var(--code-ground); }
+.code-rows { background: var(--code-ground); color: var(--code-ink); }
+.code-rows li::before { color: var(--code-gutter); opacity: 1; }
+.hl-type { font-style: italic; }
 
 .hl-keyword { color: var(--hl-keyword); }
 .hl-string { color: var(--hl-string); }

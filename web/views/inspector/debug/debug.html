@@ -9,6 +9,7 @@
   // computed values through three components that each want a different
   // subset of them.
   const { state, panel, selectTurn } = await import("@web/lib/store.js")
+  const Scrollable = await import("@web/components/scrollable.html")
   const { showDebug } = await import("@web/lib/workspace.js")
 
   // The one thing a 20rem rail has never been able to show: a prompt, at the
@@ -245,7 +246,7 @@
       `prompt · turn ${view?.turn ?? 'live'}`,
       view?.prompt)">open →</button>
 </h2>
-<pre :if="view?.prompt">{{ view?.prompt }}</pre>
+<Scrollable :if="view?.prompt" :y="true" frame="well" max="22rem"><pre>{{ view?.prompt }}</pre></Scrollable>
 <p :if="!view?.prompt" class="dim">Nothing sent yet this session.</p>
 
 <style scoped>

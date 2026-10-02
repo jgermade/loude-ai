@@ -49,12 +49,10 @@
     requestAnimationFrame(async () => {
       const host = document.getElementById("monaco-host")
       if (!host) return
-      const dark = document.documentElement.getAttribute("data-theme") !== "light"
       const ok = await paint(host, {
         text: textOf(content.lines),
         language: content.language,
-        dark,
-        code: prefs.code,
+        tone: prefs.editorTone,
         path: content.path,
       })
       if (!ok) monacoBroken = true
@@ -69,7 +67,7 @@
     prefs.editor === "monaco" && monacoHere && !monacoBroken && shown?.kind === "file"
   // Disposed the moment the column stops using it: an editor left attached to a
   // detached element is a leak that only shows up after twenty tab switches.
-  $: attached = monacoing ? draw((prefs.theme, prefs.code, shown)) : (dispose(), "")
+  $: attached = monacoing ? draw((prefs.editorTone, shown)) : (dispose(), "")
 
   // ---- the own viewer ---------------------------------------------------
   //
@@ -103,7 +101,11 @@
     return content.path
   }
 
-  $: rows = filing ? fill(shown) : ""
+  // `shown.lines` is read here, and not only inside `fill`'s frame: under jq79
+  // 0.7.4 an effect that reads `shown` whole was not woken when a re-read
+  // replaced it with an object of the same shape, and the file on screen
+  // stopped following the disk. Reading what changes is the dependency stated.
+  $: rows = filing ? fill(shown, shown.lines) : ""
 </script>
 
 <div :if="!picked" class="placeholder">

@@ -113,7 +113,7 @@
               @input="set('draftText', $event.target.value)"></textarea>
   </dd>
   <dd>
-    <Segmented :options="POSITIONS" :model="draft.draftPosition" :disabled="!editable" />
+    <Segmented label="Draft position" :options="POSITIONS" :model="draft.draftPosition" :disabled="!editable" />
   </dd>
   <dd class="note">
     <b>system</b> appends the note to the cached prefix once — free while the
@@ -130,7 +130,7 @@
               @input="set('planText', $event.target.value)"></textarea>
   </dd>
   <dd>
-    <Segmented :options="POSITIONS" :model="draft.planPosition" :disabled="!editable" />
+    <Segmented label="Plan position" :options="POSITIONS" :model="draft.planPosition" :disabled="!editable" />
   </dd>
 
   <dd class="note caveat">

@@ -29,7 +29,7 @@ test("the page mounts and replays a recording, with nothing in the console", asy
 
   // Mounted at all: the components are fetched at runtime, so a broken path
   // here is an empty page rather than a build failure.
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
 
   // The static twin was found and the page fell back to it. The picker is the
   // signal: it renders only when `state.fixtures` was filled, which only the

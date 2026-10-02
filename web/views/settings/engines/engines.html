@@ -5,6 +5,7 @@
   // See `RECORD/2026-09-28.a-model-server-luu-starts.completed.md`.
   const { loadEngines, saveEngines, startEngine, stopEngine, installEngine, modelLabel } =
     await import("@web/lib/engines.js")
+  const Scrollable = await import("@web/components/scrollable.html")
   const { openStarter } = await import("@web/lib/ui.js")
   const EngineForm = await import("./engine-form.html")
 
@@ -25,20 +26,24 @@
   }
   took(await loadEngines())
 
-  // Polled while this section is on screen, and only then: whether the pane is
-  // still in the document is what says so — jq79 has no unmount hook a timer
-  // could be cleared from.
+  // Polled while this section is on screen, and only then: the timer is
+  // cleared when the section is destroyed (`$destroyed`, since jq79 0.7.4).
+  let timer = null
+  let gone = false
+  $destroyed(() => { gone = true; clearTimeout(timer) })
   const tick = async () => {
+    if (gone) return
     const pane = $self(".engines-pane")
-    if (!pane?.isConnected) return
+    if (!pane) return
     // Mounted with the other sections and hidden behind them while another
     // is chosen: kept ticking, but not asking the server for what nobody sees.
-    if (pane.closest(".section:not(.on)")) return setTimeout(tick, 2000)
+    if (pane.closest(".section:not(.on)")) return void (timer = setTimeout(tick, 2000))
     const result = await loadEngines()
+    if (gone) return
     if (result.ok) view = result.view
-    setTimeout(tick, 2000)
+    timer = setTimeout(tick, 2000)
   }
-  setTimeout(tick, 2000)
+  timer = setTimeout(tick, 2000)
 
   const act = async (label, action) => {
     busy = label
@@ -152,7 +157,7 @@
 
       <dt :if="view.engines[name].status.log.length">Output</dt>
       <dd :if="view.engines[name].status.log.length">
-        <pre class="log">{{ view.engines[name].status.log.join("\n") }}</pre>
+        <Scrollable :y="true" frame="well" max="10rem"><pre class="log">{{ view.engines[name].status.log.join("\n") }}</pre></Scrollable>
       </dd>
     </dl>
   </section>

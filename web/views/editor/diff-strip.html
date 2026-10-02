@@ -1,0 +1,91 @@
+<script :setup>
+  // The open file's changes, as a strip under the content column's head — the
+  // count of lines each side of git has added and taken out — and the way into
+  // the diff modal: the strip is the button. It replaced a diff icon on the
+  // tab, which said *that* the file changed and nothing about how much.
+  //
+  // Drawn only while the active tab is a file git counts as changed (the
+  // owner's `:if`); it pushes the file down rather than covering its top.
+  const { workspace, readDiff } = await import("@web/lib/workspace.js")
+  const { openDiff } = await import("@web/lib/ui.js")
+
+  $: tab = workspace.tabs.find(t => t.id === workspace.active) || null
+  $: path = tab?.path || ""
+  // Git's two columns: the index, then the working tree.
+  $: code = workspace.status[path] || ""
+  $: untracked = code === "??"
+  const sidesOf = code => code === "??" ? [] : [
+    ...(code[0] && code[0] !== " " ? [{ staged: true, name: "staged" }] : []),
+    ...(code[1] && code[1] !== " " ? [{ staged: false, name: "working tree" }] : []),
+  ]
+  $: sides = sidesOf(code)
+
+  // `+`/`−` per side, by path and git's letters, so a click elsewhere is not a
+  // reason to ask git again — jq79 wakes a line that read `workspace` on a
+  // write to any of its fields — and a changed status is. See
+  // `diff-modal.html`, which asks the same way.
+  let counts = {}
+  const counting = (() => {
+    let last = ""
+    return (path, code, sides) => {
+      const asked = `${path}\n${code}`
+      if (!path || asked === last) return asked
+      last = asked
+      Promise.all(sides.map(side => readDiff(path, side.staged).then(diff => {
+        let add = 0
+        let del = 0
+        for (const hunk of diff.hunks || []) {
+          for (const line of hunk.lines) {
+            if (line.kind === "add") add++
+            else if (line.kind === "del") del++
+          }
+        }
+        return [side.name, { add, del }]
+      }, () => [side.name, null]))).then(found => {
+        if (last === asked) counts = Object.fromEntries(found)
+      })
+      return asked
+    }
+  })()
+  $: asked = counting(path, code, sides)
+</script>
+
+<button type="button" class="strip" :title="`Show the changes to ${path} (git diff)`" @click="openDiff(path)">
+  <svg class="ic"><use href="#i-diff"/></svg>
+  <span :if="untracked" class="side">untracked — not in git yet</span>
+  <span :each="side in sides" :key="side.name" class="side">
+    {{ side.name }}
+    <b :if="counts[side.name]" class="add">+{{ counts[side.name].add }}</b>
+    <b :if="counts[side.name]" class="del">−{{ counts[side.name].del }}</b>
+  </span>
+  <span class="open">show the diff</span>
+</button>
+
+<style scoped>
+  /* Across the column, under its head, in the flow: the file below it moves
+     down to make room rather than having its first lines covered. */
+  .strip {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+    flex: none;
+    padding: .3rem .8rem;
+    background: color-mix(in srgb, var(--warn, #b58900) 10%, var(--bg, #fff));
+    color: var(--fg, #1a1d23);
+    border: 0;
+    border-bottom: 1px solid var(--line, #c8c8c8);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .strip:hover { background: color-mix(in srgb, var(--warn, #b58900) 18%, var(--bg, #fff)); }
+  .strip:focus-visible { outline: 2px solid var(--accent, #2f5bbd); outline-offset: -2px; }
+  .ic { width: 14px; height: 14px; color: var(--warn, #b58900); }
+  .side { display: flex; align-items: baseline; gap: .35rem; color: var(--dim, #5b6472); }
+  .add { color: var(--ok, #2e7d32); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .del { color: var(--bad, #c62828); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .open { margin-left: auto; color: var(--accent, #2f5bbd); }
+  .strip:hover .open { text-decoration: underline; }
+</style>

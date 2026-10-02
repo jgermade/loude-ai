@@ -119,7 +119,7 @@
 <dl class="settings" :if="state.resend">
   <dt>Repeat</dt>
   <dd>
-    <Segmented :options="REPEAT" :model="draft.repeat" :disabled="!editable" />
+    <Segmented label="Repeat" :options="REPEAT" :model="draft.repeat" :disabled="!editable" />
   </dd>
   <dd class="note">
     <b>once</b> renders a span in the <b>oldest</b> turn of the window that
@@ -134,7 +134,7 @@
 
   <dt>Prune</dt>
   <dd>
-    <Segmented :options="PRUNE" :model="draft.prune" :disabled="!editable" />
+    <Segmented label="Prune" :options="PRUNE" :model="draft.prune" :disabled="!editable" />
   </dd>
   <dd class="note">
     <b>behind</b> makes the oldest turns give up their code and keep their
@@ -146,7 +146,7 @@
 
   <dt>Results</dt>
   <dd>
-    <Segmented :options="RESULTS" :model="draft.results" :disabled="!editable" />
+    <Segmented label="Results" :options="RESULTS" :model="draft.results" :disabled="!editable" />
   </dd>
   <dd class="note">
     Both replace a tool result behind the prune line with the line that cites

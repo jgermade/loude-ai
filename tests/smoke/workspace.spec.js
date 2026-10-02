@@ -144,11 +144,13 @@ test("the tree and the open file follow the disk", async ({ page }) => {
 })
 
 /**
- * The content column's foot: the file's icon where the language used to be a
- * word, and a button beside the name that shows git's diff in a modal — only
- * while there is one. See `RECORD/2026-10-01.the-foot-names-its-file.completed.md`.
+ * The open file's tab: the file's icon, and a button between the name and the
+ * close that shows git's diff in a modal — only while there is one. The foot
+ * named the file until the tab took it over; see
+ * `RECORD/2026-10-01.the-foot-names-its-file.completed.md`. Then the column's
+ * one foot, which carries the terminal's controls while it is up.
  */
-test("the foot shows a changed file's diff in a modal", async ({ page }) => {
+test("the tab shows a changed file's diff in a modal", async ({ page }) => {
   const work = join(scratch, "work")
   const errors = []
   page.on("pageerror", error => errors.push(`uncaught: ${error.message}`))
@@ -169,17 +171,26 @@ test("the foot shows a changed file's diff in a modal", async ({ page }) => {
     const { showFile } = await import("./lib/workspace.js")
     await showFile("src/foot.txt")
   })
-  const foot = page.locator(".content .col-foot")
-  await expect(foot.locator(".path")).toHaveText("src/foot.txt")
+  const tab = page.locator(".content .tabs.files .tab.on")
+  await expect(tab.locator(".pick")).toHaveAttribute("title", "src/foot.txt")
   // The tree's shape, before the name: this server names no icon theme.
-  await expect(foot.locator('svg.kind use[href="#i-file"]')).toHaveCount(1)
-  const button = foot.locator('button[title="Show the changes (git diff)"]')
-  // Committed and untouched: nothing to show, so no button.
-  await expect(button).toHaveCount(0)
+  await expect(tab.locator('svg.kind use[href="#i-file"]')).toHaveCount(1)
+  // A strip under the content's head, not an icon on the tab: how much each
+  // side of git changed, and the way into the diff.
+  const strip = page.locator(".content .strip")
+  await expect(tab.locator("button.diff")).toHaveCount(0)
+  // Committed and untouched: nothing to show, so no strip.
+  await expect(strip).toHaveCount(0)
 
   writeFileSync(join(work, "src/foot.txt"), "one\nTWO\nthree\n")
-  await expect(button).toHaveCount(1)
-  await button.click()
+  await expect(strip).toContainText("working tree")
+  await expect(strip.locator(".add")).toHaveText("+1")
+  await expect(strip.locator(".del")).toHaveText("−1")
+  // In the flow: the file starts under it, not under the head.
+  const stripBottom = await strip.evaluate(el => el.getBoundingClientRect().bottom)
+  const fileTop = await page.locator(".content .col-main").evaluate(el => el.getBoundingClientRect().top)
+  expect(Math.abs(fileTop - stripBottom)).toBeLessThan(2)
+  await strip.click()
   const modal = page.locator("dialog.modal")
   await expect(modal.locator(".modal-head strong")).toHaveText("src/foot.txt")
   await expect(modal.locator(".line.add")).toContainText("TWO")
@@ -193,28 +204,34 @@ test("the foot shows a changed file's diff in a modal", async ({ page }) => {
   await modal.locator('.which button:has-text("staged")').click()
   await expect(modal.locator(".line.add")).toContainText("TWO")
 
-  await modal.locator(".modal-head button.link", { hasText: "close" }).click()
+  await modal.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(modal).toHaveCount(0)
   // And the file is still what the column shows: the modal was a glance.
-  await expect(foot.locator(".path")).toHaveText("src/foot.txt")
+  await expect(tab.locator(".pick")).toHaveAttribute("title", "src/foot.txt")
 
   // This server runs its tools on the host and is bound on loopback, so the
   // terminal opens here, in the folder the session works in. See
   // `RECORD/2026-10-01.the-terminal-follows-the-session.completed.md`.
+  const foot = page.locator(".content .col-foot")
   const terminal = foot.locator("button.term")
   await expect(terminal).toHaveAttribute("title", "Open a terminal on this machine, where the session runs")
   await terminal.click()
+  await expect(terminal).toHaveClass(/\bon\b/)
   const panel = page.locator(".content .terminal")
-  // Open, on the host, and the picker says so by the runtime's name.
-  await expect(panel.locator('.state.open[data-place="host"]')).toHaveCount(1, { timeout: 15_000 })
-  await expect(panel.locator(".dropup .face")).toHaveText("host")
+  // Open, on the host, and the picker in the foot says so by the runtime's name.
+  await expect(foot.locator('.state.open[data-place="host"]')).toHaveCount(1, { timeout: 15_000 })
+  await expect(foot.locator(".dropup .face")).toHaveText("host")
   await panel.locator(".host").click()
   // Arithmetic, so what is matched is the shell's answer and not the echo.
   await page.keyboard.type("echo AT=$(pwd -P) N=$((40+2))\n")
   const real = execSync("pwd -P", { cwd: work }).toString().trim()
   await expect(panel.locator(".xterm-rows")).toContainText(`AT=${real} N=42`, { timeout: 15_000 })
-  await panel.locator('button[title="End the shell"]').click()
+  // Ended from inside, the one way left to end it, and put away.
+  await page.keyboard.type("exit\n")
+  await expect(foot.locator(".state.ended")).toHaveCount(1, { timeout: 15_000 })
+  await terminal.click()
   await expect(panel).toHaveCount(0)
+  await expect(terminal).not.toHaveClass(/\bon\b/)
 
   expect(errors, "the page logged errors").toEqual([])
 })

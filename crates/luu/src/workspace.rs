@@ -45,6 +45,49 @@ pub struct Entry {
     /// Git's own two-letter status, when it has one — `M`, `??`, `A`, `D`.
     /// `None` is unchanged, which is most of a tree.
     pub status: Option<String>,
+    /// For a directory whose only content is one directory, and so on down:
+    /// that chain, `/`-separated (`vscode`, `b/c`). The page draws it as one
+    /// row, `parent/nested`, the way an editor's compact folders do, and it can
+    /// only do that before the parent is opened if the listing says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub only: Option<String>,
+}
+
+/// How deep a chain of single directories is followed. A tree that nests one
+/// directory in another this many times is a tree nobody reads row by row.
+const ONLY_DEPTH: usize = 8;
+
+/// The single directory `dir` holds, if it holds exactly one entry and that
+/// entry is a directory. `.git` does not count, as in the listing. Stops at the
+/// second entry, so a `target/` costs two reads, not a walk.
+async fn only_dir(dir: &Path) -> Option<String> {
+    let mut reader = tokio::fs::read_dir(dir).await.ok()?;
+    let mut found = None;
+    while let Ok(Some(item)) = reader.next_entry().await {
+        let name = item.file_name().to_string_lossy().into_owned();
+        if name == ".git" {
+            continue;
+        }
+        if found.is_some() || !item.file_type().await.ok()?.is_dir() {
+            return None;
+        }
+        found = Some(name);
+    }
+    found
+}
+
+/// The chain of single directories under `dir`, if there is one.
+async fn only_chain(dir: &Path) -> Option<String> {
+    let mut chain: Vec<String> = Vec::new();
+    let mut at = dir.to_path_buf();
+    while chain.len() < ONLY_DEPTH {
+        let Some(name) = only_dir(&at).await else {
+            break;
+        };
+        at.push(&name);
+        chain.push(name);
+    }
+    (!chain.is_empty()).then(|| chain.join("/"))
 }
 
 /// One directory's children.
@@ -233,9 +276,19 @@ pub async fn tree(sandbox: &Sandbox, relative: &str) -> Result<Tree, Error> {
         Err(error) => (BTreeMap::new(), Some(error.to_string())),
     };
 
+    let mut chains = Vec::with_capacity(listed.len());
+    for (_, is_dir, full) in &listed {
+        chains.push(if *is_dir {
+            only_chain(full).await
+        } else {
+            None
+        });
+    }
+
     let mut entries: Vec<Entry> = listed
         .into_iter()
-        .map(|(name, dir_flag, full)| {
+        .zip(chains)
+        .map(|((name, dir_flag, full), only)| {
             let path = relative_of(sandbox.base(), &full);
             // A directory carries the loudest status under it, so a collapsed
             // tree still shows that something inside changed.
@@ -255,6 +308,7 @@ pub async fn tree(sandbox: &Sandbox, relative: &str) -> Result<Tree, Error> {
                 name,
                 dir: dir_flag,
                 status,
+                only,
             }
         })
         .collect();
@@ -461,10 +515,16 @@ async fn git(base: &Path, args: &[&str]) -> Result<String, Error> {
 
 // ---- following the disk ----------------------------------------------------
 
-/// How long one batch stays open after its first event. A save is several
-/// events (a temp file, a rename, a chmod), and `cargo build` is thousands; the
-/// page wants one answer for each of those, not one per event.
-const BATCH: std::time::Duration = std::time::Duration::from_millis(150);
+/// A batch closes once the disk has been quiet this long — a debounce, not a
+/// fixed window. A save is several events (a temp file, a rename, a chmod), and
+/// `cargo build` is thousands; the page wants one answer for each of those, not
+/// one per event. A fixed 150 ms window after the first event answered a
+/// seven-second build nineteen times.
+const QUIET: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// And closes at this age whatever is still arriving, so a two-minute build
+/// moves the tree every couple of seconds rather than only once it ends.
+const MAX_BATCH: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// More paths than this in one batch and the page is told to re-read what it
 /// has open rather than handed the list: past it, naming each one costs more
@@ -538,22 +598,24 @@ impl Watch {
         })
     }
 
-    /// The next batch: waits for an event, then gathers for [`BATCH`].
-    /// `None` once the watcher has stopped. A batch whose every path was left
-    /// out is not answered — it waits for the next one instead.
+    /// The next batch: waits for an event, then gathers until [`QUIET`] passes
+    /// with none, or the batch is [`MAX_BATCH`] old. `None` once the watcher
+    /// has stopped. A batch whose every path was left out is not answered — it
+    /// waits for the next one instead.
     pub async fn next(&mut self) -> Option<Changes> {
         loop {
             let first = self.events.recv().await?;
             let mut raw = vec![first];
-            let deadline = tokio::time::sleep(BATCH);
-            tokio::pin!(deadline);
+            let cap = tokio::time::sleep(MAX_BATCH);
+            tokio::pin!(cap);
             loop {
                 tokio::select! {
                     more = self.events.recv() => match more {
                         Some(path) => raw.push(path),
                         None => break,
                     },
-                    _ = &mut deadline => break,
+                    _ = tokio::time::sleep(QUIET) => break,
+                    _ = &mut cap => break,
                 }
             }
             let changes = classify(&self.sandbox, &self.canonical, raw);
@@ -607,6 +669,33 @@ fn classify(sandbox: &Sandbox, canonical: &Path, raw: Vec<PathBuf>) -> Changes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A chain of directories that each hold one directory is followed to its
+    /// end, and stops at the first that holds a file or a second entry.
+    #[tokio::test]
+    async fn a_directory_that_only_holds_a_directory_names_the_chain() {
+        let root = std::env::temp_dir().join(format!("luu-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a/b/c/d")).unwrap();
+        std::fs::write(root.join("a/b/c/d/file.rs"), "").unwrap();
+        std::fs::write(root.join("a/b/c/stop.txt"), "").unwrap();
+        std::fs::create_dir_all(root.join("two/x")).unwrap();
+        std::fs::create_dir_all(root.join("two/y")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        std::fs::create_dir_all(root.join("git/.git")).unwrap();
+        std::fs::create_dir_all(root.join("git/inner")).unwrap();
+
+        // `c` holds a file beside `d`, so the chain from `a` ends at `c`.
+        assert_eq!(only_chain(&root.join("a")).await.as_deref(), Some("b/c"));
+        assert_eq!(only_chain(&root.join("two")).await, None);
+        assert_eq!(only_chain(&root.join("empty")).await, None);
+        // `.git` is not content, here as in the listing.
+        assert_eq!(
+            only_chain(&root.join("git")).await.as_deref(),
+            Some("inner")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// The count is the file's, not the payload's, and the two agree exactly
     /// when nothing was cut. Written because the off-by-one is the whole risk:

@@ -259,6 +259,14 @@ pub struct WorkerSpec {
     /// started the session, which is the only answer that leaves the tree the
     /// way it was found.
     pub user: Option<(u32, u32)>,
+    /// `HOME` inside the container: whoever started the session's own, for
+    /// the same reason the base keeps its path. `~` then means one directory
+    /// in a contained run and a host run alike, and a path under it — the
+    /// base, usually — is spelled the same on both sides, in a command and in
+    /// the terminal's prompt. The directory exists in the container, made by
+    /// the runtime as the mount's parent, and is not writable there, which is
+    /// what the `/` it replaces was too.
+    pub home: Option<PathBuf>,
 }
 
 impl WorkerSpec {
@@ -272,6 +280,7 @@ impl WorkerSpec {
             paths: Vec::new(),
             timeout_ms: DEFAULT_TIMEOUT_MS,
             user: current_user(),
+            home: std::env::var_os("HOME").map(PathBuf::from),
         }
     }
 
@@ -313,6 +322,11 @@ impl WorkerSpec {
 
     pub fn with_user(mut self, user: Option<(u32, u32)>) -> Self {
         self.user = user;
+        self
+    }
+
+    pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
+        self.home = home;
         self
     }
 
@@ -425,6 +439,9 @@ impl WorkerSpec {
                 _ => argv.extend(["--user".to_string(), format!("{uid}:{gid}")]),
             }
         }
+        if let Some(home) = &self.home {
+            argv.extend(["-e".to_string(), format!("HOME={}", home.display())]);
+        }
         argv.push(image);
         argv.extend(worker_args("luu".to_string()));
         Ok(argv)
@@ -471,7 +488,8 @@ impl WorkerSpec {
     /// exactly what the worker is held to. `bash` where the image has it,
     /// `sh` where it does not. `TERM` is named because `exec -t` sets a plain
     /// `xterm`, and the page draws 256 colours. `id` is what [`TerminalLine`]
-    /// finds the shell by.
+    /// finds the shell by. The prompt is [`SHELL`]'s, and `LUU_RUNTIME` is the
+    /// host it names.
     pub fn exec_argv(&self, name: &str, id: &str) -> Option<TerminalLine> {
         let mut open = self.exec_prefix()?;
         open.extend([
@@ -481,10 +499,12 @@ impl WorkerSpec {
             "TERM=xterm-256color".to_string(),
             "-e".to_string(),
             format!("LUU_TERMINAL={id}"),
+            "-e".to_string(),
+            format!("LUU_RUNTIME={}", self.runtime),
             name.to_string(),
             "sh".to_string(),
             "-c".to_string(),
-            "command -v bash >/dev/null 2>&1 && exec bash || exec sh".to_string(),
+            SHELL.to_string(),
         ]);
         // `/proc/<pid>/environ` is readable for the worker's own uid, which is
         // every process a terminal started. The script that reads it does not
@@ -505,6 +525,41 @@ impl WorkerSpec {
         Some(TerminalLine { open, end })
     }
 }
+
+/// The line a terminal's shell is started by: `bash` where the image has it,
+/// `sh` where it does not, and in `bash` a prompt that reads like the one
+/// luu's author has in zsh — an empty line to set it off from the output
+/// above, who and where in grey on a line of its own, then the directory in
+/// yellow, the branch on blue with `⚡` when the tree has changes, and `▸`:
+///
+/// ```text
+///
+/// luu@docker
+/// ~/dev/luu  main ⚡  ▸
+/// ```
+///
+/// The `~` is the host's: [`WorkerSpec::home`] is passed in as `HOME`.
+///
+/// The rc comes in on fd 3 rather than as a file, because the container is
+/// not ours to write to. It runs after the image's own `/etc/bash.bashrc` and
+/// `~/.bashrc`, so their aliases stay and only the prompt is replaced. `git`
+/// is asked with `safe.directory=*` because the base is the host's and the
+/// shell runs as whatever uid the run named; a git that refused would only
+/// leave the branch out.
+const SHELL: &str = r#"command -v bash >/dev/null 2>&1 || exec sh
+exec bash --rcfile /dev/fd/3 3<<'RC'
+exec 3<&-
+[ -f ~/.bashrc ] && . ~/.bashrc
+__luu_branch() {
+  local b dirty
+  b=$(git -c safe.directory='*' branch --show-current 2>/dev/null)
+  [ -n "$b" ] || return 0
+  [ -n "$(git -c safe.directory='*' status --porcelain 2>/dev/null)" ] && dirty=' ⚡'
+  printf ' \001\e[44m\002 %s%s \001\e[49m\002' "$b" "$dirty"
+}
+PS1='\n\[\e[90m\]luu@${LUU_RUNTIME:-container}\[\e[39m\]\n\[\e[33m\]\w\[\e[39m\]$(__luu_branch) ▸ '
+RC
+"#;
 
 /// A container name nothing else on this machine is using: one per worker
 /// *start*, not per session, because a replaced worker's container is removed
@@ -537,6 +592,7 @@ mod tests {
         WorkerSpec::new(runtime, "/home/you/project")
             .with_image(Some("luu-worker:dev".into()))
             .with_user(Some((501, 20)))
+            .with_home(Some("/home/you".into()))
     }
 
     #[test]
@@ -558,6 +614,8 @@ mod tests {
                 "none",
                 "--user",
                 "501:20",
+                "-e",
+                "HOME=/home/you",
                 "luu-worker:dev",
                 "luu",
                 "worker",
@@ -656,6 +714,30 @@ mod tests {
     }
 
     #[test]
+    fn the_container_s_home_is_the_host_s_so_a_tilde_means_one_directory() {
+        let argv = spec(Runtime::Docker).argv(&[]).unwrap();
+        assert!(argv.contains(&"HOME=/home/you".to_string()), "{argv:?}");
+        // Said once, at `run`: an `exec` inherits it.
+        let line = spec(Runtime::Docker).exec_argv("n", "1").unwrap();
+        assert!(
+            !line.open.iter().any(|word| word.starts_with("HOME=")),
+            "{:?}",
+            line.open
+        );
+        assert!(
+            line.open.contains(&"LUU_RUNTIME=docker".to_string()),
+            "{:?}",
+            line.open
+        );
+        // No home known, nothing said, and the image's own stands.
+        let none = spec(Runtime::Docker).with_home(None).argv(&[]).unwrap();
+        assert!(
+            !none.iter().any(|word| word.starts_with("HOME=")),
+            "{none:?}"
+        );
+    }
+
+    #[test]
     fn colima_uses_nerdctl_subcommand_with_double_dash() {
         let argv = spec(Runtime::Colima).argv(&["cargo".to_string()]).unwrap();
         assert_eq!(
@@ -676,6 +758,8 @@ mod tests {
                 "none",
                 "--user",
                 "501:20",
+                "-e",
+                "HOME=/home/you",
                 "luu-worker:dev",
                 "luu",
                 "worker",

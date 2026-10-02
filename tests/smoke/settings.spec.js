@@ -153,7 +153,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   // The third section, which the modal's own comment said its shape made free.
@@ -245,7 +245,7 @@ test("the resend rules are chosen from the page, and a save says what it did not
   await expect(page.locator("#sessions-resend .waiting")).toContainText("results:")
   await expect(running.locator("dd").nth(2)).toContainText("cited_reads")
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   expect(errors).toEqual([])
@@ -270,7 +270,7 @@ test("an authority note is written from the page and reaches the live session", 
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
@@ -316,7 +316,7 @@ test("an authority note is written from the page and reaches the live session", 
   const moved = await (await fetch(`${BASE}/api/authority`)).json()
   expect(moved.running.draft.position).toBe("prompt")
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   expect(errors).toEqual([])
@@ -370,7 +370,7 @@ test("an icon theme is imported from a picked folder and drawn at once", async (
   expect(onDisk).toContain("icon-themes/tiny-icons")
   expect(onDisk).toContain("[provider.here]")
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   // Drawn by the tree at once, under the theme's new revision.
   await expect(page.locator(".inspector img").first()).toHaveAttribute("src", /\?r=1$/)
 
@@ -392,7 +392,7 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
@@ -400,13 +400,35 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
 
   // No default in the file: the mock is what this server runs, and the table
   // says so instead of showing nothing chosen.
-  const builtin = page.locator(".modal table.providers tr.builtin")
-  await expect(builtin.locator('input[type="radio"]')).toBeChecked()
-  await expect(builtin.locator(".tag")).toHaveText("running")
+  const builtin = page.locator(".modal ul.providers li.builtin")
+  await expect(builtin.locator(".tag.default")).toHaveCount(1)
+  await expect(builtin.locator(".tag:not(.default)")).toHaveText("running")
 
   await page.locator('.modal button.add:has-text("+ provider")').click()
   const form = page.getByRole("dialog", { name: "Add a provider" })
   await expect(form).toBeVisible()
+  // A child of Settings: no head of its own, hung from the bottom of Settings'
+  // head, and ESC closes it and nothing under it.
+  await expect(form.locator(".modal-head")).toHaveCount(0)
+  await expect(async () => {
+    const head = await page.locator("dialog.modal:not(.child) > .modal-head").boundingBox()
+    const box = await form.boundingBox()
+    expect(Math.abs(box.y - (head.y + head.height))).toBeLessThan(1)
+  }).toPass()
+  await page.keyboard.press("Escape")
+  await expect(form).toHaveCount(0)
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible()
+  // And the parent's head still works over its child: its close button
+  // closes both, where a second modal would have made it inert.
+  await page.locator('.modal button.add:has-text("+ provider")').click()
+  await expect(form).toBeVisible()
+  // The rest of Settings is inert under it, the side menu included.
+  await expect.poll(() => page.locator(".modal .rail").first().evaluate(el => !!el.closest("[inert]"))).toBe(true)
+  await page.getByRole("dialog", { name: "Settings" }).locator(".modal-head button.close").click()
+  await expect(page.locator("dialog.modal")).toHaveCount(0)
+  await page.click('.inspector .col-foot button[title="Settings"]')
+  await page.click('.modal .rail button:has-text("Models")')
+  await page.locator('.modal button.add:has-text("+ provider")').click()
   // A name the table already has is refused before it is sent.
   await form.locator("dd input").first().fill("here")
   await expect(form.locator(".warn")).toContainText("already a provider")
@@ -419,30 +441,55 @@ test("the mock a server fell back to is chosen, and a provider is added in a mod
   await form.locator("button.save").click()
   await expect(form).toHaveCount(0)
 
-  // Written on its own, and in the table without a second save.
+  // Written on its own, and in the list without a second save.
   const onDisk = readFileSync(join(home, "config.toml"), "utf8")
   expect(onDisk).toContain("[provider.local]")
   expect(onDisk).toContain('url = "http://127.0.0.1:8081/v1"')
   expect(onDisk).toContain("[provider.here]")
-  const names = page.locator(".modal table.providers input.w-name")
-  await expect(names).toHaveCount(2)
-  await expect(names.nth(1)).toHaveValue("local")
-  await expect(page.locator(".modal button.save .count")).toHaveCount(0)
+  const names = page.locator(".modal ul.providers li.profile .name")
+  await expect(names).toHaveText(["here", "local"])
+  // The list is read-only: no inputs in it, and nothing to save under it.
+  await expect(page.locator(".modal ul.providers input")).toHaveCount(0)
+  await expect(page.locator(".modal .section.on button.save")).toHaveCount(0)
   // Not asked to be the default, so the mock still is.
-  await expect(builtin.locator('input[type="radio"]')).toBeChecked()
+  await expect(builtin.locator(".tag.default")).toHaveCount(1)
 
-  // A field in the table keeps the focus while it is typed in. Every keystroke
-  // used to rebuild the row, and its input with it, so the second letter went
-  // nowhere.
-  const model = page.locator(".modal table.providers input.w-model").nth(1)
-  await model.click()
-  await page.keyboard.press("End")
-  await page.keyboard.type("-q4")
-  await expect(model).toHaveValue("tiny-q4")
-  await expect(model).toBeFocused()
-  await expect(page.locator(".modal button.save .count")).toHaveText("1")
+  // Edited in its own form, which opens on what the file has.
+  const row = name => page.locator(".modal ul.providers li.profile", { has: page.locator(`.name:text-is("${name}")`) })
+  await row("local").locator("button.edit").click()
+  const edit = page.getByRole("dialog", { name: "Provider local" })
+  await expect(edit).toBeVisible()
+  const model = edit.locator('input[placeholder="qwen2.5-coder:7b"]')
+  await expect(model).toHaveValue("tiny")
+  await model.fill("tiny-q4")
+  await edit.locator("button.save").click()
+  await expect(edit).toHaveCount(0)
+  expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "tiny-q4"')
+  await expect(row("local")).toContainText("tiny-q4")
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  // Renamed, and the old name is gone rather than left beside it; then
+  // removed, asked twice.
+  await page.locator('.modal button.add:has-text("+ provider")').click()
+  const scratch = page.getByRole("dialog", { name: "Add a provider" })
+  await scratch.locator("dd input").first().fill("scratch")
+  await scratch.locator("select.backend").selectOption("mock")
+  await scratch.locator("button.save").click()
+  await expect(scratch).toHaveCount(0)
+  await row("scratch").locator("button.edit").click()
+  const renaming = page.getByRole("dialog", { name: "Provider scratch" })
+  await renaming.locator("dd input").first().fill("scratch2")
+  await renaming.locator("button.save").click()
+  await expect(names).toHaveText(["here", "local", "scratch2"])
+  await row("scratch2").locator("button.edit").click()
+  const removing = page.getByRole("dialog", { name: "Provider scratch2" })
+  await removing.locator("button.remove").click()
+  await expect(removing.locator("button.remove")).toHaveText("Remove scratch2?")
+  await removing.locator("button.remove").click()
+  await expect(removing).toHaveCount(0)
+  await expect(names).toHaveText(["here", "local"])
+  expect(readFileSync(join(home, "config.toml"), "utf8")).not.toContain("scratch")
+
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   expect(errors).toEqual([])
@@ -471,7 +518,7 @@ test("an engine is added with its provider, started, and stopped from Settings",
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   await page.click('.inspector .col-foot button[title="Settings"]')
@@ -514,9 +561,9 @@ test("an engine is added with its provider, started, and stopped from Settings",
 
   // And Models shows the provider as one that starts an engine.
   await page.click('.modal .rail button:has-text("Models")')
-  await expect(page.locator(".modal table.providers .tag", { hasText: "engine" })).toHaveCount(1)
+  await expect(page.locator(".modal ul.providers .tag", { hasText: "engine" })).toHaveCount(1)
 
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
   expect(errors).toEqual([])
 })
@@ -535,7 +582,7 @@ test("a new default and the chat's picker both move the session without a restar
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   // This server was started with no -p and no default: it follows the file.
@@ -545,17 +592,15 @@ test("a new default and the chat's picker both move the session without a restar
 
   await page.click('.inspector .col-foot button[title="Settings"]')
   await page.click('.modal .rail button:has-text("Models")')
-  // The table is in the file's order, which is by name: fake, here, local —
-  // after the built-in mock's row, which has no inputs of its own.
-  const here = page.locator(".modal table.providers tbody tr:not(.builtin)").nth(1)
-  await expect(here.locator("input.w-name")).toHaveValue("here")
-  await here.locator('input[type="radio"]').check()
-  await page.locator(".modal .section.on button.save").click()
+  // The default is the one thing changed from the list, and written at once.
+  const here = page.locator(".modal ul.providers li.profile", { has: page.locator('.name:text-is("here")') })
+  await here.locator('button:has-text("make default")').click()
+  await expect(here.locator(".tag.default")).toHaveCount(1)
   await expect(page.locator(".modal")).toContainText("the live session is on here")
   const after = await (await fetch(`${BASE}/api/settings`)).json()
   expect(after.profile).toBe("here")
   expect(after.follows_default).toBe(true)
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
   await expect(page.locator("dialog.modal")).toHaveCount(0)
 
   // The picker, in two columns: it opens on the session's own provider, with
@@ -605,7 +650,7 @@ test("the models on this machine are listed by where they came from", async ({ p
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   // The engine form offers the two llama.cpp can load, and says why not the third.
@@ -628,7 +673,7 @@ test("the models on this machine are listed by where they came from", async ({ p
   await expect(form).toHaveCount(0)
   expect(readFileSync(join(home, "config.toml"), "utf8")).toContain('model = "ollama:tiny:1b"')
   await expect(page.locator(".engines-pane section.engine", { hasText: "fake" })).toContainText("tiny:1b (ollama)")
-  await page.locator(".modal-head button.link", { hasText: "close" }).click()
+  await page.locator(".modal-head button.close", { hasText: "close" }).click()
 
   // And the chat's picker lists them under the provider that starts it.
   await page.click(".options .dest")
@@ -657,7 +702,7 @@ test("the models on this machine are listed by where they came from", async ({ p
 test("the gate's mode is chosen from a dropup", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE}/index.html`)
-  await expect(page.locator(".col.inspector .logo")).toHaveText("luu")
+  await expect(page.locator(".col.inspector .logo")).toHaveAccessibleName("luu")
   await chooseFolder(page)
 
   const face = page.locator(".options .dropup .face")

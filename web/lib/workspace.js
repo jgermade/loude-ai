@@ -553,6 +553,32 @@ async function changed({ paths = [], git = false, all = false }) {
   else loadDiff(tab, { quiet: true })
 }
 
+/// One batch handled at a time. `changed` awaits its re-reads, and the stream
+/// does not wait for it: a batch that arrives meanwhile is folded into the
+/// next run rather than starting a second set of the same requests beside it.
+let pending = null
+let draining = false
+async function follow(changes) {
+  pending = pending
+    ? {
+        paths: [...new Set([...(pending.paths || []), ...(changes.paths || [])])],
+        git: pending.git || changes.git,
+        all: pending.all || changes.all,
+      }
+    : changes
+  if (draining) return
+  draining = true
+  try {
+    while (pending) {
+      const next = pending
+      pending = null
+      await changed(next)
+    }
+  } finally {
+    draining = false
+  }
+}
+
 /// Calls `each` with every `data:` an event stream carries, until it ends.
 async function readEvents(body, each) {
   const reader = body.pipeThrough(new TextDecoderStream()).getReader()
@@ -599,9 +625,9 @@ export async function watchWorkspace() {
       return
     }
     if (answer?.body) {
-      if (dropped) changed({ all: true })
+      if (dropped) follow({ all: true })
       try {
-        await readEvents(answer.body, changes => { changed(changes) })
+        await readEvents(answer.body, changes => { follow(changes) })
       } catch {
         // Cut mid-stream: the same as ending.
       }

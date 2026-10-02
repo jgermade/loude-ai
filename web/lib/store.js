@@ -36,6 +36,7 @@ export const state = $reactive({
   messages: [],           // { id, turn, role, text, task, reason, usage, evicted, pruned }
   budget: null,           // { limit, counter, buckets: [...], backendPrompt }
   prompt: "",             // the exact string sent to the model, last turn
+  toolSpecs: "",          // the request's `tools` field beside it, native transport only
   sending: null,          // a prompt typed here that the server has not answered yet
   prefix: null,           // { shared_bytes, shared_tokens, prompt_tokens } — null on turn 1
   // This turn's tool calls, in order. A call is pushed before it is checked, so
@@ -536,7 +537,8 @@ function patchKept(turn, patch) {
 function onTrace(message) {
   if (message.type === "prompt") {
     state.prompt = message.text
-    patchKept(message.turn, { prompt: message.text })
+    state.toolSpecs = message.tool_specs || ""
+    patchKept(message.turn, { prompt: message.text, toolSpecs: state.toolSpecs })
   }
   // Absent on the first turn of a session: there is no previous prompt, so the
   // panel says so rather than drawing 0%.
@@ -720,6 +722,7 @@ export function panel() {
     tools: state.tools,
     extraCalls: state.extraCalls,
     prompt: state.prompt,
+    toolSpecs: state.toolSpecs,
     dropped: state.evicted,
     cited: state.pruned,
     usage: null,
@@ -746,6 +749,7 @@ function keepTurn(turn, extra = {}) {
     tools: state.tools,
     extraCalls: state.extraCalls,
     prompt: state.prompt,
+    toolSpecs: state.toolSpecs,
     dropped: state.evicted,
     cited: state.pruned,
     usage: null,
@@ -774,6 +778,7 @@ function fromStored(turn) {
     tools: turn.tools || [],
     extraCalls: turn.extra_calls || [],
     prompt: turn.prompt_sent || "",
+    toolSpecs: turn.tool_specs_sent || "",
     dropped: turn.dropped ? { ...turn.dropped, turn: turn.turn } : null,
     cited: turn.cited ? { ...turn.cited, turn: turn.turn } : null,
     usage: turn.usage || null,
@@ -792,6 +797,7 @@ function reset() {
   state.tools = []
   state.extraCalls = []
   state.prompt = ""
+  state.toolSpecs = ""
   state.prefix = null
   state.error = null
   state.refused = null
@@ -852,6 +858,7 @@ export function send(text) {
   // looked like a composer that had swallowed what was typed.
   state.sending = text
   state.prompt = ""
+  state.toolSpecs = ""
   state.budget = null
   state.tools = []
   state.extraCalls = []
@@ -1225,6 +1232,7 @@ export async function refreshLiveSession() {
         ? { ...newest.budget, backendPrompt: newest.usage?.prompt_tokens ?? null }
         : null
       state.prompt = newest.prompt || ""
+      state.toolSpecs = newest.toolSpecs || ""
       state.prefix = newest.prefix
       state.extraCalls = newest.extraCalls || []
     }
@@ -1253,7 +1261,7 @@ export async function refreshSessionsList() {
 /// machine.
 export async function newSession(choice) {
   const asked =
-    choice && (choice.provider || choice.model || choice.posture) ? choice : null
+    choice && (choice.provider || choice.model || choice.posture || choice.runtime) ? choice : null
   try {
     const res = await fetch("./api/sessions", {
       method: "POST",

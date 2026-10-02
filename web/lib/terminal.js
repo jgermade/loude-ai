@@ -16,6 +16,7 @@
 
 import { $reactive } from "@web/vendor/jq79.js"
 import { apiHeaders, socketUrl, refreshSettings } from "./store.js"
+import { setPlace } from "./prefs.js"
 
 export const terminal = $reactive({
   /// `{ available, place, reason, posture, xterm }` from `/api/terminal`, or
@@ -69,11 +70,24 @@ function xterm() {
   return loaded
 }
 
-/// The page's own colours, so the terminal follows the light/dark toggle.
-function theme() {
-  const css = getComputedStyle(document.documentElement)
+/// The sixteen a shell names, as xterm calls them and as the panel's tokens
+/// do (`--ansi-yellow`, `--ansi-bright-yellow`).
+const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
+
+/// The panel's own colours, read where xterm draws: the panel is dark whatever
+/// the page is (`app.css`), so the page's root is not where to ask. A token
+/// the panel does not set is left out, and xterm keeps its own colour for it.
+function theme(host) {
+  const css = getComputedStyle(host)
   const token = name => css.getPropertyValue(name).trim()
+  const palette = {}
+  for (const name of ANSI) {
+    const bright = `bright${name[0].toUpperCase()}${name.slice(1)}`
+    if (token(`--ansi-${name}`)) palette[name] = token(`--ansi-${name}`)
+    if (token(`--ansi-bright-${name}`)) palette[bright] = token(`--ansi-bright-${name}`)
+  }
   return {
+    ...palette,
     background: token("--bg"),
     foreground: token("--fg"),
     cursor: token("--accent"),
@@ -120,7 +134,7 @@ export async function attach(host) {
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       fontSize: 12,
       cursorBlink: true,
-      theme: theme(),
+      theme: theme(host),
     })
     fit = new FitAddon()
     term.loadAddon(fit)
@@ -129,7 +143,7 @@ export async function attach(host) {
     term.open(host)
     connect()
   } else {
-    term.options.theme = theme()
+    term.options.theme = theme(host)
     if (term.element && term.element.parentElement !== host) host.appendChild(term.element)
   }
   observer?.disconnect()
@@ -189,6 +203,8 @@ export async function moveSession(name, runtime, host) {
     }
     const { moved } = await answer.json()
     if (moved) {
+      // The next session is offered where this one now runs.
+      setPlace(`${name || ""}|${runtime || ""}`)
       endTerminal()
       await refreshSettings()
     }

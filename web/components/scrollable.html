@@ -1,0 +1,100 @@
+<script :setup="{ x = false, y = false, background = '', max = '', frame = '', fill = false, autoscroll = '' }">
+  // Something that scrolls, on a ground that does not.
+  //
+  //     <Scrollable :y="true" frame="well" max="16rem"><pre>…</pre></Scrollable>
+  //
+  // **Two elements because a bounce takes one with it.** Pulled past either
+  // end, a scroller's own background goes with its content — Chrome paints it
+  // on the layer that moves — and what shows in the gap is its parent's. So
+  // the ground is the outer element, which never scrolls, and the inner one
+  // scrolls with no ground of its own: the gap is always the content's colour.
+  //
+  // `x`, `y` — the axes that scroll. `background` — the ground, any CSS value;
+  // without one the ground is the `frame`'s, or whatever is behind. `max` — the
+  // scroller's cap, which is what makes it scroll vertically at all. `frame` —
+  // a global class for the ground's border and corners (`well`, in `app.css`):
+  // the host of a component lays out as `display: contents`, so a class on
+  // `<Scrollable>` itself would reach nothing. `fill` — take the height a flex
+  // column gives it instead of a `max`: the chat's transcript.
+  //
+  // `autoscroll="bottom"` — **follows the end while it is at the end**: when
+  // what is inside grows (a reply streaming in, a fold opening) and the
+  // scroller was at its bottom, it stays at its bottom, so what is new is on
+  // screen. Scrolled up to read something, it stays where it was put, and
+  // scrolling back down to the end picks the following up again. It starts
+  // at the bottom.
+  //
+  // What goes inside is the caller's, and so are its styles — except that a
+  // `pre` in here stops being a scroller of its own (`app.css`), since this is.
+
+  // How close to the end still counts as at it: a fraction of a pixel is
+  // what a zoomed page leaves. It was a line (24px), and a trackpad scrolls a
+  // few pixels an event, so a person scrolling up was still "at the end" and
+  // the next token snapped them back — the scroll felt locked.
+  const SLACK = 2
+  // Keys that mean "up", read as a person leaving the end.
+  const UP = new Set(["ArrowUp", "PageUp", "Home"])
+
+  await $mounted()
+  if (autoscroll === "bottom") {
+    const scroller = $self(".scroller")
+    // Whether it follows. A person turns it off by going up — a wheel, a key,
+    // a finger — at once, before the scroll they started has landed; and back
+    // on by scrolling until they are at the end. Its own scrolls never turn it
+    // off: by the time one lands, more may have arrived below it, and that is
+    // not somebody leaving.
+    let atEnd = true
+    let ours = false
+    const leave = () => { atEnd = false; ours = false }
+    const toEnd = () => {
+      if (!atEnd) return
+      const end = scroller.scrollHeight - scroller.clientHeight
+      if (scroller.scrollTop >= end - SLACK) return
+      ours = true
+      scroller.scrollTop = end
+    }
+    scroller.addEventListener("scroll", () => {
+      const gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+      if (gap <= SLACK) atEnd = true
+      else if (!ours) atEnd = false
+      ours = false
+    }, { passive: true })
+    scroller.addEventListener("wheel", event => { if (event.deltaY < 0) leave() }, { passive: true })
+    scroller.addEventListener("touchstart", leave, { passive: true })
+    scroller.addEventListener("keydown", event => { if (UP.has(event.key)) leave() })
+
+    // Text arriving is a mutation; a child taking more room without one (a
+    // font, highlighting laid out, a fold's animation) is a resize. The
+    // scroller is watched too, because a box that gets shorter — a gate
+    // pinned under it — would otherwise hide the end it was showing.
+    const sizes = new ResizeObserver(toEnd)
+    const watch = () => {
+      sizes.disconnect()
+      sizes.observe(scroller)
+      for (const child of scroller.children) sizes.observe(child)
+    }
+    const changes = new MutationObserver(records => {
+      if (records.some(r => r.type === "childList" && r.target === scroller)) watch()
+      toEnd()
+    })
+    changes.observe(scroller, { childList: true, subtree: true, characterData: true })
+    watch()
+    $destroyed(() => { changes.disconnect(); sizes.disconnect() })
+    requestAnimationFrame(toEnd)
+  }
+</script>
+
+<div class="ground" :class="frame" :class.fill="fill"
+     :style="background ? `background: ${background}` : ''">
+  <div class="scroller" data-scrollable :class.x="x" :class.y="y"
+       :style="max ? `max-height: ${max}` : ''"><slot /></div>
+</div>
+
+<style scoped>
+  .ground { min-width: 0; }
+  .scroller { overflow: hidden; }
+  .scroller.x { overflow-x: auto; }
+  .scroller.y { overflow-y: auto; }
+  .ground.fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .ground.fill > .scroller { flex: 1; min-height: 0; }
+</style>

@@ -1,4 +1,4 @@
-<script :setup="{ options = [], model = '', disabled = false, size = '' }">
+<script :setup="{ options = [], model = '', disabled = false, size = '', label = '' }">
   // A segmented control: a few mutually exclusive answers side by side, with a
   // pill behind the chosen one that slides to the next rather than a fill that
   // jumps. The idea is rare-ui's `gooey-nav`; the code is not.
@@ -13,6 +13,11 @@
   //
   // An option is a string or `{ value, label, disabled, title }`. The choice goes
   // back up through `:model` when the tag binds one, and always as `change`.
+  // `label` names the group for a screen reader.
+  //
+  // The buttons are **one radio group**, not several buttons: Tab stops once, on
+  // the chosen one (or the first that can be chosen), and the arrows, Home and
+  // End move the choice inside the group, as native radios do.
 
   $: items = options.map(o => typeof o === "string" ? { value: o, label: o } : o)
 
@@ -35,10 +40,31 @@
     $emit("change", item.value)
   }
 
+  $: open = disabled ? [] : items.filter(i => !i.disabled)
+  // The one button Tab lands on.
+  $: stop = open.find(i => i.value === model) ?? open[0]
+
+  const STEP = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
+  const key = (e, item) => {
+    if (!open.length) return
+    const i = open.indexOf(item)
+    const next =
+      e.key === "Home" ? open[0] :
+      e.key === "End" ? open[open.length - 1] :
+      e.key in STEP ? open[(i + STEP[e.key] + open.length) % open.length] :
+      null
+    if (!next) return
+    e.preventDefault()
+    choose(next)
+    $self(".seg").querySelectorAll("button")[items.indexOf(next)]?.focus()
+  }
+
   await $mounted()
   // A font arriving or the row wrapping moves every button without the choice
   // changing.
-  new ResizeObserver(() => place()).observe($self(".seg"))
+  const sizes = new ResizeObserver(() => place())
+  sizes.observe($self(".seg"))
+  $destroyed(() => sizes.disconnect())
   // Read `model` and `items` so this re-runs when either does, and measure on
   // the next frame, once the `.on` class has moved.
   $: (model, items, requestAnimationFrame(place))
@@ -47,7 +73,8 @@
     : "display:none"
 </script>
 
-<div class="seg" :class.small="size === 'small'" :class.moving="moving" role="radiogroup">
+<div class="seg" :class.small="size === 'small'" :class.moving="moving" role="radiogroup"
+     :aria-label="label || null" :aria-disabled="disabled ? 'true' : null">
   <span class="pill" :style="pill" aria-hidden="true"></span>
   <button
     :each="item in items"
@@ -55,10 +82,12 @@
     type="button"
     role="radio"
     :aria-checked="item.value === model ? 'true' : 'false'"
+    :tabindex="item === stop ? 0 : -1"
     :class.on="item.value === model"
     :disabled="disabled || item.disabled"
     :title="item.title"
-    @click="choose(item)">{{ item.label }}</button>
+    @click="choose(item)"
+    @keydown="key($event, item)">{{ item.label }}</button>
 </div>
 
 <style scoped>
@@ -84,7 +113,7 @@
   button {
     background: var(--bg, #f4f5f8);
     color: var(--dim, #5b6472);
-    border: 1px solid var(--line, #d7dbe2);
+    border: 1px solid var(--line, #c8c8c8);
     border-radius: 6px;
     font: inherit;
     font-size: 12px;

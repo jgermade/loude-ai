@@ -825,6 +825,13 @@ impl Context {
         &self.tools
     }
 
+    /// The tool specs the request carries beside the prompt, under the native
+    /// transport; `None` when the tools are rendered into the system message
+    /// or there are none.
+    pub fn native_tools(&self) -> Option<&str> {
+        (self.tools_native && !self.tools.is_empty()).then_some(self.tools.as_str())
+    }
+
     /// Adds the repository outline to the prefix, under the tool definitions.
     pub fn with_map(mut self, map: impl Into<String>) -> Self {
         self.map = map.into();
@@ -2786,6 +2793,16 @@ mod tests {
 
         assert!(fenced.messages[0].content.contains("# Tools"));
         assert!(!native.messages[0].content.contains("read_file"));
+        // What the trace carries beside the prompt, so a reader can see what
+        // the tools bucket counted.
+        assert_eq!(
+            Context::new("s")
+                .with_native_tools(r#"[{"name":"read_file"}]"#)
+                .native_tools(),
+            Some(r#"[{"name":"read_file"}]"#)
+        );
+        assert_eq!(Context::new("s").with_tools("# Tools").native_tools(), None);
+        assert_eq!(Context::new("s").with_native_tools("").native_tools(), None);
         assert_eq!(
             native.messages[0].content, "system prompt here\n\n# Repository map\nsrc/lib.rs",
             "the map still follows the system text"
