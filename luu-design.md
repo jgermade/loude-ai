@@ -952,7 +952,14 @@ context manager is actually doing — the CLI can't show a token budget or a pro
 1260px; below it, the inspector and *one* of the other two, with a toggle in that column's own
 head. Which of the two is a person's choice rather than the viewport's, and a click that opens
 something in the content column switches to it, because the click already said which column
-they want. `General → layout` pins the two-column mode at any width. The heads and feet are all
+they want. `General → layout` pins the two-column mode at any width, and the **chat's head
+narrows to two columns for now** without touching that setting — the last button there, and in
+the content's head too while it is on; the swap and that switch are one control in both heads.
+**A phone is three slides** (below 760px): the chat, the inspector and the content, a screen wide
+each, swiped between with CSS scroll snap and the chat first; asking for a column (a file opened,
+the logo) moves to it. See
+[`RECORD/2026-10-02.the-chat-follows-its-end.completed.md`](RECORD/2026-10-02.the-chat-follows-its-end.completed.md)
+and [`RECORD/2026-10-02.a-phone-is-three-slides.completed.md`](RECORD/2026-10-02.a-phone-is-three-slides.completed.md). The heads and feet are all
 40px, one token (`--chrome-h`), with one exception: the chat's foot is two rows, because what
 you are sending and what you are sending it *under* — manual or automatic confirmation, which
 provider and model — are two different questions, and the second was not on the page at all at
@@ -975,16 +982,21 @@ height, so the grid was `calc(100vh - 3rem)` — a magic number that was wrong t
 wrapped. What each 40px carries now: the inspector's head is the `luu` logo (which is a control
 — it means *back to the conversation*) and the panel tabs, its foot the chosen folder, the
 status word and **settings**; the content column's head is one tab per open thing — each with
-its file's icon (the tree's, with the language as its title on the tab on screen) and, between
-the name and the close, a **diff button while git counts it as changed** (a modal, so the file
-stays on screen). The column has **one foot**, at its bottom: what a status bar says about the
+its file's icon (the tree's, with the language as its title on the tab on screen). A file git
+counts as changed has a **strip under the head** — each side's lines added and taken out, `working
+tree +1 −1` — in the flow, so the file starts under it; the strip is the button that opens the diff
+modal, which leaves the file on screen. See
+[`RECORD/2026-10-02.the-tree-folds-single-folders-and-a-strip-says-what-changed.completed.md`](RECORD/2026-10-02.the-tree-folds-single-folders-and-a-strip-says-what-changed.completed.md).
+The column has **one foot**, at its bottom: what a status bar says about the
 open thing (`cut at 512 KB`, a diff's two sides) and at the far right **the terminal**'s
 toggle, lit while it is up. The terminal is a panel, dark whatever the page is, *above* that
 foot, and while it is up the foot carries its controls too (the picker that moves the session,
 named by where each posture runs — `host`, `docker · luu-worker:dev` — with the posture and its
 file under each, and a runtime this machine lacks offered off — and a contained posture offered
 on every container runtime, since they share the image and the argv, while a host posture is
-offered once), holding a shell where the session runs, which hiding does not end and `exit`
+offered once — the same list the session starter offers, and a new session is offered where
+the last one started or was moved to: [`RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md`](RECORD/2026-10-02.where-a-session-runs-is-remembered.completed.md)),
+holding a shell where the session runs, which hiding does not end and `exit`
 does — there is no button for it
 ([`RECORD/2026-10-01.the-foot-names-its-file.completed.md`](RECORD/2026-10-01.the-foot-names-its-file.completed.md)) — and, the way VS Code does it, a single click opens a **preview** tab, in
 italics, that the next single click replaces in place, while a double click (on the row, or on
@@ -994,7 +1006,9 @@ the chat's head is the one head that disappears: below 1260px the second column 
 with the content showing there was no settings button on the page at all.
 
 The inspector switches between the workspace's file tree, its git changes, and the
-context-manager panel that used to be the whole right column. The content column holds **one tab
+context-manager panel that used to be the whole right column. A folder whose only content is a
+folder is **one row, `parent/nested`** — the listing carries the chain as `only` — whose name opens
+the nested folder and whose caret opens the parent. The content column holds **one tab
 per open thing** — a file, a diff, or a block of debug text such as a prompt at the width it was
 written for — so looking at a diff no longer loses the file on screen. A tab holds its identity
 and not its bytes: activating one re-fetches, because the server answers the largest file in
@@ -1079,8 +1093,9 @@ close button: the folder picker on a first visit, which has nothing behind it to
 **A modal opened inside another is its child** — the provider and engine forms over Settings: no
 head of its own, a sheet that comes down out of the parent's head, and an overlay (its own
 `::backdrop`, fitted to the parent's body) over the parent's body only, so the parent's head stays
-lit and says whose form it is. It is still a `showModal()` dialog, so ESC closes the child and
-leaves the parent. **No modal has an id.** The component finds its own `<dialog>` with `$self`, so the store's close
+lit and says whose form it is — and **live**: the child is opened with `show()`, not `showModal()`,
+so the parent stays the modal and its close button closes both; the rest of the parent is made
+`inert`, the overlay is an element of its own, and ESC is caught first and spent on the child. **No modal has an id.** The component finds its own `<dialog>` with `$self`, so the store's close
 functions only clear state and nothing outside a modal names it. **ESC walks a ladder** — a modal
 cancels itself and the page does nothing else on that keypress, then the history popover, a rename
 in progress, an armed delete, and finally, with nothing left to cancel, **the chat**: a chat on
@@ -1096,8 +1111,10 @@ and [`RECORD/2026-10-02.a-modal-inside-a-modal.completed.md`](RECORD/2026-10-02.
 *General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*
 (what this server resolved, then the providers file the next run reads — with the built-in mock
 as a row of its own, chosen when the file names no default, because a server that fell back to
-it used to show a table with nothing chosen; a new provider is a form in a modal that writes that
-one profile and nothing else), *Engines* (the model servers luu starts — see [A model server luu
+it used to show a table with nothing chosen; the providers are a **read-only list**, and each is
+added, edited, renamed or removed in its own form in a modal, which writes that one profile and
+nothing else, at once — the default alone is set from the list; see
+[`RECORD/2026-10-02.providers-in-a-form.completed.md`](RECORD/2026-10-02.providers-in-a-form.completed.md)), *Engines* (the model servers luu starts — see [A model server luu
 starts](#a-model-server-luu-starts)) and *Resend* (the three
 rules that decide how much of the history a turn pays for again). *Resend* is beside *Models* and
 not inside *General* on the same rule that keeps `config.toml` and `localStorage` apart: General
@@ -1344,13 +1361,18 @@ Server stack: `axum` + `tokio`.
 ### UI stack
 
 **[jq79](https://github.com/jgermade/jq79) — single-file, no compiler, zero dependencies.** Vendored at
-`web/vendor/jq79.js`, version 0.7.2, which binds attributes one at a time (`:title="x"`); `:attrs`
-went in 0.7. See
+`web/vendor/jq79.js`, version 0.7.4, with its source map beside it, which binds attributes one
+at a time (`:title="x"`); `:attrs` went in 0.7. See
 [`RECORD/2026-10-01.jq79-0.7.2.completed.md`](RECORD/2026-10-01.jq79-0.7.2.completed.md).
+**0.7.4 keeps a keyed `:each` row that is handed a new object**, re-running its bindings rather
+than rebuilding it, and has an unmount hook (`$destroyed`) that luu's components now end their
+listeners and observers with. luu's lists also keep the objects of rows that did not change
+(`helpers/rows.js`), so a token or an opened folder leaves every other row alone. See
+[`RECORD/2026-10-02.jq79-0.7.4-and-rows-that-stay.completed.md`](RECORD/2026-10-02.jq79-0.7.4-and-rows-that-stay.completed.md).
 **One line in it is luu's, not jq79's**: a bare `.html` specifier (`@web/components/modal.html`)
 is resolved with `import.meta.resolve`, so it goes through the import map the way a `.js` one
-does; 0.7.2 hands it to `fetch`, which never reads one. It goes upstream, and the vendored copy is
-replaced when it lands. See
+does; jq79 hands it to `fetch`, which never reads one. The source map is corrected for that line.
+It goes upstream, and the vendored copy is replaced when it lands. See
 [`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md).
 
 The constraint that decides this is the build pipeline, not the framework's ergonomics. A bundled
@@ -1403,8 +1425,14 @@ The rest follows from that:
   is unknown it reads `1.5k / —` and says why. The turn modal and the context modal carry the
   same partial over total. The indicator reads the newest turn whether it happened live or came
   back from the server, so a reload does not leave it empty. A click opens `context-modal.html`, the same grouped view
-  about that turn, with the window's use, the answer's reserve and what the server counted. See
+  about that turn, with the window's use, the answer's reserve and what the server counted, and
+  the answer to it last, marked as not sent yet. See
   [`RECORD/2026-09-30.the-foot-and-the-turn.completed.md`](RECORD/2026-09-30.the-foot-and-the-turn.completed.md).
+- **The transcript follows its end while it is at its end** (`Scrollable`'s `autoscroll`): any
+  scroll up leaves it at once, and only scrolling back to the end picks it up again. The chat's
+  head copies the conversation as text. An HTML snippet opens as a page in a sandboxed frame,
+  under a policy that keeps it off `http:` and off `fetch`. See
+  [`RECORD/2026-10-02.the-chat-follows-its-end.completed.md`](RECORD/2026-10-02.the-chat-follows-its-end.completed.md).
   **What is sent is on screen at once**, dimmed, until the server's first answer to it
   (`turn_started`, a refusal, a plan at the gate) draws the real thing. It does not wait for
   `turn_started`, because a slow server made that look like a lost message. See
