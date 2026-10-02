@@ -41,7 +41,14 @@ pub use runtime::{Runtime, RuntimeError, TerminalLine, WorkerConfig, WorkerSpec}
 /// numbers, because the one thing in this design that is easiest to leave stale
 /// is an image: the host is a binary someone just built and the worker is
 /// whatever was in the image the last time it was made.
-pub const PROTOCOL: u32 = 1;
+///
+/// **2 is `Authority::Person`**, on the sandbox every call carries. It was not
+/// bumped when the variant landed, and a person's *allow once* reached an image
+/// built that morning as `unknown variant `person`` — three times, each one a
+/// write somebody had approved and nobody got. A stale image is the case this
+/// number exists for; bumped, it is refused at the handshake instead. See
+/// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+pub const PROTOCOL: u32 = 2;
 
 /// One thing the host asks the worker to do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
