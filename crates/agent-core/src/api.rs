@@ -78,6 +78,16 @@ pub struct ToolCallView {
     /// tool and for a recording made before the field existed.
     #[serde(default)]
     pub command: Option<crate::tools::CommandResult>,
+    /// What a person answered when the floor refused this call, if anyone was
+    /// asked. See [`crate::tools::ToolStep::asked`].
+    #[serde(default)]
+    pub asked: Option<bool>,
+    /// While a person is being asked about this call: the floor's rule. Set by
+    /// `call_held`, cleared by the `tool_result` that answers it — so a page
+    /// that reloads in between gets the question back rather than a turn
+    /// waiting on nobody.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<String>,
 }
 
 /// One job as a client browses it. The transcript groups by this, which is
@@ -1173,7 +1183,24 @@ impl SessionView {
                         truncated: false,
                         duration_ms: None,
                         command: None,
+                        asked: None,
+                        held: None,
                     });
+                }
+            }
+            // The question, on the call it is about, until the `tool_result`
+            // that answers it. A session that ended while one was held keeps
+            // a call with a question and no result, which is what it was.
+            ServerMessage::CallHeld {
+                turn,
+                step,
+                refused,
+                ..
+            } => {
+                if let Some(view) = self.turn_mut(*turn)
+                    && let Some(call) = view.tools.iter_mut().find(|call| call.step == *step)
+                {
+                    call.held = Some(refused.clone());
                 }
             }
             ServerMessage::ToolResult {
@@ -1185,6 +1212,7 @@ impl SessionView {
                 truncated,
                 duration_ms,
                 command,
+                asked,
                 ..
             } => {
                 if let Some(view) = self.turn_mut(*turn)
@@ -1196,6 +1224,8 @@ impl SessionView {
                     call.truncated = *truncated;
                     call.duration_ms = Some(*duration_ms);
                     call.command = command.clone();
+                    call.asked = *asked;
+                    call.held = None;
                 }
             }
         }

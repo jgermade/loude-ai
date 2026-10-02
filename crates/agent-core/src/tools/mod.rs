@@ -16,7 +16,7 @@ use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sandbox::{Sandbox, Verdict};
+use crate::sandbox::{Access, Sandbox, Verdict};
 
 pub mod command;
 pub mod fs;
@@ -212,6 +212,13 @@ pub struct ToolStep {
     pub call: ToolCall,
     pub outcome: ToolOutcome,
     pub duration_ms: u64,
+    /// What a person answered when the floor refused this call and the policy
+    /// file would have allowed it: `true` for *allow once*, `false` for *deny*.
+    /// `None` when nobody was asked, which is every call that was not refused
+    /// that way and every step recorded before asking existed. See
+    /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asked: Option<bool>,
 }
 
 impl ToolStep {
@@ -219,6 +226,28 @@ impl ToolStep {
     pub fn result_text(&self) -> String {
         self.outcome.render(&self.call.name)
     }
+}
+
+/// Whether `sandbox` would let `call` write the one path it names — the pure
+/// check that decides if a refused call is worth putting to a person.
+///
+/// `write_file` and `edit_file` and nothing else. Both check the path before
+/// touching anything, which is what makes running one again after a refusal
+/// sound. `run_command` never qualifies: the floor keeps the session's commands,
+/// so it refuses a command's writes at a syscall, where there is no call left
+/// to pause.
+pub fn writes_one_path(call: &ToolCall, sandbox: &Sandbox) -> bool {
+    matches!(call.name.as_str(), "write_file" | "edit_file")
+        && call
+            .arguments
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|path| {
+                sandbox
+                    .check_path(std::path::Path::new(path), Access::ReadWrite)
+                    .verdict
+                    .allowed
+            })
 }
 
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>>;

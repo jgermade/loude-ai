@@ -1044,11 +1044,15 @@
                about what to add rather than a yes to a list. Writes are a
                sentence and not a field: the floor grants none, by construction.
                See
-               `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`. -->
+               `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
+               `asks` is the one exception it admits: a refused write the policy
+               allows is put to a person, once —
+               `RECORD/2026-10-02.a-refused-write-asks.completed.md`. -->
           <p :if="floor" class="dim floor">
             unapproved, a turn reads {{ floor?.reads.length ? floor.reads.join(" · ") : "nothing" }}<span
               :if="floor?.commands.length"> · runs {{ floor?.commands.join(" · ") }}</span><span
-              :if="floor?.network"> · reaches the network</span> — and writes nothing
+              :if="floor?.network"> · reaches the network</span> — and writes nothing<span
+              :if="floor?.asks"> without asking you, one call at a time</span>
           </p>
           <p :if="!declares" class="dim warn">
             <span :if="prose">The planning call answered in prose, so the model

@@ -79,6 +79,77 @@ struct Session {
     /// scope permission is granted at instead of a comment saying it is.
     /// `None` outside a job, where the policy file is the whole answer.
     narrowed: Option<(JobId, Arc<Sandbox>)>,
+    /// A call the floor refused and a person is being asked about — at most
+    /// one, since a turn makes one call at a time and one turn runs. The turn
+    /// is waiting on `answer`; nothing else is. See
+    /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    held: Option<Held>,
+}
+
+/// One call waiting on *allow once* or *deny*.
+struct Held {
+    turn: TurnId,
+    step: u32,
+    answer: tokio::sync::oneshot::Sender<bool>,
+}
+
+/// The person a drafting turn asks, by way of whoever is watching the session.
+///
+/// Publishes [`ServerMessage::CallHeld`] and waits for
+/// [`ClientMessage::AnswerCall`]. A sender dropped without an answer — the
+/// session replaced under it — is a *no*, the answer that leaves things as the
+/// floor left them.
+struct Watching {
+    app: Arc<App>,
+    turn: TurnId,
+    /// The turn's own event channel. The question goes out on it rather than
+    /// straight to `publish`, because the `tool_call` it is about went out on
+    /// it too, and a page that heard the question first had no call to hang it
+    /// on.
+    events: mpsc::Sender<TurnEvent>,
+}
+
+impl agent_core::agent::Asker for Watching {
+    fn ask<'a>(
+        &'a self,
+        step: u32,
+        call: &'a agent_core::tools::ToolCall,
+        refused: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            let (answer, answered) = tokio::sync::oneshot::channel();
+            // Held before it is announced, so an answer can never arrive
+            // for a call the session does not know is waiting.
+            {
+                let mut session = self.app.session.lock().await;
+                session.held = Some(Held {
+                    turn: self.turn,
+                    step,
+                    answer,
+                });
+            }
+            let _ = self
+                .events
+                .send(TurnEvent::CallHeld {
+                    step,
+                    call: call.clone(),
+                    refused: refused.to_string(),
+                })
+                .await;
+            let allow = answered.await.unwrap_or(false);
+            // Cleared here as well as by the answer, so a cancel that won the
+            // race leaves nothing for a late answer to land on.
+            let mut session = self.app.session.lock().await;
+            if session
+                .held
+                .as_ref()
+                .is_some_and(|held| held.turn == self.turn && held.step == step)
+            {
+                session.held = None;
+            }
+            allow
+        })
+    }
 }
 
 /// A prompt held between the proposal and the answer to it.
@@ -391,11 +462,16 @@ pub struct Floor {
     commands: Vec<String>,
     /// Whether it may reach the network. The session's, unchanged.
     network: bool,
+    /// Whether a write it refuses, and the policy file would allow, is put to
+    /// the person watching — *allow once* — rather than handed to the model as
+    /// a refusal. `false` where approvals must be signed, since a click is not
+    /// one. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    asks: bool,
 }
 
 impl Floor {
     /// From the floor a session derived once, as the page should print it.
-    fn of(floor: &Sandbox) -> Self {
+    fn of(floor: &Sandbox, asks: bool) -> Self {
         let policy = floor.to_policy();
         Self {
             reads: policy
@@ -410,6 +486,7 @@ impl Floor {
                 .collect(),
             commands: policy.commands.clone(),
             network: policy.network,
+            asks,
         }
     }
 }
@@ -828,6 +905,7 @@ impl App {
                 prefix: PrefixTracker::default(),
                 pending: None,
                 narrowed: None,
+                held: None,
             }),
             events: broadcast::channel(1024).0,
             recorder,
@@ -2024,6 +2102,29 @@ async fn handle_client_message(app: &Arc<App>, message: ClientMessage) {
         ClientMessage::DeclinePlan => {
             decline_plan(app.clone()).await;
         }
+        ClientMessage::AnswerCall { turn, step, allow } => {
+            let held = {
+                let mut session = app.session.lock().await;
+                match &session.held {
+                    Some(held) if held.turn == turn && held.step == step => session.held.take(),
+                    _ => None,
+                }
+            };
+            match held {
+                Some(held) => {
+                    let _ = held.answer.send(allow);
+                }
+                None => {
+                    refuse(
+                        app,
+                        "answer_call",
+                        Refusal::Call,
+                        format!("no call is held at turn {turn}, step {step}"),
+                    )
+                    .await;
+                }
+            }
+        }
         ClientMessage::RequestPlan => {
             request_plan(app.clone()).await;
         }
@@ -2330,6 +2431,7 @@ async fn request_plan(app: Arc<App>) {
             let mut session = app.session.lock().await;
             session.current = None;
             session.cancel = None;
+            session.held = None;
         }
 
         // Cancelled or broken: there is no proposal, and inventing one would
@@ -3038,7 +3140,8 @@ async fn begin_turn(
         let note = match sandbox.authority() {
             Authority::Draft(_) => sending.authority.draft.as_ref(),
             Authority::Plan(_) => sending.authority.plan.as_ref(),
-            Authority::Policy => None,
+            // Never a turn's sandbox: it holds one call a person allowed.
+            Authority::Policy | Authority::Person(_) => None,
         };
         let text = match instruction {
             Some(instruction) => format!("{instruction}{prompt}"),
@@ -3311,6 +3414,21 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             _ => floor_holding(&session, &agency),
         }
     };
+    // What *allow once* runs a call under, when this turn may ask at all: only
+    // a draft's, and only where an unsigned click is an approval this server
+    // accepts. Inside a job a refusal means the plan did not grant it, and the
+    // plan stays what was approved. See
+    // `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    let wider = match sandbox.authority() {
+        Authority::Draft(draft) if !app.approvers.required => Some(
+            agency
+                .sandbox
+                .as_ref()
+                .clone()
+                .under(Authority::Person(*draft)),
+        ),
+        _ => None,
+    };
 
     tokio::spawn(async move {
         let (tx, mut rx) = mpsc::channel(256);
@@ -3377,6 +3495,11 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             })
         };
 
+        let watching = Watching {
+            app: app.clone(),
+            turn,
+            events: tx.clone(),
+        };
         let outcome = run_agent_turn(
             sending.backend.as_ref(),
             request,
@@ -3384,10 +3507,16 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             sandbox.as_ref(),
             agency.limits,
             app.schema_retry.as_ref(),
+            wider.as_ref().map(|wider| agent_core::agent::Ask {
+                wider,
+                person: &watching,
+            }),
             tx,
             cancel_rx,
         )
         .await;
+        // It holds a sender, and the forwarder runs until every sender is gone.
+        drop(watching);
         let _ = forwarder.await;
 
         // Read before the turn is pushed, because pushing it is what opens a
@@ -3422,6 +3551,7 @@ async fn start_turn(app: Arc<App>, prompt: String) {
             }
             session.current = None;
             session.cancel = None;
+            session.held = None;
 
             // After the turn is in the history, so the close sees this turn's
             // steps — the ones that just ran the command it closes on. Before
@@ -3540,7 +3670,7 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     settings.sandbox = agency.describe();
     settings.base = agency.sandbox.base().display().to_string();
     settings.posture = Some(agency.posture(name));
-    settings.floor = Some(Floor::of(agency.floor()));
+    settings.floor = Some(Floor::of(agency.floor(), !app.approvers.required));
     Json(settings).into_response()
 }
 
@@ -6176,6 +6306,7 @@ async fn create_session(State(state): State<AppRouterState>, body: axum::body::B
         session.next_turn = 1;
         session.current = None;
         session.cancel = None;
+        session.held = None;
         session.context = app
             .agency()
             .await
@@ -6590,6 +6721,7 @@ async fn resume_session(
         session.next_turn = (loaded_view.turns.len() as u64) + 1;
         session.current = None;
         session.cancel = None;
+        session.held = None;
         session.context = resumed_context;
         session.prefix = PrefixTracker::default();
         // A session whose last job is a proposal comes back *at the gate*.
@@ -6956,6 +7088,7 @@ mod tests {
                 prefix: PrefixTracker::default(),
                 pending: None,
                 narrowed: None,
+                held: None,
             }),
             events: broadcast::channel(1024).0,
             recorder: None,

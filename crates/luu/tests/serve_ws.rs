@@ -1579,18 +1579,32 @@ async fn a_draft_turn_may_not_write_what_the_policy_file_grants() {
     )
     .await;
 
-    let (result, _) = until(&mut socket, "tool_result").await;
-    assert_eq!(result["name"], "write_file");
-    assert_eq!(result["verdict"]["allowed"], false);
+    // The floor still refuses; what changed is that a write the policy file
+    // grants is now put to a person before the model hears about it. So the
+    // floor's words arrive on the question rather than on the result. See
+    // `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    let (held, _) = until(&mut socket, "call_held").await;
+    assert_eq!(held["name"], "write_file");
     assert!(
-        result["verdict"]["rule"]
+        held["refused"]
             .as_str()
             .expect("a rule")
             .contains("the draft's floor"),
         "a denial has to say which authority refused, and the floor is not the \
          policy file: {}",
-        result["verdict"]["rule"],
+        held["refused"],
     );
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": held["turn"], "step": held["step"],
+                           "allow": false}),
+    )
+    .await;
+
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["name"], "write_file");
+    assert_eq!(result["verdict"]["allowed"], false);
+    assert_eq!(result["asked"], false);
 
     // The only assertion that would notice a check running *after* the write,
     // and the one that says the policy file was not what refused: the same
@@ -1656,20 +1670,100 @@ async fn a_refusal_in_a_draft_names_the_draft_it_was_refused_in() {
         serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
     )
     .await;
-    let (result, _) = until(&mut socket, "tool_result").await;
-    assert_eq!(result["verdict"]["allowed"], false);
+    let (held, _) = until(&mut socket, "call_held").await;
     assert!(
-        result["verdict"]["rule"]
+        held["refused"]
             .as_str()
             .expect("a rule")
             .contains(&format!("the floor for draft {draft}")),
         "a refusal inside a draft names it, like one inside a plan: {}",
-        result["verdict"]["rule"],
+        held["refused"],
     );
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": held["turn"], "step": held["step"],
+                           "allow": false}),
+    )
+    .await;
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["verdict"]["allowed"], false);
     assert!(
         !scratch.exists(),
         "naming the draft is a change to the words, not to the floor",
     );
+    let _ = std::fs::remove_file(&scratch);
+}
+
+/// **Allow once**: the write the floor refused, put to a person, runs when they
+/// say yes — once, and the next write in the same draft is asked again.
+///
+/// The dead end this closes: a draft asked to create a file, refused by the
+/// floor, and nobody asked. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+#[tokio::test]
+async fn a_write_the_floor_refuses_is_put_to_a_person_and_runs_once_on_a_yes() {
+    let scratch = std::env::temp_dir().join(format!("luu-allow-once-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&scratch);
+    let call = format!(
+        "Writing it.\n```tool\n{{\"name\":\"write_file\",\"arguments\":         {{\"path\":{},\"content\":\"allowed once\"}}}}\n```",
+        serde_json::to_string(&scratch.display().to_string()).expect("a path"),
+    );
+    let address = server_writable(vec![call.clone(), call, "Done.".into()], &scratch).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+        .await
+        .expect("the websocket handshake");
+    assert_eq!(next_message(&mut socket).await["type"], "hello");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "prompt", "text": "write the scratch file"}),
+    )
+    .await;
+
+    // The call first, then the question about it: `until` skips what it is
+    // not waiting for, so a `call_held` that overtook its `tool_call` would be
+    // skipped here and the wait below would time out. It did, on the page,
+    // before the question went out on the turn's own channel.
+    let (call, _) = until(&mut socket, "tool_call").await;
+    let (held, _) = until(&mut socket, "call_held").await;
+    assert_eq!(held["step"], call["step"]);
+
+    // A stale answer is refused rather than applied to whatever is held next.
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": held["turn"], "step": 99, "allow": true}),
+    )
+    .await;
+    let (refused, _) = until(&mut socket, "refused").await;
+    assert_eq!(refused["reason"], "call");
+    assert!(!scratch.exists(), "a refused answer allowed nothing");
+
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": held["turn"], "step": held["step"],
+                           "allow": true}),
+    )
+    .await;
+    let (result, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(result["verdict"]["allowed"], true, "{}", result["verdict"]);
+    assert_eq!(result["asked"], true);
+    assert_eq!(
+        std::fs::read_to_string(&scratch).expect("the file a person allowed"),
+        "allowed once"
+    );
+
+    // Once means once: the same write, one step later, is asked again.
+    let (again, _) = until(&mut socket, "call_held").await;
+    assert_eq!(again["step"], held["step"].as_u64().unwrap() + 1);
+    send(
+        &mut socket,
+        serde_json::json!({"type": "answer_call", "turn": again["turn"], "step": again["step"],
+                           "allow": false}),
+    )
+    .await;
+    let (second, _) = until(&mut socket, "tool_result").await;
+    assert_eq!(second["asked"], false);
+    assert_eq!(second["verdict"]["allowed"], false);
+    until(&mut socket, "ended").await;
     let _ = std::fs::remove_file(&scratch);
 }
 
@@ -2802,6 +2896,10 @@ async fn the_settings_route_carries_the_floor_a_draft_runs_on() {
         "the floor grants no writes by construction and says so in words",
     );
     assert_eq!(floor["network"], false, "the mock server reaches nothing");
+    assert_eq!(
+        floor["asks"], true,
+        "approvals need no signature here, so a refused write is put to a person",
+    );
 }
 
 /// A server that fell into the mock says so, in the one field a page is

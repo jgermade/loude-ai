@@ -18,8 +18,8 @@ import { $reactive } from "@web/vendor/jq79.js"
 // refuses it out loud rather than by misreading the next message. Kept beside
 // `agent_core::protocol::VERSION` and `agent_core::record::FORMAT`: they are
 // one number each, and this file is the other half of the pair.
-const PROTOCOL = 8
-const FORMAT = 19
+const PROTOCOL = 9
+const FORMAT = 20
 
 export const state = $reactive({
   status: "connecting",   // connecting | ready | running | closed | replay
@@ -494,7 +494,19 @@ function onProtocol(message) {
         truncated: false,
         duration_ms: null,
         command: null,
+        held: null,
+        asked: null,
       }]
+      break
+
+    // The floor refused a write the policy file allows, and the turn is
+    // waiting on a person: *allow once* or *deny*. It stays on the call it is
+    // about, so the question is drawn where the model asked. See
+    // `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    case "call_held":
+      state.tools = state.tools.map(call => call.step === message.step
+        ? { ...call, held: { turn: message.turn, refused: message.refused } }
+        : call)
       break
 
     case "tool_result":
@@ -507,6 +519,11 @@ function onProtocol(message) {
             truncated: message.truncated,
             duration_ms: message.duration_ms,
             command: message.command ?? null,
+            held: null,
+            // What a person answered, when the floor asked one. Absent in a
+            // recording made before asking existed, and on every call nobody
+            // was asked about.
+            asked: message.asked ?? null,
           }
         : call)
       break
@@ -775,7 +792,11 @@ function fromStored(turn) {
     job: turn.job ?? null,
     budget: turn.budget || null,
     prefix: turn.prefix || null,
-    tools: turn.tools || [],
+    // A call a person is still being asked about carries the floor's rule as
+    // `held`; the card wants the turn beside it to answer with.
+    tools: (turn.tools || []).map(call => call.held
+      ? { ...call, held: { turn: turn.turn, refused: call.held } }
+      : call),
     extraCalls: turn.extra_calls || [],
     prompt: turn.prompt_sent || "",
     toolSpecs: turn.tool_specs_sent || "",
@@ -934,6 +955,15 @@ export function approvePlan(amendment = {}) {
 }
 export const approveJob = (_job, amendment) => approvePlan(amendment)
 export const approveTask = approveJob
+/// The answer to a held call: `allow` runs that one call once under the policy
+/// file; otherwise the model is told a person refused it. `turn` and `step`
+/// name the call, so an answer that raced the end of its turn is refused rather
+/// than applied to whatever is held next.
+export function answerCall(turn, step, allow) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return
+  socket.send(JSON.stringify({ type: "answer_call", turn, step, allow }))
+}
+
 export function declinePlan() {
   if (!socket || socket.readyState !== WebSocket.OPEN) return
   socket.send(JSON.stringify({ type: "decline_plan" }))

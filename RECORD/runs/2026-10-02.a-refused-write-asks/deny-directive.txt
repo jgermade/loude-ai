@@ -1,0 +1,79 @@
+>>> {"type": "prompt", "text": "crea un fichero ./example.html en el proyecto"}
+<<< {"type": "turn_started", "turn": 1, "prompt": "crea un fichero ./example.html en el proyecto", "job": null}
+<<< {"type": "token", "turn": 1, "text": "```"}
+<<< {"type": "token", "turn": 1, "text": "json"}
+<<< {"type": "token", "turn": 1, "text": "\n"}
+<<< {"type": "token", "turn": 1, "text": "{\""}
+<<< {"type": "token", "turn": 1, "text": "name"}
+<<< {"type": "token", "turn": 1, "text": "\":"}
+<<< {"type": "token", "turn": 1, "text": " \""}
+<<< {"type": "token", "turn": 1, "text": "write"}
+<<< {"type": "token", "turn": 1, "text": "_file"}
+<<< {"type": "token", "turn": 1, "text": "\","}
+<<< {"type": "token", "turn": 1, "text": " \""}
+<<< {"type": "token", "turn": 1, "text": "arguments"}
+<<< {"type": "token", "turn": 1, "text": "\":"}
+<<< {"type": "token", "turn": 1, "text": " {\""}
+<<< {"type": "token", "turn": 1, "text": "path"}
+<<< {"type": "token", "turn": 1, "text": "\":"}
+<<< {"type": "token", "turn": 1, "text": " \"./"}
+<<< {"type": "token", "turn": 1, "text": "example"}
+<<< {"type": "token", "turn": 1, "text": ".html"}
+<<< {"type": "token", "turn": 1, "text": "\","}
+<<< {"type": "token", "turn": 1, "text": " \""}
+<<< {"type": "token", "turn": 1, "text": "content"}
+<<< {"type": "token", "turn": 1, "text": "\":"}
+<<< {"type": "token", "turn": 1, "text": " \""}
+<<< {"type": "token", "turn": 1, "text": "<html"}
+<<< {"type": "token", "turn": 1, "text": ">"}
+<<< {"type": "token", "turn": 1, "text": "<head"}
+<<< {"type": "token", "turn": 1, "text": ">"}
+<<< {"type": "token", "turn": 1, "text": "<title"}
+<<< {"type": "token", "turn": 1, "text": ">"}
+<<< {"type": "token", "turn": 1, "text": "Example"}
+<<< {"type": "token", "turn": 1, "text": "</"}
+<<< {"type": "token", "turn": 1, "text": "title"}
+<<< {"type": "token", "turn": 1, "text": "></"}
+<<< {"type": "token", "turn": 1, "text": "head"}
+<<< {"type": "token", "turn": 1, "text": ">"}
+<<< {"type": "token", "turn": 1, "text": "<body"}
+<<< {"type": "token", "turn": 1, "text": ">"}
+<<< {"type": "token", "turn": 1, "text": "<h"}
+<<< {"type": "token", "turn": 1, "text": "1"}
+<<< {"type": "token", "turn": 1, "text": ">Hello"}
+<<< {"type": "token", "turn": 1, "text": ","}
+<<< {"type": "token", "turn": 1, "text": " World"}
+<<< {"type": "token", "turn": 1, "text": "!</"}
+<<< {"type": "token", "turn": 1, "text": "h"}
+<<< {"type": "token", "turn": 1, "text": "1"}
+<<< {"type": "token", "turn": 1, "text": "></"}
+<<< {"type": "token", "turn": 1, "text": "body"}
+<<< {"type": "token", "turn": 1, "text": "></"}
+<<< {"type": "token", "turn": 1, "text": "html"}
+<<< {"type": "token", "turn": 1, "text": ">\""}
+<<< {"type": "token", "turn": 1, "text": "}}"}
+<<< {"type": "tool_call", "turn": 1, "step": 1, "name": "write_file", "arguments": {"content": "<html><head><title>Example</title></head><body><h1>Hello, World!</h1></body></html>", "path": "./example.html"}}
+<<< {"type": "call_held", "turn": 1, "step": 1, "name": "write_file", "arguments": {"content": "<html><head><title>Example</title></head><body><h1>Hello, World!</h1></body></html>", "path": "./example.html"}, "refused": ". (read) does not grant read-write on /private/var/folders/gj/156pmpmx0vx3fz_792dljdy00000gn/T/ask-7b-q7rbao08/example.html, under the draft's floor, which grants no writes"}
+>>> {"type": "answer_call", "turn": 1, "step": 1, "allow": false}
+<<< {"type": "tool_result", "turn": 1, "step": 1, "name": "write_file", "verdict": {"allowed": false, "rule": "a person was asked and refused this call. Do not retry it or call another tool about it: answer them in plain text.", "enforced_by": {"by": "process"}}, "error": "denied: a person was asked and refused this call. Do not retry it or call another tool about it: answer them in plain text.", "output": "", "truncated": false, "duration_ms": 0, "asked": false}
+<<< {"type": "token", "turn": 1, "text": "Ent"}
+<<< {"type": "token", "turn": 1, "text": "end"}
+<<< {"type": "token", "turn": 1, "text": "ido"}
+<<< {"type": "token", "turn": 1, "text": "."}
+<<< {"type": "token", "turn": 1, "text": " No"}
+<<< {"type": "token", "turn": 1, "text": " intent"}
+<<< {"type": "token", "turn": 1, "text": "ar"}
+<<< {"type": "token", "turn": 1, "text": "é"}
+<<< {"type": "token", "turn": 1, "text": " ll"}
+<<< {"type": "token", "turn": 1, "text": "amar"}
+<<< {"type": "token", "turn": 1, "text": " a"}
+<<< {"type": "token", "turn": 1, "text": " otro"}
+<<< {"type": "token", "turn": 1, "text": " comando"}
+<<< {"type": "token", "turn": 1, "text": " o"}
+<<< {"type": "token", "turn": 1, "text": " repet"}
+<<< {"type": "token", "turn": 1, "text": "ir"}
+<<< {"type": "token", "turn": 1, "text": " la"}
+<<< {"type": "token", "turn": 1, "text": " solicitud"}
+<<< {"type": "token", "turn": 1, "text": "."}
+<<< {"type": "ended", "turn": 1, "reason": "stop", "usage": {"prompt_tokens": 1428, "completion_tokens": 73}}
+<<< {"type": "draft_opened", "job": 1, "turn": 1, "objective": "crea un fichero ./example.html en el proyecto"}
