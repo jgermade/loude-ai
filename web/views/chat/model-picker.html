@@ -96,7 +96,26 @@
     await loadProviders()
     // Opens on where the session is, so the second column starts on the
     // models it is choosing among.
-    focusOn(names.includes(current) ? current : names[0] || "")
+    const first = names.includes(current) ? current : names[0] || ""
+    height = fit(first)
+    focusOn(first)
+    await load(first)
+    height = fit(first)
+  }
+
+  // The columns' height, in rem: enough for the providers and for the list
+  // the menu opened on, and then **fixed** while it is open — a height that
+  // followed the focused provider moved the menu's top edge each time the
+  // pointer crossed another, because it opens upward. A longer list scrolls
+  // in its column. The ceiling is the CSS's.
+  let height = 0
+  const fit = name => {
+    const providers = names.length * 2.5 + .6
+    const listed = lists[name]
+    const models = listed
+      ? 2 + Math.max(1, listed.models.length + listed.unavailable.length) * 1.65
+      : 0
+    return Math.max(8, providers, models)
   }
 
   const choose = async (provider, model) => {
@@ -167,7 +186,7 @@
       <button type="button" class="link" @click="open = false, openSettingsAt('models')">add one →</button>
     </p>
 
-    <div :if="names.length" class="cols">
+    <div :if="names.length" class="cols" :style="height ? `--rows:${height}rem` : ''">
       <!-- Providers. Hover or click puts one in focus; nothing is chosen until
            a model is. -->
       <ul class="providers" role="listbox" aria-label="Providers">
@@ -320,11 +339,8 @@
   .cols {
     display: grid;
     grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr);
-    /* Fixed, not fitted: the menu opens upward from the button, so a height
-       that followed the focused provider's list moved the menu's top edge
-       every time the pointer crossed another provider. Each column scrolls
-       inside it instead. */
-    height: min(60vh, 26rem);
+    /* Fitted once, then fixed: see `fit`. */
+    height: min(50vh, 20rem, var(--rows, 12rem));
   }
   .providers {
     list-style: none;

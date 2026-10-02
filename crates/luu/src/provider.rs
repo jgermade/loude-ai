@@ -241,6 +241,38 @@ struct File {
     /// `[engine.<name>]`: model servers luu may start. See [`Engine`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     engine: BTreeMap<String, Engine>,
+    /// `[host.<name>]`: another `luu serve` this one forwards to. See [`Host`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    host: BTreeMap<String, Host>,
+}
+
+/// `[host.<name>]`: another machine's `luu serve`, reached through this one.
+///
+/// The page asks for `/h/<name>/…` and this server forwards it to `url` with
+/// the token in `token-file` — so what the browser can reach is bounded by
+/// what somebody wrote here, and the token never reaches the page. A path and
+/// never a value, for the reason a provider's key is one. See
+/// `RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Host {
+    /// Where its `luu serve` listens: `http://ryzen.local:7878`.
+    pub url: String,
+    /// The file holding the token that host was started with
+    /// (`--auth-token-file`). Absent for a host that asks for none, which is
+    /// one bound to loopback — another port on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<PathBuf>,
+}
+
+/// Whether `name` may name a host: it is a path segment in `/h/<name>/`, so
+/// nothing that would need escaping there.
+pub fn is_host_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// `[ui]`. One setting so far.
@@ -438,6 +470,7 @@ pub struct Config {
     resend: Option<Resend>,
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
+    hosts: BTreeMap<String, Host>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -495,6 +528,12 @@ pub enum ConfigError {
         profile: String,
         engine: String,
     },
+    #[error("{path}: [host.{name}]: {problem}")]
+    BadHost {
+        path: String,
+        name: String,
+        problem: String,
+    },
     #[error("-p {name} was named, and this machine has no {file}")]
     NoConfigFile { name: String, file: String },
 }
@@ -540,9 +579,11 @@ impl Config {
             resend: file.resend,
             authority: file.authority,
             engines: file.engine,
+            hosts: file.host,
         };
         config.check_default(path)?;
         config.check_engines(path)?;
+        config.check_hosts(path)?;
         Ok(config)
     }
 
@@ -558,6 +599,28 @@ impl Config {
                     path: path.to_string(),
                     profile: profile.clone(),
                     engine: engine.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// A host's name fits in a URL's path segment, and its URL is HTTP: the
+    /// proxy forwards there, and a `file://` or a bare word is not a server.
+    fn check_hosts(&self, path: &str) -> Result<(), ConfigError> {
+        for (name, host) in &self.hosts {
+            let problem = if !is_host_name(name) {
+                Some("a host's name is letters, digits, `-` and `_`".to_string())
+            } else if !(host.url.starts_with("http://") || host.url.starts_with("https://")) {
+                Some(format!("url = \"{}\" is not http:// or https://", host.url))
+            } else {
+                None
+            };
+            if let Some(problem) = problem {
+                return Err(ConfigError::BadHost {
+                    path: path.to_string(),
+                    name: name.clone(),
+                    problem,
                 });
             }
         }
@@ -662,6 +725,7 @@ impl Config {
             resend: self.resend,
             authority: self.authority.clone(),
             engine: self.engines.clone(),
+            host: self.hosts.clone(),
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -716,6 +780,7 @@ impl Config {
             resend: self.resend,
             authority: self.authority.clone(),
             engines: self.engines.clone(),
+            hosts: self.hosts.clone(),
         }
     }
 
@@ -777,6 +842,21 @@ impl Config {
             engines,
             ..self.clone()
         }
+    }
+
+    /// The file as the project modal hands back the hosts: `[host.*]`, and
+    /// everything else this config already had, [`Config::with_resend`]'s
+    /// reason.
+    pub fn with_hosts(&self, hosts: BTreeMap<String, Host>) -> Self {
+        Self {
+            hosts,
+            ..self.clone()
+        }
+    }
+
+    /// Every host the file names.
+    pub fn hosts(&self) -> &BTreeMap<String, Host> {
+        &self.hosts
     }
 
     /// Every engine the file names.
@@ -1291,6 +1371,30 @@ mod tests {
         );
         assert_eq!(picked.kind, BackendKind::Openai);
         assert_eq!(picked.url, "https://openrouter.ai/api/v1");
+    }
+
+    #[test]
+    fn a_host_is_a_name_that_fits_a_path_and_an_http_url() {
+        let loaded =
+            config("[host.ryzen-box]\nurl = \"http://ryzen.local:7878\"\ntoken-file = \"~/t\"\n")
+                .expect("a host loads");
+        assert_eq!(loaded.hosts()["ryzen-box"].url, "http://ryzen.local:7878");
+        let again = Config::from_toml(&loaded.render().unwrap(), "config.toml").unwrap();
+        assert_eq!(
+            again.hosts(),
+            loaded.hosts(),
+            "written and read back unchanged"
+        );
+
+        for bad in [
+            "[host.\"a/b\"]\nurl = \"http://x\"\n",
+            "[host.x]\nurl = \"file:///etc\"\n",
+        ] {
+            assert!(
+                matches!(config(bad), Err(ConfigError::BadHost { .. })),
+                "{bad} loaded"
+            );
+        }
     }
 
     #[test]

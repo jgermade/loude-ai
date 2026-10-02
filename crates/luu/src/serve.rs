@@ -1433,6 +1433,13 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/api/engines/install", post(install_engine))
         .route("/api/engines/{name}/start", post(start_engine))
         .route("/api/engines/{name}/stop", post(stop_engine))
+        // Other machines' `luu serve`, reached through this one: the list, and
+        // everything a page served under `/h/<name>/` asks of its API. See
+        // `crate::hosts`, and [`hosts_allowed`] for who may.
+        .route("/api/hosts", get(get_hosts).put(put_hosts))
+        .route("/h/{name}/api/{*rest}", axum::routing::any(host_api))
+        .route("/h/{name}/ws", get(host_socket))
+        .route("/h/{name}/ws/{*rest}", get(host_socket))
         .layer(middleware::from_fn_with_state(auth.clone(), require_token));
 
     let router = guarded
@@ -1443,6 +1450,11 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         .route("/vendor/monaco/{*path}", get(monaco_asset))
         // xterm.js, the same way and for the same reasons.
         .route("/vendor/xterm/{*path}", get(xterm_asset))
+        // This server's own page, under a host's prefix: every request it
+        // makes is relative, so served here its API is the host's.
+        .route("/h/{name}", get(host_page_bare))
+        .route("/h/{name}/", get(|| serve_asset("index.html")))
+        .route("/h/{name}/{*path}", get(host_page))
         .route("/{*path}", get(asset_handler))
         .with_state(AppRouterState {
             app: app.clone(),
@@ -1851,7 +1863,7 @@ async fn require_token(State(auth): State<Arc<Auth>>, request: Request, next: Ne
         .map(str::to_string);
     let presented = match header {
         Some(token) => Some(token),
-        None if request.uri().path().starts_with("/ws") => {
+        None if is_socket_path(request.uri().path()) => {
             Query::<TokenQuery>::try_from_uri(request.uri())
                 .ok()
                 .and_then(|Query(query)| query.token)
@@ -1868,6 +1880,16 @@ async fn require_token(State(auth): State<Arc<Auth>>, request: Request, next: Ne
             .into_response();
     }
     next.run(request).await
+}
+
+/// `/ws…`, or a host's `/h/<name>/ws…`: where `?token=` is accepted, because a
+/// browser's `WebSocket` can send nothing else.
+fn is_socket_path(path: &str) -> bool {
+    path.starts_with("/ws")
+        || path
+            .strip_prefix("/h/")
+            .and_then(|rest| rest.split_once('/'))
+            .is_some_and(|(_, rest)| rest.starts_with("ws"))
 }
 
 #[derive(serde::Deserialize)]
@@ -4558,6 +4580,215 @@ async fn put_terminal(
         return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
     }
     runtimes_answer(&state, &headers).await
+}
+
+// ---- hosts -----------------------------------------------------------------
+//
+// See `crate::hosts` and
+// `RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`.
+
+/// Whether this request may reach a host, or write the list of them.
+///
+/// [`engines_allowed`]'s rule, and for its reason: a host is reached with its
+/// token, which carries its approvals, its engines and its terminal. Off
+/// loopback, this server's token would hand all of that to whoever holds it.
+/// And **an `Origin`, when one is sent, is this server**: a page on another
+/// site cannot read a cross-origin answer, but it can send a `POST`, and
+/// through here that would be a `POST` to the host.
+fn hosts_allowed(
+    state: &AppRouterState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), Box<Response>> {
+    let refuse = |why: String| Box::new((StatusCode::FORBIDDEN, why).into_response());
+    if !state.providers_editable {
+        return Err(refuse(
+            "this server is bound off loopback, and a host is reached with its own token. \
+             Reach it from a browser on this machine."
+                .to_string(),
+        ));
+    }
+    let text = |name| {
+        headers
+            .get(name)
+            .and_then(|value: &axum::http::HeaderValue| value.to_str().ok())
+            .unwrap_or("")
+    };
+    let host = text(header::HOST);
+    if !host_is_loopback(host) {
+        return Err(refuse(format!(
+            "Host `{host}` is not this machine, and only this machine reaches a host"
+        )));
+    }
+    let origin = text(header::ORIGIN);
+    let from = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"));
+    if !origin.is_empty() && from != Some(host) {
+        return Err(refuse(format!(
+            "Origin `{origin}` is not this server (`{host}`)"
+        )));
+    }
+    Ok(())
+}
+
+/// One `[host.<name>]`, or the answer that says it is not there.
+async fn host_named(name: &str) -> Result<crate::provider::Host, Box<Response>> {
+    let config = load_config()
+        .await
+        .map(|(config, _)| config)
+        .map_err(|error| {
+            Box::new((StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response())
+        })?;
+    config.hosts().get(name).cloned().ok_or_else(|| {
+        Box::new(
+            (
+                StatusCode::NOT_FOUND,
+                format!("there is no [host.{name}] in config.toml"),
+            )
+                .into_response(),
+        )
+    })
+}
+
+/// What follows `/h/<name>` in the request, query included.
+fn host_rest(uri: &Uri, name: &str) -> String {
+    let path = uri.path();
+    let rest = path
+        .strip_prefix("/h/")
+        .and_then(|tail| tail.strip_prefix(name))
+        .unwrap_or(path);
+    match uri.query() {
+        Some(query) => format!("{rest}?{query}"),
+        None => rest.to_string(),
+    }
+}
+
+#[derive(serde::Serialize)]
+struct HostsView {
+    hosts: std::collections::BTreeMap<String, crate::provider::Host>,
+    /// Whether this server may reach or write them; see [`hosts_allowed`].
+    editable: bool,
+    /// The file they are in, or would be written to.
+    path: Option<String>,
+}
+
+async fn hosts_view(state: &AppRouterState) -> Result<HostsView, crate::provider::ConfigError> {
+    let (config, loaded) = load_config().await?;
+    Ok(HostsView {
+        hosts: config.hosts().clone(),
+        editable: state.providers_editable,
+        path: shown_path(loaded).await,
+    })
+}
+
+async fn get_hosts(State(state): State<AppRouterState>) -> Response {
+    match hosts_view(&state).await {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct HostsEdit {
+    hosts: std::collections::BTreeMap<String, crate::provider::Host>,
+}
+
+/// Replaces every `[host.*]`, and nothing else in the file.
+async fn put_hosts(
+    State(state): State<AppRouterState>,
+    headers: axum::http::HeaderMap,
+    Json(edit): Json<HostsEdit>,
+) -> Response {
+    if let Err(refused) = hosts_allowed(&state, &headers) {
+        return *refused;
+    }
+    let Some(path) = config_path().await else {
+        return (
+            StatusCode::CONFLICT,
+            "this machine has no state directory yet, so there is nowhere to write config.toml. \
+             Run luu once on a terminal, or set LUU_HOME.",
+        )
+            .into_response();
+    };
+    let current = load_config()
+        .await
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    if let Err(error) = write_config(current.with_hosts(edit.hosts), path).await {
+        return (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response();
+    }
+    get_hosts(State(state)).await
+}
+
+/// A request the page made of a host's API, forwarded.
+async fn host_api(
+    State(state): State<AppRouterState>,
+    Path((name, _)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    if let Err(refused) = hosts_allowed(&state, request.headers()) {
+        return *refused;
+    }
+    let host = match host_named(&name).await {
+        Ok(host) => host,
+        Err(refused) => return *refused,
+    };
+    let rest = host_rest(request.uri(), &name);
+    let (parts, body) = request.into_parts();
+    crate::hosts::forward(&name, &host, parts.method, &rest, &parts.headers, body).await
+}
+
+/// A socket the page opened on a host, forwarded. **Same-origin only**, as
+/// the terminal is: a page on another site can open a socket anywhere, and
+/// this one carries the host's authority.
+async fn host_socket(
+    State(state): State<AppRouterState>,
+    Path(params): Path<std::collections::HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+    uri: Uri,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if let Err(refused) = hosts_allowed(&state, &headers) {
+        return *refused;
+    }
+    if headers.get(header::ORIGIN).is_none() {
+        return (
+            StatusCode::FORBIDDEN,
+            "a socket to a host needs an Origin, and only this server's page has one",
+        )
+            .into_response();
+    }
+    let name = params.get("name").cloned().unwrap_or_default();
+    let host = match host_named(&name).await {
+        Ok(host) => host,
+        Err(refused) => return *refused,
+    };
+    let upstream = match crate::hosts::connect(&name, &host, &host_rest(&uri, &name)).await {
+        Ok(upstream) => upstream,
+        Err(refused) => return *refused,
+    };
+    ws.on_upgrade(move |socket| async move {
+        tracing::info!(target: "luu::ws", host = name, "forwarding");
+        crate::hosts::pipe(socket, upstream).await;
+        tracing::info!(target: "luu::ws", host = name, "closed");
+    })
+}
+
+/// `/h/<name>` without its slash: every relative URL on the page would
+/// resolve one level too high.
+async fn host_page_bare(Path(name): Path<String>) -> Response {
+    axum::response::Redirect::permanent(&format!("/h/{name}/")).into_response()
+}
+
+/// This server's own page and its assets, under a host's prefix.
+async fn host_page(Path((_, path)): Path<(String, String)>) -> Response {
+    if let Some(rest) = path.strip_prefix("vendor/monaco/") {
+        return installed_asset(monaco_root(), "monaco", rest).await;
+    }
+    if let Some(rest) = path.strip_prefix("vendor/xterm/") {
+        return installed_asset(xterm_root(), "xterm.js", rest).await;
+    }
+    serve_asset(&path).await
 }
 
 // ---- engines ---------------------------------------------------------------

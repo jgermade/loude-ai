@@ -36,6 +36,7 @@ pub mod config;
 pub mod engines;
 pub mod export;
 pub mod highlight;
+pub mod hosts;
 pub mod icons;
 pub mod log;
 pub mod models;

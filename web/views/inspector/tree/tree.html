@@ -134,6 +134,9 @@
         loading="lazy">
       <svg :if="!row.icon" class="ic glyph"><use :href="row.dir ? '#i-folder' : '#i-file'"/></svg>
       <span class="name">{{ row.name }}</span>
+      <!-- A folder that is a repository of its own — a submodule, a clone
+           inside the workspace — the way the project modal marks it. -->
+      <span :if="row.repo" class="repo" title="A git repository">git</span>
     </button>
     <!-- Git's own letter, not a word: `M`, `??`, `A` are what `git status`
          says, and a person reading this panel already knows them. It no longer
@@ -243,6 +246,16 @@
      in config.toml replaces them with any VSCode icon theme on this machine. */
   .glyph { color: var(--dim); }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .repo {
+    flex: none;
+    font-size: 10px;
+    line-height: 1;
+    padding: .1rem .25rem;
+    border-radius: 3px;
+    color: var(--accent);
+    border: 1px solid currentColor;
+  }
 
   .status {
     flex: none;

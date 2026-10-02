@@ -1056,7 +1056,7 @@ the sentence above rather than routing around it. See
 
 The columns' contents and every dialog are separate jq79 components
 (`inspector-{files,git,debug}.html`, `views/editor/editor.html`, `settings-{modal,general,models}.html`,
-`session-starter.html`, `folder-picker.html`); `app.html` keeps the shell — the grid, the three
+`session-starter.html`, `project.html`); `app.html` keeps the shell — the grid, the three
 columns' chrome, and the chat. Two things inside `views/editor/editor.html` are attached to plain
 elements by id rather than drawn by the renderer, for the same reason and now with a number
 behind it: the optional Monaco editor, and the own viewer's rows.
@@ -2167,6 +2167,24 @@ Argued in
 [`RECORD/2026-09-04.sessions-stay-home.completed.md`](RECORD/2026-09-04.sessions-stay-home.completed.md),
 against the mechanism that was built first and removed:
 [`RECORD/2026-09-04.the-border-and-the-gate.completed.md`](RECORD/2026-09-04.the-border-and-the-gate.completed.md).
+
+### Another host is another `luu serve`, reached through this one
+
+**The rule above is why a remote project is a page that moves, not a session.**
+`[host.<name>]` in `config.toml` names another machine's `luu serve` by `url` and
+`token-file`, and this server forwards `/h/<name>/api/*` and `/h/<name>/ws*` there
+with that token, dropping its own. Everything else under `/h/<name>/` is **this**
+server's page, whose every request is relative, so served there its API is the
+host's. The session is made, recorded and approved on the host. This server
+carries bytes and keeps nothing.
+
+The browser names a host and never a URL. The token is a path the page never
+reads. The proxy and `PUT /api/hosts` answer only on a loopback-bound server to
+a loopback `Host`, and an `Origin`, when there is one, must be this server: off
+loopback, this server's token would carry the host's approvals. The project
+modal behind the inspector's foot is host, then folder, then runtime and model,
+and *Open* starts the session on the chosen host and loads its page. See
+[`RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`](RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md).
 
 ## Suggested work order
 

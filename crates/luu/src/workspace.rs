@@ -51,6 +51,11 @@ pub struct Entry {
     /// only do that before the parent is opened if the listing says so.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub only: Option<String>,
+    /// A directory with a `.git` of its own: a repository, or the file a
+    /// worktree or a submodule leaves. The project picker marks it, because a
+    /// folder somebody works in is usually one. One `stat` per directory.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub repo: bool,
 }
 
 /// How deep a chain of single directories is followed. A tree that nests one
@@ -279,16 +284,17 @@ pub async fn tree(sandbox: &Sandbox, relative: &str) -> Result<Tree, Error> {
     let mut chains = Vec::with_capacity(listed.len());
     for (_, is_dir, full) in &listed {
         chains.push(if *is_dir {
-            only_chain(full).await
+            let repo = tokio::fs::symlink_metadata(full.join(".git")).await.is_ok();
+            (only_chain(full).await, repo)
         } else {
-            None
+            (None, false)
         });
     }
 
     let mut entries: Vec<Entry> = listed
         .into_iter()
         .zip(chains)
-        .map(|((name, dir_flag, full), only)| {
+        .map(|((name, dir_flag, full), (only, repo))| {
             let path = relative_of(sandbox.base(), &full);
             // A directory carries the loudest status under it, so a collapsed
             // tree still shows that something inside changed.
@@ -309,6 +315,7 @@ pub async fn tree(sandbox: &Sandbox, relative: &str) -> Result<Tree, Error> {
                 dir: dir_flag,
                 status,
                 only,
+                repo,
             }
         })
         .collect();
@@ -694,6 +701,30 @@ mod tests {
             only_chain(&root.join("git")).await.as_deref(),
             Some("inner")
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A directory with a `.git` in it says so, whether `.git` is a directory
+    /// or the file a worktree leaves; a plain one and a file do not.
+    #[tokio::test]
+    async fn a_folder_with_its_own_git_is_marked_a_repository() {
+        let root = std::env::temp_dir().join(format!("luu-repo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("cloned/.git")).unwrap();
+        std::fs::create_dir_all(root.join("worktree")).unwrap();
+        std::fs::write(root.join("worktree/.git"), "gitdir: elsewhere\n").unwrap();
+        std::fs::create_dir_all(root.join("plain")).unwrap();
+        std::fs::write(root.join("file.txt"), "").unwrap();
+        let mut policy = agent_core::sandbox::SandboxPolicy::default();
+        policy.allow(&root, Access::Read);
+        let sandbox = Sandbox::new(&policy, &root).unwrap();
+
+        let listed = tree(&sandbox, "").await.unwrap();
+        let repo = |name: &str| listed.entries.iter().find(|e| e.name == name).unwrap().repo;
+        assert!(repo("cloned"));
+        assert!(repo("worktree"));
+        assert!(!repo("plain"));
+        assert!(!repo("file.txt"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

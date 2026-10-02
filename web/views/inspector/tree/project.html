@@ -1,0 +1,493 @@
+<script :setup>
+  // A project: **a host, a folder on it, and a session there** — the runtime
+  // its commands run on and the model it sends to. One modal, in that order,
+  // left to right. See
+  // `RECORD/2026-10-02.a-project-is-a-host-a-folder-and-a-session.completed.md`.
+  //
+  // **The folder is a subdirectory of where that host's `luu serve` was
+  // started**, and nothing here widens anything: `/api/workspace/*` resolves
+  // every path through `Sandbox::check_path` against that base, and a chosen
+  // root is a prefix the page puts on what it asks for. See
+  // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
+  //
+  // **A host is another `luu serve`**, reached through this one at
+  // `/h/<name>/`. Everything shown for it is asked of it through that prefix,
+  // and choosing it ends by loading the page there: a session stays on the
+  // host that made it, so the page goes to the session rather than the other
+  // way round.
+  const { workspace, chooseRoot, closePicker, rootKey } = await import("@web/lib/workspace.js")
+  const { state, newSession } = await import("@web/lib/store.js")
+  const { checkModel } = await import("@web/lib/ui.js")
+  const { prefs, setPlace } = await import("@web/lib/prefs.js")
+  const { placeOptions, stillThere } = await import("@web/lib/places.js")
+  const { modelLabel } = await import("@web/lib/engines.js")
+  const { currentHost, loadHosts, askHost, tellHost, goToHost } = await import("@web/lib/hosts.js")
+  const Modal = await import("@web/components/modal.html")
+  const HostForm = await import("./host-form.html")
+
+  // `[host.*]`, as this server answers it. A static copy of the page has no
+  // `/api/hosts`, and then there is this machine alone.
+  let hostsView = { hosts: {}, editable: false }
+  // name → { state: "asking" | "ok" | "down", base, error }
+  let reach = {}
+  // The host being looked at: `""` is this machine.
+  let host = currentHost
+  // name|path → the directories in it, or { error }.
+  let listings = {}
+  let at = workspace.picker.at || ""
+  // name → { places, providers, default } once asked.
+  let dests = {}
+  let place = "|"
+  let provider = ""
+  // name|provider → { loading, models, reason, suggested }
+  let lists = {}
+  let model = ""
+  // `null` closed, `{}` adding, `{ name }` editing.
+  let editingHost = null
+  let opening = false
+  let error = ""
+  const label = name => name || "localhost"
+
+  $: names = ["", ...Object.keys(hostsView.hosts || {})]
+  $: here = at || ""
+  $: listed = listings[`${host}|${here}`]
+  // Directories only: this chooses where the tree starts, and a file is not a
+  // place a tree can start. Ignored ones are listed dimmed rather than hidden.
+  $: folders = (listed?.entries || []).filter(row => row.dir)
+  $: base = reach[host]?.base || (host === currentHost ? workspace.base : "")
+  $: crumbs = [{ name: base.split("/").pop() || "the workspace", path: "" }]
+    .concat(here ? here.split("/").map((name, i, all) => ({ name, path: all.slice(0, i + 1).join("/") })) : [])
+  $: dest = dests[host] || null
+  $: places = dest?.places || []
+  $: providerNames = Object.keys(dest?.providers || {})
+  $: shown = lists[`${host}|${provider}`] || null
+  $: elsewhere = host !== currentHost
+  // What the server refuses while it is busy — for the session on screen; a
+  // host's own refusal comes back as `error`.
+  $: busy = elsewhere ? ""
+    : state.status === "running" ? "a turn is running"
+    : (state.jobs || []).some(j => j.state === "proposed") ? "a proposal is waiting at the gate"
+    : ""
+  $: chosenPlace = places.find(p => p.value === place)
+  $: summary = [
+    label(host),
+    here || "the whole workspace",
+    chosenPlace ? chosenPlace.label : "",
+    provider ? `${provider}${model ? " · " + modelLabel(model) : ""}` : "",
+  ].filter(Boolean).join("  ·  ")
+
+  const list = async (name, path) => {
+    const key = `${name}|${path}`
+    if (listings[key]) return
+    const asked = await askHost(name, `workspace/tree?path=${encodeURIComponent(path)}`)
+    listings = { ...listings, [key]: asked.ok ? asked.view : { entries: [], error: asked.error } }
+  }
+
+  const loadModels = async (name, profile) => {
+    provider = profile
+    if (!profile) return
+    const key = `${name}|${profile}`
+    if (!lists[key]) {
+      lists = { ...lists, [key]: { loading: true, models: [] } }
+      const asked = await askHost(name, `providers/${encodeURIComponent(profile)}/models`)
+      const answer = asked.ok ? asked.view : { models: [], reason: asked.error }
+      lists = { ...lists, [key]: { loading: false, ...answer } }
+    }
+    if (provider === profile) model = lists[key].suggested || lists[key].models?.[0] || ""
+  }
+
+  // What may be chosen on a host: its postures on its runtimes, its providers.
+  const loadDest = async name => {
+    if (!dests[name]) {
+      const [postures, providers] = await Promise.all([
+        askHost(name, "postures"),
+        askHost(name, "providers"),
+      ])
+      const p = postures.ok ? postures.view : null
+      const v = providers.ok ? providers.view : null
+      dests = {
+        ...dests,
+        [name]: {
+          postures: p,
+          places: p?.choosable ? placeOptions(p) : [],
+          providers: v?.providers || {},
+          first: v?.running || v?.default || Object.keys(v?.providers || {})[0] || "",
+        },
+      }
+    }
+    if (host !== name) return
+    const d = dests[name]
+    place = name === currentHost && d.postures ? stillThere(d.postures, prefs.place) : "|"
+    await loadModels(name, d.first)
+  }
+
+  // Whether a host answers, and where its server was started — which is what
+  // its remembered folder is keyed by.
+  const probe = async name => {
+    reach = { ...reach, [name]: { state: "asking" } }
+    const asked = await askHost(name, "settings")
+    reach = {
+      ...reach,
+      [name]: asked.ok
+        ? { state: "ok", base: asked.view.base || "" }
+        : { state: "down", error: asked.error },
+    }
+    return asked.ok
+  }
+
+  const remembered = (name, root) => {
+    try {
+      return localStorage.getItem(rootKey(root, name)) || ""
+    } catch {
+      return ""
+    }
+  }
+
+  const pickHost = async name => {
+    host = name
+    error = ""
+    if (name !== currentHost && reach[name]?.state !== "ok" && !(await probe(name))) return
+    if (host !== name) return
+    at = name === currentHost ? workspace.root || "" : remembered(name, reach[name]?.base || "")
+    await Promise.all([list(name, at), loadDest(name)])
+  }
+
+  const browseTo = path => {
+    at = path
+    list(host, path)
+  }
+
+  const reloadHosts = async () => {
+    const asked = await loadHosts()
+    if (asked.ok) hostsView = asked.view
+    for (const name of Object.keys(hostsView.hosts || {})) {
+      if (!reach[name]) probe(name)
+    }
+  }
+
+  // The folder only, keeping the session on screen — what the picker did.
+  const useFolder = () => {
+    if (!elsewhere) return chooseRoot(here)
+    try {
+      localStorage.setItem(rootKey(base, host), here)
+    } catch {
+      // Applied for this visit, and asked again next time.
+    }
+    goToHost(host)
+  }
+
+  // The folder, and a session there: the session starter's *Start session*,
+  // on whichever host is chosen.
+  const openProject = async () => {
+    if (opening || busy) return
+    opening = true
+    error = ""
+    const [posture, runtime] = (place || "|").split("|")
+    const choice = Object.fromEntries(Object.entries({
+      provider, model, posture, runtime,
+    }).filter(([, value]) => value))
+    if (!elsewhere) {
+      const ok = await newSession(choice)
+      if (!ok) {
+        opening = false
+        error = state.error || "the session was refused"
+        return
+      }
+      setPlace(place || "|")
+      await chooseRoot(here)
+      opening = false
+      await checkModel()
+      return
+    }
+    const made = await tellHost(host, "sessions", Object.keys(choice).length ? choice : undefined)
+    if (!made.ok) {
+      opening = false
+      error = made.error
+      return
+    }
+    useFolder()
+  }
+
+  reloadHosts()
+  pickHost(host)
+</script>
+
+<!-- **Forced is locked.** On a first visit there is nothing behind this to go
+     back to, so `closePicker` refuses — and ESC has to refuse with it. -->
+<Modal :title="workspace.picker.forced ? 'Which project?' : 'Project'" width="64rem"
+       :locked="workspace.picker.forced" @close="closePicker()">
+
+  <section class="modal-body">
+    <p :if="workspace.picker.forced" class="dim small intro">
+      <code>luu serve</code> was started in <code>{{ base || workspace.base }}</code>
+      on {{ host ? host : "this machine" }}.
+      Everything the panels can reach is under it — pick the folder you are
+      working in, or take the whole thing.
+    </p>
+
+    <div class="project">
+      <!-- Hosts: this machine, and every `[host.*]`. -->
+      <section class="col hosts" aria-label="Host">
+        <h3>Host</h3>
+        <ul class="list" role="listbox">
+          <li :each="name in names" :key="name || '-'">
+            <button type="button" class="pick" role="option"
+                    :class.on="name === host" :aria-selected="String(name === host)"
+                    :title="name ? (hostsView.hosts[name]?.url || '') : 'the server this page came from'"
+                    @click="pickHost(name)">
+              <span class="dot" :class="name ? (reach[name]?.state || 'asking') : 'ok'"
+                    :title="reach[name]?.error || ''"></span>
+              <span class="text">
+                <strong>{{ label(name) }}</strong>
+                <span class="dim small">{{ name ? (hostsView.hosts[name]?.url || "").replace(/^https?:\/\//, "") : "this machine" }}</span>
+              </span>
+              <span :if="name === currentHost" class="here small">here</span>
+            </button>
+            <button :if="name && hostsView.editable" type="button" class="edit" title="Edit this host"
+                    @click="editingHost = { name }"><svg class="ic"><use href="#i-edit"/></svg></button>
+          </li>
+        </ul>
+        <button :if="hostsView.editable" type="button" class="add" @click="editingHost = {}">
+          <svg class="ic"><use href="#i-plus"/></svg> Add a host
+        </button>
+      </section>
+
+      <!-- The folder on it. -->
+      <section class="col folder" aria-label="Folder">
+        <h3>Folder</h3>
+        <p :if="reach[host]?.state === 'down'" class="refused">
+          {{ label(host) }} does not answer: {{ reach[host]?.error }}
+        </p>
+        <nav :if="reach[host]?.state !== 'down'" class="crumbs">
+          <button :each="crumb in crumbs" :key="crumb.path" type="button" class="crumb"
+                  :class.on="crumb.path === here" @click="browseTo(crumb.path)">{{ crumb.name }}</button>
+        </nav>
+        <ul :if="reach[host]?.state !== 'down'" class="folders list">
+          <li :each="row in folders" :key="row.path">
+            <button type="button" class="row" :class.ignored="row.ignored" :title="row.path"
+                    @click="browseTo(row.path)">
+              <svg class="ic"><use href="#i-folder"/></svg>
+              <span class="name">{{ row.name }}</span>
+              <span :if="row.repo" class="repo" title="A git repository">git</span>
+              <svg class="ic caret"><use href="#i-caret"/></svg>
+            </button>
+          </li>
+        </ul>
+        <p :if="listed && !listed.error && !folders.length" class="dim small">
+          Nothing but files in here. Take it, or go back up.
+        </p>
+        <p :if="listed?.error" class="refused">{{ listed.error }}</p>
+      </section>
+
+      <!-- The session there: where its commands run, and where it sends. -->
+      <section class="col run" aria-label="Runtime and model">
+        <h3>Runtime</h3>
+        <select :if="places.length > 1" class="place" :value="place"
+                @change="place = $event.target.value">
+          <option :each="p in places" :key="p.value" :value="p.value" :disabled="p.disabled"
+                  :title="p.title">{{ p.name }} — {{ p.label }}</option>
+        </select>
+        <p :if="places.length <= 1" class="dim small">
+          {{ places[0] ? places[0].name + " — " + places[0].label : "the server's own policy" }}
+        </p>
+
+        <h3>Model</h3>
+        <p :if="dest && !providerNames.length" class="dim small">
+          {{ label(host) }} has no providers in its <code>config.toml</code> yet.
+        </p>
+        <select :if="providerNames.length" :value="provider"
+                @change="loadModels(host, $event.target.value)">
+          <option :each="name in providerNames" :key="name" :value="name">{{ name }}</option>
+        </select>
+        <ul :if="providerNames.length" class="models list" role="listbox">
+          <li :if="shown?.loading" class="dim small pad">asking the provider…</li>
+          <li :each="m in shown?.models || []" :key="m">
+            <button type="button" class="model" role="option" :class.on="m === model"
+                    :aria-selected="String(m === model)" @click="model = m">
+              <span class="check">{{ m === model ? "✓" : "" }}</span>
+              <span class="name">{{ shown?.labels?.[m] || modelLabel(m) }}</span>
+            </button>
+          </li>
+        </ul>
+        <input :if="providerNames.length && shown && !shown.loading && !shown.models?.length"
+               :value="model" placeholder="a model name — or empty for its own"
+               @input="model = $event.target.value">
+        <p :if="shown?.reason && !shown?.models?.length" class="dim small">{{ shown.reason }}</p>
+      </section>
+    </div>
+
+    <div class="modal-foot">
+      <div class="modal-actions">
+        <span class="chosen small dim" :title="summary">{{ summary }}</span>
+        <span :if="busy" class="warn small">Cannot start a session: {{ busy }}.</span>
+        <span :if="error" class="error small" :title="error">{{ error }}</span>
+        <button type="button" :disabled="reach[host]?.state === 'down' || opening"
+                title="Show this folder, and keep the session on screen"
+                @click="useFolder()">Use this folder</button>
+        <button type="button" class="save"
+                :disabled="reach[host]?.state === 'down' || opening || !!busy"
+                title="Show this folder, and start a session there with this runtime and model"
+                @click="openProject()">{{ opening ? "Opening…" : "Open" }}</button>
+      </div>
+    </div>
+
+    <!-- Inside the modal's body, so it opens as its child: a sheet out of
+         this head, over this body only — as an engine's form over Settings. -->
+    <HostForm :if="editingHost" :view="hostsView" :editing="editingHost?.name || ''"
+              :saved="next => { hostsView = next; reach = {}; reloadHosts() }"
+              :close="() => { editingHost = null }" />
+  </section>
+</Modal>
+
+
+<style scoped>
+  .intro { margin: 0 0 .8rem; line-height: 1.6; }
+  .intro code { color: var(--fg); }
+
+  .project {
+    display: grid;
+    grid-template-columns: minmax(11rem, 14rem) minmax(0, 1fr) minmax(14rem, 18rem);
+    gap: 1rem;
+    /* Fixed, so moving between hosts and folders does not resize the modal
+       under the pointer. Each column scrolls inside it. */
+    height: min(26rem, 60vh);
+  }
+  .col { display: flex; flex-direction: column; min-height: 0; min-width: 0; gap: .4rem; }
+  .col h3 { margin: 0; }
+  .col h3 + * { margin-top: 0; }
+  .run h3:not(:first-child) { margin-top: .6rem; }
+  .list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
+  }
+  .hosts .list, .folders { flex: 1; }
+  .models { flex: 1; min-height: 4rem; }
+
+  .hosts li { display: flex; align-items: center; }
+  .pick {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    padding: .4rem .5rem;
+    color: var(--fg);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .pick:hover { background: var(--bg); }
+  .pick.on { background: var(--selected); }
+  .pick .text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .pick .text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .here { color: var(--dim); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dim); }
+  .dot.ok { background: var(--ok); }
+  .dot.down { background: var(--bad); cursor: help; }
+  .dot.asking { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .dot.asking { animation: none; } }
+  .edit {
+    background: none;
+    border: 0;
+    color: var(--dim);
+    padding: .3rem .45rem;
+    cursor: pointer;
+    opacity: 0;
+  }
+  .hosts li:hover .edit, .edit:focus-visible { opacity: 1; }
+  .edit:hover { color: var(--fg); }
+  .add {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    align-self: flex-start;
+    font-size: 12px;
+  }
+
+  .crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .15rem;
+  }
+  .crumb {
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: var(--dim);
+    font: inherit;
+    font-size: 12px;
+    padding: .1rem .35rem;
+    cursor: pointer;
+  }
+  .crumb:hover { color: var(--fg); background: var(--bg); }
+  .crumb.on { color: var(--fg); }
+  /* A separator that is not a character somebody has to find in a font: the
+     crumbs are buttons and the slash between them is drawn by the layout. */
+  .crumb + .crumb::before { content: "/"; color: var(--dim); margin-right: .35rem; }
+
+  .row, .model {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    width: 100%;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    color: var(--fg);
+    font: inherit;
+    font-size: 13px;
+    padding: .25rem .5rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  .row:hover, .model:hover { background: var(--bg); }
+  .row .ic { color: var(--dim); }
+  .row.ignored .name { opacity: .45; }
+  .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .caret { width: 12px; height: 12px; }
+  /* A repository: the folder somebody works in, usually. A word rather than
+     a glyph nobody has learned, small and in the accent. */
+  .repo {
+    flex: none;
+    font-size: 10px;
+    line-height: 1;
+    padding: .15rem .3rem;
+    border-radius: 3px;
+    color: var(--accent);
+    border: 1px solid currentColor;
+  }
+
+  .model { font-size: 12px; }
+  .model.on { color: var(--accent); }
+  .check { width: 1em; flex: none; color: var(--accent); }
+  .pad { padding: .3rem .5rem; }
+  .run select, .run input { width: 100%; font-size: 12px; }
+
+  .modal-actions { align-items: center; }
+  .chosen {
+    flex: 1;
+    min-width: 0;
+    font-family: ui-monospace, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .modal-actions .save { margin-left: 0; }
+  .error { color: var(--bad); max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  @media (max-width: 760px) {
+    .project { grid-template-columns: 1fr; height: auto; }
+    .hosts .list, .folders, .models { max-height: 12rem; }
+  }
+</style>
