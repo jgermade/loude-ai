@@ -22,6 +22,13 @@ image="${LUU_IMAGE:-luu-worker:dev}"
 policy="luu.container.toml"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+# A state directory of its own, empty, for every `luu` this script runs that
+# does not name one: without it a `luu chat` reads the `config.toml` of whoever
+# runs the script, and on a machine with a default provider the read below
+# went to a real model, which answered in prose instead of the call the mock
+# was given. CI has no config, which is why it never showed there.
+export LUU_HOME="$work/empty-home"
+mkdir -p "$LUU_HOME"
 
 [ -x "$luu" ] || { echo "no luu binary at $luu — cargo build --release --bin luu"; exit 1; }
 
@@ -118,7 +125,7 @@ has "$work/command.txt" "held by"
 # 6. The whole point of the surface work: a *session* choosing the container,
 #    the way a person does it in the browser — a name in config.toml, a POST,
 #    and a tool call that runs on the far side of the pipe.
-say "a session started on a container posture"
+say "a session moved to a container posture, and one started on it"
 home="$work/home"
 mkdir -p "$home"
 cat > "$home/config.toml" <<TOML
@@ -131,9 +138,13 @@ policy = "$(pwd)/$policy"
 TOML
 
 port=7893
-# Three replies, because a prompt at the gate is three model calls: the plan a
-# person answers, the call the approved job makes, and the answer.
+# Four replies, in the order the turns take them: a prompt runs in the draft
+# it opens and answers there, the plan is a call of its own when it is asked
+# for, the approved job makes the tool call, and the answer comes after its
+# result. It was three replies, written before every prompt opened a draft —
+# the draft's answer took the plan, and the call never came.
 LUU_HOME="$home" "$luu" serve --bind "127.0.0.1:$port" --no-store --mock-delay-ms 0 \
+  --mock-reply 'I will list it.' \
   --mock-reply '```plan
 {"objective":"list a file","steps":["run ls"],"files":[],"commands":["ls"]}
 ```' \
@@ -163,13 +174,18 @@ print('before:', json.dumps(before['posture']))
 curl -fsS --max-time 10 "http://127.0.0.1:$port/api/postures" >"$work/postures.json"
 grep -q '"container"' "$work/postures.json" || { cat "$work/postures.json"; exit 1; }
 
-# The one call that starts a container, and the only one here that is allowed
-# to take seconds. Bounded like the rest: everything this script talks to is a
-# server it started itself, so a wait with no end is a bug rather than a slow
-# peer.
-curl -fsS --max-time 120 -X POST "http://127.0.0.1:$port/api/sessions" \
+# The live session *moved* to the container posture, which is what the
+# terminal's picker does: it keeps its backend, and with it the replies above.
+# A session *started* on the posture builds its destination afresh, and a
+# destination built mid-run has no fixtures (`backend_for`) — so the tool call
+# below ran against the mock's default text, never made a call, and waited out
+# its two minutes. That one is still started, after the call, for its own
+# assertions. The calls that start a container are the only ones here allowed
+# to take seconds; bounded like the rest, because everything this script talks
+# to is a server it started itself.
+curl -fsS --max-time 120 -X PUT "http://127.0.0.1:$port/api/session/posture" \
   -H 'content-type: application/json' \
-  -d '{"posture":"container"}' >/dev/null
+  -d '{"posture":"container","runtime":null}' >/dev/null
 
 curl -fsS --max-time 10 "http://127.0.0.1:$port/api/settings" >"$work/after.json"
 python3 -c "
@@ -237,6 +253,19 @@ clearTimeout(patience)
 ws.close()
 NODE
 fi
+
+# And a session started on the posture, which is the starter's way there.
+curl -fsS --max-time 120 -X POST "http://127.0.0.1:$port/api/sessions" \
+  -H 'content-type: application/json' \
+  -d '{"posture":"container"}' >/dev/null || { cat "$work/serve.log"; exit 1; }
+curl -fsS --max-time 10 "http://127.0.0.1:$port/api/settings" >"$work/started.json"
+python3 -c "
+import json
+posture = json.load(open('$work/started.json'))['posture']
+assert posture['name'] == 'container', posture
+assert 'docker' in posture['runtime'], posture
+print('started:', json.dumps(posture))
+"
 
 kill $serving 2>/dev/null || true
 trap 'rm -rf "$work"' EXIT
