@@ -49,7 +49,8 @@
   const InspectorFiles = await import("@web/views/inspector/tree/tree.html")
   const InspectorGit = await import("@web/views/inspector/version-control/version-control.html")
   const ContentViewer = await import("@web/views/editor/editor.html")
-  const FolderPicker = await import("@web/views/inspector/tree/folder-picker.html")
+  const Project = await import("@web/views/inspector/tree/project.html")
+  const { currentHost } = await import("@web/lib/hosts.js")
   const SettingsModal = await import("@web/views/settings/settings.html")
   const ModelPicker = await import("@web/views/chat/model-picker.html")
   const SessionStarter = await import("@web/views/chat/session-starter.html")
@@ -359,9 +360,11 @@
       || { id: state.currentSessionId },
   )
 
-  $: rootLabel = workspace.root
+  // The host first when it is not this machine: the same folder name on two
+  // machines is two projects.
+  $: rootLabel = (currentHost ? `${currentHost}: ` : "") + (workspace.root
     ? workspace.root
-    : (workspace.base.split("/").pop() || "workspace")
+    : (workspace.base.split("/").pop() || "workspace"))
 
   $: running = state.status === "running"
   // Whether this is a recording, which is not the same question as what the
@@ -652,10 +655,11 @@
       <InspectorDebug :if="prefs.inspector === 'debug'" />
     </div>
     <footer class="col-foot">
-      <!-- Which folder, and the way to change it. The ceiling is where
-           `luu serve` was started; this chooses a subdirectory of it. -->
+      <!-- Which project — host, folder, and a session there — and the way to
+           change it. The ceiling is where that host's `luu serve` was
+           started; the folder is a subdirectory of it. -->
       <button type="button" class="root" @click="openPicker()"
-              :title="`${workspace.base}${workspace.root ? '/' + workspace.root : ''} — click to change`">
+              :title="`${currentHost ? currentHost + ': ' : ''}${workspace.base}${workspace.root ? '/' + workspace.root : ''} — click to change the project`">
         <svg class="ic"><use href="#i-folder"/></svg>
         <span>{{ rootLabel }}</span>
       </button>
@@ -1241,7 +1245,7 @@
 
 <!-- Which folder the panels look at. Over the whole window on a first visit,
      with no way out other than choosing: there is nothing behind it yet. -->
-<FolderPicker :if="workspace.picker.open" />
+<Project :if="workspace.picker.open" />
 <SettingsModal :if="state.settingsOpen" />
 <SessionStarter :if="ui.starter" />
 <TurnInspect :if="ui.inspecting != null" />

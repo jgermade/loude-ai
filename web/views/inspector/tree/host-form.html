@@ -1,0 +1,131 @@
+<script :setup="{ view = null, editing = '', saved = null, close = null }">
+  // One `[host.<name>]`, added, edited or removed, over the project modal —
+  // the way an engine is over Settings. A host is another `luu serve`; this
+  // server forwards to it with the token in the file named here, which the
+  // page never reads. See `crate::hosts`.
+  const { saveHosts, askHost } = await import("@web/lib/hosts.js")
+  const Modal = await import("@web/components/modal.html")
+
+  // False once it should leave: `Modal` plays the exit, then `close` unmounts.
+  let open = true
+
+  const current = editing ? view?.hosts?.[editing] : null
+  let name = editing || ""
+  let url = current?.url || ""
+  let tokenFile = current?.["token-file"] || ""
+  let saving = false
+  let error = ""
+  // What the host said when it was last tried from here.
+  let tried = ""
+
+  $: trimmed = name.trim()
+  $: badName = trimmed && !/^[A-Za-z0-9_-]+$/.test(trimmed)
+  // The name this form wrote, once it has: the host it is still showing.
+  let written = editing
+  $: taken = trimmed !== written && !!view?.hosts?.[trimmed]
+  $: badUrl = !/^https?:\/\/[^/\s]+/.test(url.trim())
+  $: canSave = !!trimmed && !badName && !taken && !badUrl && !saving && view?.editable
+
+  const others = () => {
+    const hosts = { ...(view?.hosts || {}) }
+    if (editing) delete hosts[editing]
+    return hosts
+  }
+
+  const write = async hosts => {
+    saving = true
+    error = ""
+    const written = await saveHosts(hosts)
+    saving = false
+    if (!written.ok) {
+      error = written.error
+      return false
+    }
+    saved?.(written.view)
+    return true
+  }
+
+  const save = async () => {
+    if (!canSave) return
+    const hosts = others()
+    hosts[trimmed] = {
+      url: url.trim().replace(/\/+$/, ""),
+      ...(tokenFile.trim() ? { "token-file": tokenFile.trim() } : {}),
+    }
+    if (!(await write(hosts))) return
+    written = trimmed
+    // Tried once it is written, since the proxy only knows written hosts: a
+    // host that does not answer is still saved, and says why here.
+    const asked = await askHost(trimmed, "settings")
+    if (asked.ok) {
+      open = false
+      return
+    }
+    tried = asked.error
+  }
+
+  const remove = async () => {
+    if (await write(others())) open = false
+  }
+</script>
+
+<Modal :title="editing ? 'Host ' + editing : 'Add a host'" width="32rem" :open="open" @close="close?.()">
+  <section class="modal-body">
+    <p class="dim small intro">
+      Another machine running <code>luu serve</code>, bound where this one can
+      reach it and started with <code>--auth-token-file</code>. Sessions there
+      are that machine's; this one only carries the bytes.
+    </p>
+
+    <dl class="settings form">
+      <dt>Name</dt>
+      <dd>
+        <input :value="name" placeholder="workstation" :disabled="!!editing"
+               @input="name = $event.target.value">
+      </dd>
+      <dd :if="badName" class="caveat">Letters, digits, <code>-</code> and <code>_</code>: it goes in the page's URL.</dd>
+      <dd :if="taken" class="caveat">There is a host called {{ trimmed }} already.</dd>
+
+      <dt>URL</dt>
+      <dd>
+        <input :value="url" placeholder="http://ryzen.local:7878"
+               @input="url = $event.target.value">
+      </dd>
+      <dd :if="url.trim() && badUrl" class="caveat">An <code>http://</code> or <code>https://</code> address.</dd>
+
+      <dt>Token file</dt>
+      <dd>
+        <input :value="tokenFile" placeholder="~/.config/luu/workstation.token"
+               @input="tokenFile = $event.target.value">
+      </dd>
+      <dd class="note">
+        A path on <em>this</em> machine to a file holding the token the host
+        was started with, readable by its owner only (<code>chmod 600</code>).
+        The page never sees the token.
+      </dd>
+    </dl>
+
+    <p :if="!view?.editable" class="refused">
+      This server is bound off loopback, so it does not reach hosts: a token for
+      it would carry theirs.
+    </p>
+    <p :if="tried" class="caveat">Saved, and it does not answer yet: {{ tried }}</p>
+    <p :if="error" class="error">{{ error }}</p>
+
+    <div class="modal-foot">
+      <div class="modal-actions">
+        <button :if="editing" type="button" class="danger" :disabled="saving" @click="remove()">Remove</button>
+        <button type="button" @click="open = false">{{ tried ? "Close" : "Cancel" }}</button>
+        <button type="button" class="save" :disabled="!canSave" @click="save()">
+          {{ saving ? "Saving…" : (editing ? "Save" : "Add host") }}
+        </button>
+      </div>
+    </div>
+  </section>
+</Modal>
+
+<style scoped>
+  .intro { margin: 0 0 .4rem; line-height: 1.6; }
+  .form input { width: 100%; }
+  .danger { color: var(--bad); }
+</style>

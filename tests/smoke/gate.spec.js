@@ -978,6 +978,15 @@ test("the workspace can be narrowed to a subdirectory of where serve started", a
   // place a tree can start.
   await expect(picker.locator(".folders .row")).not.toHaveCount(0)
   await expect(picker.locator('.folders .row:has-text("Cargo.toml")')).toHaveCount(0)
+  // A project, not only a folder: the host first — this machine, with no
+  // `[host.*]` in a fresh state directory — and a session's runtime and model
+  // last. Nothing under the base is a repository of its own, so nothing is
+  // marked; `tests/hosts.rs` and `workspace.rs` test the mark and the hop.
+  await expect(picker.locator(".hosts .pick")).toHaveCount(1)
+  await expect(picker.locator(".hosts .pick")).toContainText("localhost")
+  await expect(picker.locator(".run select, .run p").first()).toBeVisible()
+  await expect(picker.locator("button.save", { hasText: "Open" })).toBeVisible()
+  await expect(picker.locator(".folders .repo")).toHaveCount(0)
 
   await picker.locator('.folders .row:has-text("crates")').click()
   await expect(picker.locator(".crumbs .crumb")).toHaveCount(2)

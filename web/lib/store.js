@@ -203,10 +203,14 @@ function appendToken(text) {
 // halves are unchanged.
 const token = new URLSearchParams(location.search).get("token")
 
+// The one absolute path the page builds, so it carries the host's prefix
+// itself: under `/h/<name>/` the socket is the host's, like every `./api/…`.
+const prefix = (location.pathname.match(/^\/h\/[^/]+(?=\/)/) || [""])[0]
+
 function url(path) {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:"
   const query = token ? `?token=${encodeURIComponent(token)}` : ""
-  return `${scheme}//${location.host}${path}${query}`
+  return `${scheme}//${location.host}${prefix}${path}${query}`
 }
 
 /// A socket on this server, with the token when there is one. Exported for

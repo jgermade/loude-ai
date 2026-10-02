@@ -45,12 +45,9 @@ libc.workspace = true
 # reqwest is agent-core's already; this makes it this crate's too.
 reqwest.workspace = true
 sha2.workspace = true
+# The other end of a host's socket, forwarded — `crate::hosts`.
+tokio-tungstenite.workspace = true
 # The server's log. See `crate::log`.
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
-
-# The tests only: `tests/serve_ws.rs` drives the running server over its own
-# socket, which needs a client for each half of what it serves.
-[dev-dependencies]
-tokio-tungstenite.workspace = true

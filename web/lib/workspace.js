@@ -11,6 +11,7 @@
 
 import { $reactive } from "@web/vendor/jq79.js"
 import { apiHeaders } from "./store.js"
+import { currentHost } from "./hosts.js"
 import { setPane } from "./prefs.js"
 
 export const workspace = $reactive({
@@ -87,8 +88,11 @@ export const workspace = $reactive({
 // and that is the one thing the workspace surface has never been.
 
 /// Where the remembered root is kept, keyed by the base — two servers on one
-/// machine do not inherit each other's answer.
-const rootKey = base => `luu.root:${base}`
+/// machine do not inherit each other's answer — and by the host, so two
+/// machines with the same `$HOME` do not either. This machine's key is the one
+/// it always was, so nothing remembered before hosts is lost.
+export const rootKey = (base, host = currentHost) =>
+  host ? `luu.root@${host}:${base}` : `luu.root:${base}`
 
 /// A base-relative path as the panels *show* it — relative to the chosen root.
 /// Returns `null` for anything outside it, which is what filters git's status
