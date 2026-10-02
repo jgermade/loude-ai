@@ -62,7 +62,9 @@
   await $mounted()
   // A font arriving or the row wrapping moves every button without the choice
   // changing.
-  new ResizeObserver(() => place()).observe($self(".seg"))
+  const sizes = new ResizeObserver(() => place())
+  sizes.observe($self(".seg"))
+  $destroyed(() => sizes.disconnect())
   // Read `model` and `items` so this re-runs when either does, and measure on
   // the next frame, once the `.on` class has moved.
   $: (model, items, requestAnimationFrame(place))

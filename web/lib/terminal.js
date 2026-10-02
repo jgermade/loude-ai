@@ -16,6 +16,7 @@
 
 import { $reactive } from "@web/vendor/jq79.js"
 import { apiHeaders, socketUrl, refreshSettings } from "./store.js"
+import { setPlace } from "./prefs.js"
 
 export const terminal = $reactive({
   /// `{ available, place, reason, posture, xterm }` from `/api/terminal`, or
@@ -202,6 +203,8 @@ export async function moveSession(name, runtime, host) {
     }
     const { moved } = await answer.json()
     if (moved) {
+      // The next session is offered where this one now runs.
+      setPlace(`${name || ""}|${runtime || ""}`)
       endTerminal()
       await refreshSettings()
     }

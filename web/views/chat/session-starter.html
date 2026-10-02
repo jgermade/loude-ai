@@ -8,6 +8,7 @@
     ui, loadModels, editStarter, closeStarter, startSession, continueHere,
   } = await import("@web/lib/ui.js")
   const Modal = await import("@web/components/modal.html")
+  const { placeOptions } = await import("@web/lib/places.js")
 
   $: profileNames = Object.keys(state.providers?.providers || {})
   // Empty where nobody has written a posture down, and where a surface cannot
@@ -15,6 +16,10 @@
   $: postureNames = state.postures?.choosable
     ? Object.keys(state.postures?.postures || {})
     : []
+  // Every posture on every runtime it can run on, as the terminal's foot
+  // offers them; the last one used is chosen to begin with (`openStarter`).
+  $: places = state.postures?.choosable ? placeOptions(state.postures) : []
+  $: chosenPosture = (ui.starter?.place || "|").split("|")[0]
   $: proposed = (state.jobs || state.tasks).find(j => j.state === "proposed") || null
   // What stands in the way of *either* action: the server refuses both while a
   // turn is in flight or a proposal is unanswered, and a button that fails when
@@ -71,17 +76,17 @@
       <!-- What the session may do, which is not where it sends. Offered only
            where somebody has written one down: the names come from
            `config.toml`, and a page cannot add to them. -->
-      <dt :if="postureNames.length">Posture</dt>
-      <dd :if="postureNames.length">
-        <select :value="ui.starter?.posture"
-                @change="editStarter({ posture: $event.target.value })">
-          <option value="">this server's own policy file</option>
-          <option :each="name in postureNames" :key="name" :value="name">{{ name }}</option>
+      <dt :if="places.length > 1">Runs</dt>
+      <dd :if="places.length > 1">
+        <select class="place" :value="ui.starter?.place"
+                @change="editStarter({ place: $event.target.value })">
+          <option :each="p in places" :key="p.value" :value="p.value" :disabled="p.disabled"
+                  :title="p.title">{{ p.name }} — {{ p.label }}</option>
         </select>
       </dd>
-      <dd :if="postureNames.length && ui.starter?.posture" class="dim small">
-        {{ state.postures?.postures[ui.starter?.posture]?.policy }} — chosen now
-        and never moved: a session's jobs are approved against what it may do.
+      <dd :if="places.length > 1 && chosenPosture" class="dim small">
+        {{ state.postures?.postures[chosenPosture]?.policy }} — chosen now:
+        a session's jobs are approved against what it may do.
       </dd>
       <dd :if="!ui.starter?.reason && !ui.starter?.loading && !ui.starter?.models?.length" class="dim">
         This provider offers no list, so the model is whatever you type.

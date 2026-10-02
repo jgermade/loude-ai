@@ -286,6 +286,11 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   const context = page.getByRole("dialog", { name: "Context" })
   await expect(context).toBeVisible()
   await expect(context.locator('.group[data-bucket="prompt"] pre').last()).toHaveText("go on then")
+  // And the answer to it, which the prompt it was measured from cannot hold:
+  // it was written after. Marked as not sent, because the next turn sends it.
+  const answered = context.locator('.group[data-bucket="answer"]')
+  await expect(answered.locator("pre")).toContainText(ANSWER)
+  await expect(answered.locator("header")).toContainText("not sent yet")
   await context.locator(".modal-head button", { hasText: "close" }).click()
   await expect(context).toBeHidden()
 
@@ -296,6 +301,7 @@ test("a prompt is planned, amended, approved, run and folded", async ({ page }) 
   await expect(ctx).toBeEnabled({ timeout: 15_000 })
   await ctx.click()
   await expect(context.locator('.group[data-bucket="prompt"] pre').last()).toHaveText("go on then")
+  await expect(context.locator('.group[data-bucket="answer"] pre')).toContainText(ANSWER)
   await context.locator(".modal-head button", { hasText: "close" }).click()
 
   // One entry where its turns were.
@@ -427,14 +433,21 @@ test("a session is started on a posture, and the page says which", async ({ page
   // Offered by name, out of config.toml. The page cannot add to the list: a
   // posture is a policy file, and one the browser could write is a sandbox the
   // browser could widen.
-  const picker = starter.locator("select").last()
+  // Named by posture and by where it runs, as the terminal's foot names them.
+  const picker = starter.locator("select.place")
   await expect(picker.locator("option")).toHaveText([
-    "this server's own policy file",
-    "wide",
+    "server default — host",
+    "wide — host",
   ])
-  await picker.selectOption("wide")
+  await picker.selectOption("wide|")
   await starter.locator('button:has-text("Start session")').click()
   await expect(starter).toBeHidden({ timeout: 30_000 })
+
+  // The next session is offered where this one runs.
+  await page.click('.chat .acts button[title*="New session"]')
+  await expect(starter.locator("select.place")).toHaveValue("wide|")
+  await starter.locator(".modal-head button.close").click()
+  await expect(starter).toBeHidden()
 
   // And it is in force: Models opens on what this server resolved, and it
   // resolved the file the posture named. Reached from the composer's second
@@ -506,16 +519,19 @@ test("the three columns are there, each with a head and a foot", async ({ page }
   // a history popover — see
   // `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
   await expect(page.locator(".chat .name")).not.toBeEmpty()
-  // Two, not three: the cog moved to the inspector's foot, which is the column
-  // that is always on screen. See
-  // `RECORD/2026-09-16.the-modals-are-dialogs.completed.md`.
-  await expect(page.locator(".chat .acts button")).toHaveCount(2)
+  // No cog: it moved to the inspector's foot, which is the column that is
+  // always on screen. See
+  // `RECORD/2026-09-16.the-modals-are-dialogs.completed.md`. What is here: a
+  // new session, the history, copying the conversation, and — at this width,
+  // where three columns fit — the switch to two.
+  await expect(page.locator(".chat .acts button")).toHaveCount(4)
+  await expect(page.locator(".chat .acts button").last()).toHaveClass(/columns/)
   await expect(page.locator('.inspector .col-foot button[title="Settings"]')).toHaveCount(1)
   // Drawn rather than typed since phase 7 of the three-pane record — this used
   // to assert the text "+". Every symbol on the page is a `<use>` of the
   // sprite in `app.html`, so a sprite that stopped rendering blanks all of
   // them at once and is worth one assertion of its own.
-  await expect(page.locator("svg.sprite symbol")).toHaveCount(21)
+  await expect(page.locator("svg.sprite symbol")).toHaveCount(23)
   await expect(page.locator('.chat .acts use[href="#i-plus"]')).toHaveCount(1)
 
   // The history is the old strip. The live session cannot be deleted — the
@@ -1073,7 +1089,7 @@ async function gateOnWidePosture(page) {
   await page.click('.chat .acts button[title*="New session"]')
   const starter = page.getByRole("dialog", { name: "Where a session sends" })
   await expect(starter).toBeVisible()
-  await starter.locator("select").last().selectOption("wide")
+  await starter.locator("select.place").selectOption("wide|")
   await starter.locator('button:has-text("Start session")').click()
   await expect(starter).toBeHidden({ timeout: 30_000 })
 
@@ -1258,4 +1274,221 @@ test("the chat takes the focus when it is shown and on ESC", async ({ page }) =>
   await expect(page.locator(".col.chat")).toHaveCount(0)
   await page.locator(".swap").click()
   await expect(composer).toBeFocused()
+})
+
+/**
+ * The transcript follows its end while it is at its end: what arrives is on
+ * screen. Scrolled up to read, it is left where it was put, and scrolling back
+ * to the end picks the following up again.
+ */
+test("the chat follows what arrives while it is at the end, and not after a person scrolls up", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 700 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  const scroller = page.locator(".col.chat [data-scrollable]:has(> .transcript)")
+  await expect(scroller).toBeVisible()
+
+  // Rows the page did not draw, so the test does not wait on a model: a
+  // mutation inside the scroller is what the component watches either way.
+  const grow = rows => page.evaluate(n => {
+    const transcript = document.querySelector(".col.chat .transcript")
+    for (let i = 0; i < n; i++) {
+      const row = document.createElement("p")
+      row.className = "probe"
+      row.textContent = `row ${i}`
+      row.style.height = "40px"
+      transcript.append(row)
+    }
+  }, rows)
+  const gap = () => scroller.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)
+
+  await grow(40)
+  await expect.poll(gap).toBeLessThan(2)
+
+  // Up to read: more arrives and the reader is not moved.
+  await scroller.evaluate(el => { el.scrollTop = 0 })
+  await page.waitForTimeout(50)
+  await grow(5)
+  await page.waitForTimeout(100)
+  expect(await scroller.evaluate(el => el.scrollTop)).toBe(0)
+
+  // Back at the end: following again.
+  await scroller.evaluate(el => { el.scrollTop = el.scrollHeight })
+  await page.waitForTimeout(50)
+  await grow(5)
+  await expect.poll(gap).toBeLessThan(2)
+})
+
+/**
+ * A folder whose only content is a folder is one row, `parent/nested`: the
+ * name opens the nested one, the caret the parent. And opening a folder leaves
+ * the tree where it was scrolled — it used to rebuild every row, and the list
+ * emptied for a moment and threw the scroll back to the top.
+ */
+test("a folder that only holds a folder is one row, and opening one keeps the scroll", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 500 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  await page.click('.inspector .tabs button:has-text("Files")')
+  const tree = page.locator(".inspector .tree")
+  // `editors/` holds `vscode/` and nothing else, in this checkout.
+  const compact = tree.locator('li:has(.name:text-is("editors/vscode"))')
+  await expect(compact).toHaveCount(1)
+
+  await compact.locator(".row").click()
+  await expect(tree.locator('.name:text-is("package.json")').first()).toBeVisible()
+  await compact.locator(".twist").click()
+  await expect(tree.locator('.name:text-is("editors")')).toHaveCount(1)
+  await expect(tree.locator('.name:text-is("vscode")')).toHaveCount(1)
+
+  // Clicked from the page rather than by Playwright, which would scroll the
+  // row into view first and hide the very thing being measured.
+  const click = async name => {
+    await expect(tree.locator(`.name:text-is("${name}")`)).toHaveCount(1)
+    await page.evaluate(n => [...document.querySelectorAll(".inspector .tree .row")]
+      .find(row => row.querySelector(".name").textContent === n).click(), name)
+  }
+  await click("crates")
+  await click("web")
+  const scroller = await page.evaluateHandle(() => {
+    let el = document.querySelector(".inspector .tree")
+    while (el && !(el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY !== "visible")) el = el.parentElement
+    return el
+  })
+  await scroller.evaluate(el => { el.scrollTop = 200 })
+  const first = await page.evaluateHandle(() => document.querySelector(".inspector .tree li"))
+  // The row at the top of the view, and where it is: what a person is looking
+  // at. Rows opening above it may move `scrollTop` — the browser's scroll
+  // anchoring keeps the view still that way — but it never goes back.
+  const anchor = await page.evaluateHandle(() => {
+    const box = document.querySelector(".inspector .tree").closest(".col-main").getBoundingClientRect()
+    return [...document.querySelectorAll(".inspector .tree li")].find(li => li.getBoundingClientRect().top >= box.top)
+  })
+  const at = await anchor.evaluate(li => li.getBoundingClientRect().top)
+  await click("views")
+  await expect(tree.locator('.name:text-is("chat")')).toHaveCount(1)
+  expect(await scroller.evaluate(el => el.scrollTop)).toBeGreaterThanOrEqual(200)
+  expect(await anchor.evaluate(li => li.isConnected)).toBe(true)
+  expect(Math.abs(await anchor.evaluate(li => li.getBoundingClientRect().top) - at)).toBeLessThan(2)
+  expect(await first.evaluate(li => li.isConnected)).toBe(true)
+})
+
+/**
+ * The chat head's last button narrows the page to two columns for now, and
+ * back: it does not touch `General → Columns`, which is the setting. And its
+ * copy button puts the conversation on the clipboard.
+ */
+test("the chat head narrows to two columns without the setting, and copies the conversation", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"])
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  const app = page.locator(".app")
+  const toggle = page.locator(".chat .acts button.columns")
+  await expect(app).toHaveAttribute("data-columns", "3")
+
+  await toggle.click()
+  await expect(app).toHaveAttribute("data-columns", "2")
+  // The chat stays, and so does the switch, to go back with.
+  await expect(toggle).toHaveAttribute("aria-pressed", "true")
+  expect(await page.evaluate(() => localStorage.getItem("luu.layout"))).not.toBe("two")
+  // On the content's side too, while it is on: two columns chosen from the
+  // chat are undone from whichever column is on screen.
+  await page.locator(".chat .acts .swap").click()
+  const there = page.locator(".content > .col-head button.columns")
+  await expect(there).toBeVisible()
+  await there.click()
+  await expect(app).toHaveAttribute("data-columns", "3")
+  // Off, it is the chat head's alone: both columns are on screen.
+  await expect(there).toHaveCount(0)
+  await toggle.click()
+  await expect(app).toHaveAttribute("data-columns", "2")
+  await toggle.click()
+  await expect(app).toHaveAttribute("data-columns", "3")
+
+  // The copy is the conversation's text. Run alone, this test has a session
+  // with no turns yet, so it gives the page one exchange to copy.
+  await page.evaluate(async () => {
+    const { state } = await import("./lib/store.js")
+    if (!state.messages.length) {
+      state.messages = [
+        { id: 9001, turn: 1, role: "user", text: "what is this?" },
+        { id: 9002, turn: 1, role: "assistant", text: "It is luu." },
+      ]
+    }
+  })
+  const copy = page.locator(".chat .acts button.copy-chat")
+  await expect(copy).toBeEnabled()
+  await copy.click()
+  await expect(copy).toHaveAttribute("aria-label", "Copied")
+  const copied = await page.evaluate(() => navigator.clipboard.readText())
+  expect(copied).toContain("> ")
+})
+
+/**
+ * A person scrolling up while a reply arrives is not pulled back down, however
+ * small the scroll: a wheel up leaves the end at once.
+ */
+test("a small scroll up while text arrives is not undone", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 700 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  const scroller = page.locator(".col.chat [data-scrollable]:has(> .transcript)")
+  const grow = rows => page.evaluate(n => {
+    const transcript = document.querySelector(".col.chat .transcript")
+    for (let i = 0; i < n; i++) {
+      const row = document.createElement("p")
+      row.textContent = `row ${i}`
+      row.style.height = "40px"
+      transcript.append(row)
+    }
+  }, rows)
+  await grow(40)
+  await expect.poll(() => scroller.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3)
+
+  // Six pixels up — less than the old 24px of slack — and more arrives.
+  const box = await scroller.boundingBox()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.wheel(0, -6)
+  await page.waitForTimeout(100)
+  const left = await scroller.evaluate(el => el.scrollTop)
+  await grow(5)
+  await page.waitForTimeout(150)
+  expect(await scroller.evaluate(el => el.scrollTop)).toBe(left)
+})
+
+/**
+ * A phone: the three columns are slides — the chat, the inspector, the
+ * content — a screen wide each, snapping to one. The chat is what opens; a
+ * file opened goes to the content, and the logo back to the chat.
+ */
+test("on a phone the columns are slides: the chat, the inspector, the content", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(`${BASE}/index.html`)
+  await chooseFolder(page)
+  const app = page.locator(".app")
+  await expect(app).toHaveAttribute("data-columns", "slides")
+  const onScreen = () => page.evaluate(() => [...document.querySelectorAll(".app > .col")]
+    .find(col => Math.round(col.getBoundingClientRect().left) === 0)?.classList[1])
+  const order = await page.evaluate(() => [...document.querySelectorAll(".app > .col")]
+    .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
+    .map(col => col.classList[1]))
+  expect(order).toEqual(["chat", "inspector", "content"])
+  await expect.poll(onScreen).toBe("chat")
+  // Nothing on a phone offers a switch between two columns: the swipe is it.
+  await expect(page.locator(".swap, button.columns")).toHaveCount(0)
+
+  // A swipe that stops part of the way: the snap finishes it.
+  await app.evaluate(el => el.scrollBy({ left: el.clientWidth * 0.6 }))
+  await expect.poll(onScreen).toBe("inspector")
+
+  await page.click('.inspector .tabs button:has-text("Files")')
+  await page.locator('.inspector .tree .row:has(.name:text-is("Makefile"))').click()
+  await expect.poll(onScreen).toBe("content")
+  await expect(page.locator(".content .code-rows li").first()).toBeVisible()
+
+  await app.evaluate(el => el.scrollTo({ left: el.clientWidth }))
+  await expect.poll(onScreen).toBe("inspector")
+  await page.click(".inspector .logo")
+  await expect.poll(onScreen).toBe("chat")
 })

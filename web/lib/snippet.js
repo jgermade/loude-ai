@@ -21,8 +21,9 @@ import { apiHeaders, state } from "./store.js"
 
 /// `lit[slot]` is `{ text, lines }`: the text that was coloured, and its lines
 /// as `/api/highlight` gives them. `copied[slot]` is set for a moment after a
-/// copy. A slot is `<entry id>:<part index>`.
-export const snippet = $reactive({ lit: {}, copied: {} })
+/// copy. `preview` is the HTML open in the preview modal, or `null`. A slot is
+/// `<entry id>:<part index>`.
+export const snippet = $reactive({ lit: {}, copied: {}, preview: null })
 
 const EVERY = 250
 /// Per slot: the newest text wanted, and whether a request is out or waiting.
@@ -106,4 +107,50 @@ export async function copySnippet(slot, text) {
     delete copied[slot]
     snippet.copied = copied
   }, 1500)
+}
+
+/// The languages a block can be opened as a page in.
+export const previewable = lang => /^(html?|xhtml)$/i.test(lang || "")
+
+/// Opens a block in the preview modal, as it is now: a reply still streaming
+/// does not reload the page under somebody reading it.
+export function previewSnippet(text) {
+  snippet.preview = text
+}
+
+export function closePreview() {
+  snippet.preview = null
+}
+
+/// What the preview's frame is allowed, on top of its `sandbox` — which
+/// already gives it an origin of its own, so it cannot read this page, its
+/// token or its storage. This is the rest: **it cannot reach anything but the
+/// public web, and cannot send to it.** No `fetch`, no form, no socket, and no
+/// `http:` at all, which is what `luu serve` is: a page a model wrote must not
+/// be able to call the API it was shown on. Scripts, styles, images and fonts
+/// from `https:` still load, because a page that uses a CDN is the ordinary
+/// case.
+const POLICY = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval' https:",
+  "style-src 'unsafe-inline' https:",
+  "img-src data: blob: https:",
+  "font-src data: https:",
+  "media-src data: blob: https:",
+  "connect-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+].join("; ")
+
+/// The block as a document for `srcdoc`, with the policy as the first thing in
+/// its head. A `<meta>` policy cannot be loosened by one that comes later, so
+/// the page cannot undo it; it goes after a doctype rather than before it,
+/// which would put the page in quirks mode.
+export function previewDocument(text) {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${POLICY}">`
+  const head = /<head(\s[^>]*)?>/i.exec(text)
+  if (head) return text.slice(0, head.index + head[0].length) + meta + text.slice(head.index + head[0].length)
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(text)
+  if (doctype) return doctype[0] + meta + text.slice(doctype[0].length)
+  return meta + text
 }

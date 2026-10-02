@@ -38,7 +38,9 @@
   }
 
   await $mounted()
-  new ResizeObserver(() => place()).observe($self(".rail"))
+  const sizes = new ResizeObserver(() => place())
+  sizes.observe($self(".rail"))
+  $destroyed(() => sizes.disconnect())
   $: (model, items, requestAnimationFrame(place))
   $: mark = at === null ? "display:none" : `height:${at.h}px;transform:translateY(${at.y}px)`
 </script>

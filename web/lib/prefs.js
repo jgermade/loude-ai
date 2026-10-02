@@ -38,6 +38,16 @@ function keptWidth(key) {
   }
 }
 
+/// Any string, or the fallback: for a value whose allowed set is the server's
+/// to say, and checked against it where it is used.
+function keptText(key, fallback) {
+  try {
+    return localStorage.getItem(key) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
 function keep(key, value) {
   try {
     localStorage.setItem(key, value)
@@ -92,6 +102,12 @@ export const prefs = $reactive({
   /// cannot squeeze the content column out of a narrow one.
   inspectorWidth: keptWidth("luu.width.inspector"),
   chatWidth: keptWidth("luu.width.chat"),
+  /// Where the last session ran, as `posture|runtime` (see `lib/places.js`):
+  /// what a new session is offered first. Set when a session is started and
+  /// when one is moved, and checked against `/api/postures` before it is
+  /// offered, because a posture can leave `config.toml` and a runtime this
+  /// machine.
+  place: keptText("luu.place", "|"),
 })
 
 /// Dark is `:root`'s own palette in `app.css`, so light is the attribute. Set
@@ -129,9 +145,18 @@ export function setLayout(which) {
   keep("luu.layout", which)
 }
 
+export function setPlace(value) {
+  prefs.place = value
+  keep("luu.place", value)
+}
+
 export function setPane(which) {
   prefs.pane = which
   keep("luu.pane", which)
+  // Said as well as stored: on a phone every column is on screen, side by
+  // side, and asking for one is moving to it — even the one already chosen,
+  // which a stored value that did not change could not say. See `app.html`.
+  window.dispatchEvent(new CustomEvent("luu:pane", { detail: which }))
 }
 
 export function setInspector(which) {

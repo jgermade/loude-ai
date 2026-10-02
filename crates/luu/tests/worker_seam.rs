@@ -356,3 +356,28 @@ async fn a_worker_that_is_alive_and_stuck_is_abandoned_and_replaced() {
         "a number nobody can read is one nobody can act on",
     );
 }
+
+/// A runtime that will not start the container says why on stderr and exits —
+/// `colima is not running` — and the error carries those words, not only the
+/// exit code.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_worker_that_will_not_start_says_why_in_its_own_words() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new("refuses");
+    let runtime = fixture.root.join("runtime.sh");
+    std::fs::write(
+        &runtime,
+        "#!/bin/sh\necho 'level=fatal msg=\"colima is not running\"' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let spec = WorkerSpec::new(Runtime::Direct, &fixture.root).with_binary(Some(runtime));
+    let Err(error) = Worker::start(&spec, &[]).await else {
+        panic!("a worker that exits at once is not started");
+    };
+    let error = error.to_string();
+    assert!(error.contains("exit status: 1"), "{error}");
+    assert!(error.contains("colima is not running"), "{error}");
+}

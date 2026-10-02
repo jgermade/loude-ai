@@ -44,10 +44,13 @@
 
   // Up and down through the options, Escape to close — a menu somebody
   // opened with the keyboard should not need the mouse to leave.
-  // On the window while open, so Escape works wherever the focus is.
-  window.addEventListener("keydown", event => {
+  // On the window while open, so Escape works wherever the focus is — and
+  // taken off it with the component, or every dropup ever drawn kept one.
+  const escape = event => {
     if (open && event.key === "Escape") open = false
-  })
+  }
+  window.addEventListener("keydown", escape)
+  $destroyed(() => window.removeEventListener("keydown", escape))
   const key = event => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
     event.preventDefault()

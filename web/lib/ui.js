@@ -12,6 +12,8 @@
 /// `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`.
 
 import { $reactive } from "@web/vendor/jq79.js"
+import { prefs, setPlace } from "./prefs.js"
+import { stillThere } from "./places.js"
 import {
   state, openSettings, loadProviders, loadPostures, providerModels,
   newSession, resumeSession, apiHeaders,
@@ -32,6 +34,10 @@ export const ui = $reactive({
   /// popover: one session is on screen, so a strip was spending a row to
   /// answer a question the column's head answers in words.
   history: false,
+  /// Two columns at a width that has room for three, chosen from the chat's
+  /// head for as long as the page is open. Not a preference: `General →
+  /// Columns` is the setting, and this is the button beside the work.
+  twoColumns: false,
   /// Whether the model this session names is pulled where it sends:
   /// `{ verdict: "ok" | "missing" | "unreachable", detail }`, or `null` until
   /// asked. See `checkModel` for why only one of the three disables anything.
@@ -140,9 +146,10 @@ export async function openStarter(provider) {
     reason: null,
     from: null,
     loading: false,
-    // "" is the server's own policy file, which is what every session got
-    // before a session could choose.
-    posture: "",
+    // Where the last session ran, if it still can — `"|"`, the server's own
+    // policy file on its own runtime, where it cannot. That is what every
+    // session got before a session could choose.
+    place: stillThere(state.postures, prefs.place),
   }
   if (chosen) await loadModels(chosen)
 }
@@ -175,13 +182,16 @@ export function closeStarter() {
 
 export async function startSession() {
   ui.starting = true
+  const [posture, runtime] = (ui.starter.place || "|").split("|")
   const ok = await newSession({
     provider: ui.starter.provider,
     model: ui.starter.model,
-    posture: ui.starter.posture || undefined,
+    posture: posture || undefined,
+    runtime: runtime || undefined,
   })
   ui.starting = false
   if (ok) {
+    setPlace(ui.starter.place || "|")
     ui.starter = null
     await checkModel()
   }

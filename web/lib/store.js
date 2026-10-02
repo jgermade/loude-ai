@@ -1261,7 +1261,7 @@ export async function refreshSessionsList() {
 /// machine.
 export async function newSession(choice) {
   const asked =
-    choice && (choice.provider || choice.model || choice.posture) ? choice : null
+    choice && (choice.provider || choice.model || choice.posture || choice.runtime) ? choice : null
   try {
     const res = await fetch("./api/sessions", {
       method: "POST",

@@ -11,6 +11,7 @@
   const { terminal, restartTerminal, moveSession } = await import("@web/lib/terminal.js")
   const { state, loadPostures } = await import("@web/lib/store.js")
   const Dropup = await import("@web/components/dropup.html")
+  const { placeOptions } = await import("@web/lib/places.js")
 
   if (!state.postures) loadPostures()
 
@@ -19,29 +20,12 @@
   // on this machine. **Named by where it runs**, because that is the question
   // a terminal answers; which posture and which file are the line under it.
   // A runtime this machine does not have is offered, off, saying so.
-  const runs = place => !place ? "?"
-    : place.runtime === "direct" ? "direct (no container)"
-    : place.image ? `${place.runtime} · ${place.image}` : place.runtime
   //
   // **A contained posture is offered on every container runtime**, its own
   // first: one image and one argv but for its first word. A host posture is
-  // offered once, because its paths are on this machine. The value is
-  // `posture|runtime`, with the runtime empty where it is the posture's own.
-  const option = (name, label, place, declared) => ({
-    value: `${name}|${place?.runtime === declared ? "" : place?.runtime}`,
-    label: runs(place),
-    title: place?.missing
-      ? `${label} — ${place.missing}`
-      : `${label} · ${place?.policy || ""}${place?.gap ? " · the container keeps its network" : ""}`,
-    disabled: !!place?.missing,
-  })
-  const variants = (name, label, places) =>
-    (places || []).map(place => option(name, label, place, places[0]?.runtime))
-  $: environments = [
-    ...variants("", "server default", state.postures?.own),
-    ...Object.keys(state.postures?.postures || {}).flatMap(name =>
-      variants(name, name, state.postures?.places?.[name])),
-  ]
+  // offered once, because its paths are on this machine. See `lib/places.js`,
+  // which the session starter shares.
+  $: environments = placeOptions(state.postures)
   $: choosable = !!state.postures?.choosable
   // Which option the live session is: its posture, and — where it runs on a
   // runtime other than the one that posture names — that runtime. The label

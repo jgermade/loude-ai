@@ -1,13 +1,15 @@
-<script :setup="{ taken = [], added = null, close = null }">
-  // Adding a provider: a form of its own over Settings, rather than an empty
-  // row at the bottom of a seven-column table that had to be filled in place
-  // and then saved with the rest.
+<script :setup="{ taken = [], editing = '', defaulting = false, saved = null, close = null }">
+  // A provider, added or edited: a form of its own over Settings. The list in
+  // Models is read-only and this is where a profile is written — it used to
+  // be a seven-column table of inputs with a save button under it.
   //
   // **It writes one profile and nothing else.** The body is the file as the
-  // server last answered it plus this profile — never the table's draft — so an
-  // edit somebody has half-made in the table is neither saved by accident nor
-  // thrown away: `added` hands the new name back and the table merges it into
-  // its draft. `taken` is every name the table holds, saved or not.
+  // server last answered it, with this profile put in (or, for an edit, put in
+  // place of the one it was), so nothing else in the file moves. `taken` is
+  // every name in the file. `editing` is the name being edited, `""` to add
+  // one; `defaulting` opens it with *default* already ticked, which is how the
+  // list asks for a remote default to be confirmed here. `saved(name)` is told
+  // what was written.
   const { state, saveProviders } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
 
@@ -27,14 +29,21 @@
     { value: "mock", label: "Mock — answers in sentences, sends nowhere", url: "" },
   ]
 
-  let name = ""
-  let backend = "ollama"
-  let url = ""
-  let model = ""
-  let contextLimit = ""
-  let keyFile = ""
-  let toolCalls = ""
-  let makeDefault = false
+  // The profile as the file has it, for an edit. `remote` and `engine` are
+  // not fields here and are carried through: `remote` is only ever written
+  // after the host was typed, and `engine` is Settings → Engines' to set.
+  const was = editing ? state.providers?.providers?.[editing] || {} : {}
+
+  let name = editing
+  let backend = was.backend || "ollama"
+  let url = was.url || ""
+  let model = was.model || ""
+  let contextLimit = was["context-limit"] ?? ""
+  let keyFile = was["key-file"] || ""
+  let toolCalls = was["tool-calls"] === "native" ? "native" : ""
+  let makeDefault = defaulting || (!!editing && state.providers?.default === editing)
+  // Removing asks twice: the first click arms it.
+  let armed = false
   let saving = false
   let error = null
   // The one refusal a person can answer: the same `{ profile, host }` the
@@ -44,7 +53,7 @@
 
   $: chosen = BACKENDS.find(b => b.value === backend) || BACKENDS[0]
   $: trimmed = name.trim()
-  $: clash = !!trimmed && taken.includes(trimmed)
+  $: clash = !!trimmed && trimmed !== editing && taken.includes(trimmed)
   $: canAdd = !!trimmed && !clash && !saving && (!declaration || typed.trim() === declaration.host)
 
   const profile = remote => ({
@@ -55,19 +64,35 @@
     ...(backend === "openai" && keyFile.trim() ? { "key-file": keyFile.trim() } : {}),
     ...(backend !== "mock" && toolCalls === "native" ? { "tool-calls": "native" } : {}),
     ...(remote ? { remote: true } : {}),
+    ...(was.engine ? { engine: was.engine } : {}),
   })
+
+  // The file, with `editing` taken out: a rename writes the new name and
+  // not the old one beside it.
+  const others = () => {
+    const rest = { ...(state.providers?.providers || {}) }
+    if (editing) delete rest[editing]
+    return rest
+  }
+  // The default follows a rename, and an unticked box gives it back to the
+  // mock — "no default" in the file is the mock.
+  const defaultAfter = () => {
+    const now = state.providers?.default ?? null
+    if (makeDefault) return trimmed
+    return editing && now === editing ? null : now
+  }
 
   const add = async () => {
     if (!canAdd) return
     saving = true
     error = null
     const result = await saveProviders({
-      default: makeDefault ? trimmed : (state.providers?.default ?? null),
-      providers: { ...(state.providers?.providers || {}), [trimmed]: profile(!!declaration) },
+      default: defaultAfter(),
+      providers: { ...others(), [trimmed]: profile(!!declaration || !!was.remote) },
     })
     saving = false
     if (result?.ok) {
-      added?.(trimmed, makeDefault)
+      saved?.(trimmed)
       open = false
       return
     }
@@ -80,9 +105,26 @@
       error = state.providersError || "the write was refused"
     }
   }
+
+  // The file without this profile; the default goes back to the mock if it
+  // was this one.
+  const remove = async () => {
+    saving = true
+    error = null
+    const now = state.providers?.default ?? null
+    const result = await saveProviders({ default: now === editing ? null : now, providers: others() })
+    saving = false
+    if (result?.ok) {
+      saved?.(null)
+      open = false
+      return
+    }
+    armed = false
+    error = state.providersError || "the write was refused"
+  }
 </script>
 
-<Modal title="Add a provider" width="34rem" :open="open" @close="close?.()">
+<Modal :title="editing ? `Provider ${editing}` : 'Add a provider'" width="34rem" :open="open" @close="close?.()">
   <section class="modal-body">
     <dl class="settings form">
       <dt>Name</dt>
@@ -169,9 +211,13 @@
                @input="typed = $event.target.value">
       </div>
       <div class="modal-actions">
+        <!-- Removing, from the profile's own form rather than from the list:
+             one write, asked twice. -->
+        <button :if="editing" type="button" class="remove" :class.armed="armed" :disabled="saving"
+                @click="armed ? remove() : (armed = true)">{{ armed ? `Remove ${editing}?` : "Remove" }}</button>
         <button type="button" @click="open = false">Cancel</button>
         <button type="button" class="save" :disabled="!canAdd" @click="add()">
-          {{ saving ? "Adding…" : (declaration ? "Confirm and add" : "Add provider") }}
+          {{ saving ? "Saving…" : (declaration ? "Confirm and save" : (editing ? "Save" : "Add provider")) }}
         </button>
       </div>
     </div>
@@ -182,4 +228,16 @@
   .form input:not([type]), .form select { width: 100%; }
   .form input.w-num { width: 6rem; margin-right: .4rem; }
   .form label { display: flex; gap: .4rem; align-items: center; }
+  /* On the left, away from the two that keep the form: Cancel and Save stay
+     together on the right, so the auto margin is this one's alone. Outlined
+     in the colour of what it does, and filled once it is armed. */
+  .remove {
+    margin-right: auto;
+    background: none;
+    border: 1px solid var(--bad, #c62828);
+    color: var(--bad, #c62828);
+  }
+  .remove:hover:not(:disabled) { background: color-mix(in srgb, var(--bad, #c62828) 10%, transparent); }
+  .remove.armed, .remove.armed:hover:not(:disabled) { background: var(--bad, #c62828); color: var(--on-accent, #fff); }
+  .remove ~ .save { margin-left: 0; }
 </style>

@@ -5,6 +5,7 @@
   // `RECORD/2026-09-15.a-three-pane-inspector.completed.md`.
   const { workspace, openDir, toggleDir, refresh, showFile, loadStatus, loadIcons, iconFor } =
     await import("@web/lib/workspace.js")
+  const { keeper } = await import("@web/helpers/rows.js")
 
   // Rooted at the folder somebody chose, which is a subdirectory of the one
   // `luu serve` was started in. Paths stay relative to *that* base throughout —
@@ -18,6 +19,18 @@
   // only the directories that are expanded, carrying a depth for the indent.
   // A recursive component would need one instance per node to say the same
   // thing.
+  //
+  // **Compact folders.** A directory whose only content is a directory (the
+  // server says so, as `only`) is one row, `parent/nested`, until somebody
+  // opens the parent itself. Its name opens and closes the nested one, whose
+  // contents are drawn under the row; its caret opens the parent, which
+  // undoes the compacting and shows the chain a level at a time.
+  //
+  // Every row goes through `treeRows`, so a row whose fields did not change
+  // is last time's object and jq79 keeps its `<li>`. Opening a folder used to
+  // hand every row a new object, every `<li>` was rebuilt, and the list
+  // emptied for a moment — which is what threw the scroll back to the top.
+  const treeRows = keeper()
   const flatten = (path, depth, out) => {
     for (const entry of workspace.open[path] || []) {
       // The icon id is resolved in the pass rather than in the template, where
@@ -25,8 +38,19 @@
       // `null` here is what selects the page's own shape, and it means *this
       // row has no theme icon*, which is not the same question as *is a theme
       // loaded*: a theme that declares no `file` default answers null too.
+      if (entry.dir && entry.only && !workspace.expanded[entry.path]) {
+        const nested = `${entry.path}/${entry.only}`
+        const open = !!workspace.expanded[nested]
+        const last = nested.slice(nested.lastIndexOf("/") + 1)
+        out.push(treeRows.keep(entry.path, {
+          ...entry, name: `${entry.name}/${entry.only}`, depth, open, nested,
+          icon: iconFor(last, true, open),
+        }))
+        if (open) flatten(nested, depth + 1, out)
+        continue
+      }
       const open = !!entry.dir && !!workspace.expanded[entry.path]
-      out.push({ ...entry, depth, open, icon: iconFor(entry.name, entry.dir, open) })
+      out.push(treeRows.keep(entry.path, { ...entry, depth, open, nested: null, icon: iconFor(entry.name, entry.dir, open) }))
       if (entry.dir && workspace.expanded[entry.path]) {
         flatten(entry.path, depth + 1, out)
       }
@@ -54,6 +78,7 @@
       if (built && built.root === root && built.open === open
           && built.expanded === expanded && built.icons === icons) return built.rows
       built = { root, open, expanded, icons, rows: flatten(root, 0, []) }
+      treeRows.sweep()
       return built.rows
     }
   })()
@@ -88,10 +113,13 @@
     <button
       type="button"
       class="row"
-      :title="row.path"
-      @click="row.dir ? toggleDir(row.path) : showFile(row.path)"
+      :title="row.nested || row.path"
+      @click="row.dir ? toggleDir(row.nested || row.path) : showFile(row.path)"
       @dblclick="row.dir || showFile(row.path, { pinned: true })">
-      <span class="twist">
+      <!-- A target of its own: on a compact row the name opens the nested
+           folder and the caret the parent; on any other row both open the
+           same one. -->
+      <span class="twist" :class.target="row.dir" @click.stop="row.dir ? toggleDir(row.path) : showFile(row.path)">
         <svg :if="row.dir" class="ic" :class.open="row.open"><use href="#i-caret"/></svg>
       </span>
       <!-- The theme's own art where the theme has some, and this page's two
@@ -206,6 +234,9 @@
 
   .twist { width: 14px; flex: none; display: flex; justify-content: center; color: var(--dim); }
   .twist .ic { width: 12px; height: 12px; }
+  /* The caret is a control of its own now — on a compact row it opens the
+     parent — so it says so under the pointer. */
+  .twist.target:hover { color: black; }
   .icon { width: 16px; height: 16px; flex: none; }
   /* The fallback, and still deliberately not a second icon set: two shapes,
      enough that an unconfigured tree reads as intentional. `[ui] icon-theme`

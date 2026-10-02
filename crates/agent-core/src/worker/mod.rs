@@ -261,7 +261,14 @@ struct Pipe {
     child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
     stdout: BufReader<tokio::process::ChildStdout>,
+    /// The last lines the process wrote to stderr, and the task copying them
+    /// there. See [`Pipe::epitaph`].
+    said: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    said_done: Option<tokio::task::JoinHandle<()>>,
 }
+
+/// How many of the last stderr lines an epitaph quotes.
+const EPITAPH_LINES: usize = 4;
 
 impl Worker {
     /// Starts a worker and completes the handshake.
@@ -301,7 +308,7 @@ impl Worker {
             .args(&argv[1..])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
         let mut child = command.spawn().map_err(|source| WorkerError::Spawn {
@@ -310,11 +317,30 @@ impl Worker {
         })?;
         let stdin = child.stdin.take().expect("stdin was piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout was piped"));
+        // Still on this process's stderr, line by line, as it was when it was
+        // inherited — and the last few kept, because a runtime that refuses to
+        // start (`colima is not running`) says why only there, and the exit
+        // code alone is not something anyone can act on.
+        let said = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let mut lines = BufReader::new(child.stderr.take().expect("stderr was piped")).lines();
+        let kept = said.clone();
+        let said_done = tokio::spawn(async move {
+            while let Ok(Some(line)) = lines.next_line().await {
+                eprintln!("{line}");
+                let mut kept = kept.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if kept.len() == EPITAPH_LINES {
+                    kept.pop_front();
+                }
+                kept.push_back(line);
+            }
+        });
         let mut pipe = Pipe {
             container,
             child,
             stdin,
             stdout,
+            said,
+            said_done: Some(said_done),
         };
 
         let hello = match pipe.read().await {
@@ -566,10 +592,29 @@ impl Pipe {
     /// Why the pipe closed, in the words of the thing that closed it. A worker
     /// that could not start says so on the exit code, and "broken pipe" is not
     /// an answer anyone can act on.
+    ///
+    /// With the last lines it wrote to stderr, which is where a runtime that
+    /// would not start the container says why. Waited for briefly: its output
+    /// closing and its exit, and the last of its stderr, are three events.
     async fn epitaph(&mut self) -> String {
-        match self.child.try_wait() {
-            Ok(Some(status)) => format!("the worker exited ({status})"),
+        let patience = std::time::Duration::from_millis(500);
+        let status = tokio::time::timeout(patience, self.child.wait()).await;
+        if let Some(copying) = self.said_done.take() {
+            let _ = tokio::time::timeout(patience, copying).await;
+        }
+        let why = match status {
+            Ok(Ok(status)) => format!("the worker exited ({status})"),
             _ => "the worker closed its output".to_string(),
+        };
+        let said = self
+            .said
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if said.is_empty() {
+            why
+        } else {
+            let said: Vec<&str> = said.iter().map(String::as_str).collect();
+            format!("{why}: {}", said.join(" · "))
         }
     }
 }

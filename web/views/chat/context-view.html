@@ -1,4 +1,4 @@
-<script :setup="{ prompt = '', toolSpecs = '', budget = null, asked = '', extraCalls = [], notes = [], window = null }">
+<script :setup="{ prompt = '', toolSpecs = '', budget = null, asked = '', extraCalls = [], notes = [], window = null, answer = '' }">
   // What a prompt was made of, grouped by what each piece *is* — the system
   // text, the tools, the map, the folded jobs, the earlier exchanges, this
   // turn's code, its question — each in its bucket's colour and under its
@@ -17,6 +17,11 @@
   const BIG_LINES = 24
   const BIG_CHARS = 2400
 
+  // `answer` — the reply to this prompt, where the caller wants it shown: the
+  // context modal does, because "the context as it stands" includes the last
+  // answer, and the prompt it was the answer to cannot. It was never sent, so
+  // it has no bucket and no count; the next turn carries it in `history`.
+
   // Group name → "all" | "scroll"; absent is the default (clipped if big).
   let modes = {}
   const mode = (name, value) => { modes = { ...modes, [name]: value } }
@@ -32,6 +37,7 @@
         roles: new Set(g.entries.map(e => e.role)).size > 1 || ["history", "summaries"].includes(g.bucket),
       }
     })
+  $: reply = answer ? { big: answer.split("\n").length > BIG_LINES || answer.length > BIG_CHARS } : null
   $: buckets = (budget?.buckets || []).filter(b => b.tokens > 0)
   $: sent = buckets.filter(b => b.name !== "reserve").reduce((sum, b) => sum + b.tokens, 0)
   // The tools bucket under the native transport: sent beside the prompt, and
@@ -86,6 +92,24 @@
     </div>
   </section>
 
+  <section :if="reply" class="group answer" data-bucket="answer">
+    <header>
+      <span class="swatch" style="background:var(--b-history)"></span>
+      <b class="b-history">answer</b>
+      <span class="dim">the reply to this prompt · not sent yet: the next turn carries it in history</span>
+      <span class="grow"></span>
+      <button :if="reply.big && !modes.answer" type="button" class="link" @click="mode('answer', 'all')">show all</button>
+      <button :if="reply.big && !modes.answer" type="button" class="link" @click="mode('answer', 'scroll')">scroll</button>
+      <button :if="reply.big && modes.answer" type="button" class="link" @click="mode('answer', null)">collapse</button>
+    </header>
+    <div class="body" :class="reply.big ? (modes.answer || 'clip') : 'all'">
+      <div class="entry">
+        <div class="role assistant">assistant</div>
+        <pre class="b-history">{{ answer }}</pre>
+      </div>
+    </div>
+  </section>
+
   <p :if="nativeTools" class="note">
     <span class="swatch" style="background:var(--b-tools)"></span>
     <b>tools {{ nativeTools }}</b> — sent in the request's own <code>tools</code>
@@ -110,6 +134,8 @@
   .dim { color: var(--dim); }
   .small { font-size: 11px; }
   .grow { flex: 1; }
+  /* Not part of what was sent, so it does not look like a bucket that was. */
+  .group.answer { border-style: dashed; }
   .group {
     margin-bottom: .8rem;
     border: 1px solid var(--line);

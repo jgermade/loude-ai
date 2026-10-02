@@ -57,12 +57,15 @@
   const TurnInspect = await import("@web/views/chat/turn-inspect.html")
   const ContextModal = await import("@web/views/chat/context-modal.html")
   const DiffModal = await import("@web/views/editor/diff-modal.html")
+  const DiffStrip = await import("@web/views/editor/diff-strip.html")
+  const SnippetPreview = await import("@web/views/chat/snippet-preview.html")
   const TerminalPanel = await import("@web/views/editor/terminal.html")
   const TerminalFoot = await import("@web/views/editor/terminal-foot.html")
   const { segments } = await import("@web/helpers/segments.js")
+  const { keeper } = await import("@web/helpers/rows.js")
   const { snippets } = await import("@web/helpers/snippets.js")
   const Scrollable = await import("@web/components/scrollable.html")
-  const { snippet, snippetHtml, copySnippet } = await import("@web/lib/snippet.js")
+  const { snippet, snippetHtml, copySnippet, previewable, previewSnippet } = await import("@web/lib/snippet.js")
 
   connect()
 
@@ -76,12 +79,55 @@
   // width, because a wide screen with a wide chat on it is a legitimate case
   // the breakpoint cannot know about.
   const WIDE = 1260
+  // A phone: below this, the three columns are slides — the chat, the
+  // inspector, the content, left to right, a screen wide each, swiped between
+  // and snapping to one. The chat is first because it is what a phone is for.
+  const NARROW = 760
   let wide = window.innerWidth >= WIDE
-  window.addEventListener("resize", () => { wide = window.innerWidth >= WIDE })
+  let mobile = window.innerWidth < NARROW
+  window.addEventListener("resize", () => {
+    wide = window.innerWidth >= WIDE
+    mobile = window.innerWidth < NARROW
+  })
 
-  $: columns = prefs.layout === "two" || !wide ? 2 : 3
-  $: showContent = columns === 3 || prefs.pane === "content"
-  $: showChat = columns === 3 || prefs.pane === "chat"
+  // On a phone every column is drawn, and `columns` says three, so nothing
+  // offers a switch between two: the swipe is the switch.
+  $: columns = mobile ? 3 : prefs.layout === "two" || !wide || ui.twoColumns ? 2 : 3
+  $: layout = mobile ? "slides" : String(columns)
+  // Moving to a column, on a phone, when the page asks for one: a file opened
+  // goes to the content, the logo and every other way to the chat to the chat.
+  const slideTo = which => {
+    const column = document.querySelector(`.app .col.${which}`)
+    column?.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" })
+  }
+  window.addEventListener("luu:pane", event => { if (mobile) slideTo(event.detail) })
+  // The chat head's switch between three columns and two, where the width
+  // allows three and the setting asks for them. It does not touch the
+  // setting: it is for now, and the setting is for always.
+  $: canNarrow = prefs.layout === "responsive" && wide
+  const toggleColumns = () => {
+    ui.twoColumns = !ui.twoColumns
+    // The switch is in the chat's head, so the chat is what stays.
+    if (ui.twoColumns) setPane("chat")
+  }
+
+  // The conversation as text: the prompts quoted, the answers as written.
+  let copiedChat = false
+  const copyChat = async () => {
+    const text = state.messages
+      .filter(m => m.text)
+      .map(m => m.role === "user" ? m.text.split("\n").map(line => `> ${line}`).join("\n") : m.text)
+      .join("\n\n")
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      return
+    }
+    copiedChat = true
+    setTimeout(() => { copiedChat = false }, 1500)
+  }
+  $: showContent = mobile || columns === 3 || prefs.pane === "content"
+  $: showChat = mobile || columns === 3 || prefs.pane === "chat"
 
   // The chat, shown and typed into: every way to it — the logo, the column's
   // switch, ESC — ends in the composer, because a person who brings the chat
@@ -372,10 +418,20 @@
   // where `keepTurn` and a reload both put them.
   // The three arguments after the list are unused but read on purpose: they
   // are what make `$:` run again when a call lands or a turn is kept.
-  const withParts = (list, _tools, _history, _turn) => list.map(entry =>
-    entry.kind === "message" && entry.message.role === "assistant"
-      ? { ...entry, ...partsOf(entry.message) }
-      : entry)
+  //
+  // Every row and every part goes through `transcriptRows`, so a token changes
+  // the fields it changed and leaves the rows standing — see `helpers/rows.js`.
+  const transcriptRows = keeper()
+  const withParts = (list, _tools, _history, _turn) => {
+    const rows = list.map(entry => {
+      if (entry.kind !== "message" || entry.message.role !== "assistant") return transcriptRows.keep(entry.id, entry)
+      const { parts, live, timing } = partsOf(entry.message)
+      const kept = parts.map(part => transcriptRows.keep(`${entry.id}:${part.i}`, part))
+      return transcriptRows.keep(entry.id, { ...entry, parts: kept, live, timing })
+    })
+    transcriptRows.sweep()
+    return rows
+  }
   const partsOf = message => {
     const live = message.turn != null && message.turn === state.turn && !message.reason
     const tools = live
@@ -424,6 +480,13 @@
     : null
   // A file git counts as changed. Not on a diff tab, which already is one.
   const tabChanged = tab => tab.kind === "file" && !!workspace.status[tab.path]
+  // The active tab, when it is a file git counts as changed: the strip under
+  // the head is drawn for it.
+  const activeChanged = (tabs, active) => {
+    const tab = tabs.find(t => t.id === active)
+    return !!tab && tabChanged(tab)
+  }
+  $: changedHere = activeChanged(workspace.tabs, workspace.active, workspace.status)
 
   // Whether the live session has a container to open a shell in. Asked again
   // when the session or its posture moves, and memoized on those, because
@@ -534,9 +597,14 @@
   <!-- Settings → Runtimes: a box, for what a container is. -->
   <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 3.5 19.5 7.5v9L12 20.5 4.5 16.5v-9z"/><path d="M4.5 7.5 12 11.5l7.5-4M12 11.5v9"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20.5 12a7.5 7.5 0 0 1-7.5 7.5H4.5l2.1-2.8A7.5 7.5 0 1 1 20.5 12Z"/></symbol>
-  <!-- A snippet's head: two sheets for copying it, and a tick once it is. -->
+  <!-- A snippet's head: two sheets for copying it, a tick once it is, and an
+       eye for opening an HTML block as the page it is. -->
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <!-- The chat head's column switch: Chrome's devtools "dock to right", a
+       window with a panel down its right side. -->
+  <symbol id="i-dock" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M14.5 4.5v15"/><path d="M14.5 4.5H19a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-4.5z" style="fill: currentColor; stroke: none"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
 </svg>
 
 <!-- Three columns that each have a head, a body and a foot, and the heads and
@@ -544,7 +612,7 @@
      that used to sit above them was a strip of *other columns'* controls, and
      it cost every column 3rem of height to say so. See
      `RECORD/2026-09-16.three-columns-that-each-have-a-footer.completed.md`. -->
-<div class="app" :data-columns="columns" :style="widthStyle()">
+<div class="app" :data-columns="layout" :style="widthStyle()">
 
   <!-- The left rail. Three things a person looks at while an agent works —
        the workspace, what changed in it, and what the context manager did —
@@ -626,30 +694,40 @@
                  :title="tab.id === workspace.active ? (shown?.language || '') : ''"><use :href="tab.kind === 'diff' ? '#i-refresh' : (tab.kind === 'debug' ? '#i-sliders' : '#i-file')"/></svg>
             <span class="label">{{ tab.title }}</span>
           </button>
-          <!-- Only where git says the file changed, and as a glance: the modal
-               leaves the file on screen, which a diff tab would not. -->
-          <button :if="tabChanged(tab)" type="button" class="diff" title="Show the changes (git diff)"
-                  @click="openDiff(tab.path)">
-            <svg class="ic"><use href="#i-diff"/></svg>
-          </button>
           <button type="button" class="close" title="Close this tab" @click="closeTab(tab.id)">
             <svg class="ic"><use href="#i-close"/></svg>
           </button>
         </span>
         <span :if="!workspace.tabs.length" class="none">Nothing open</span>
       </div>
-      <!-- Only where there are two columns: with three, both are on screen and
-           a toggle would be a control with nothing to do. -->
-      <button
-        :if="columns === 2"
-        type="button"
-        class="swap"
-        title="Show the chat instead"
-        @click="showChatPane()">
-        <svg class="ic"><use href="#i-chat"/></svg>
-      </button>
+      <!-- The chat head's own buttons, in the same `.acts`, so each is the same
+           control in both heads and looks it. Only where there are two
+           columns: with three, both are on screen and the swap would have
+           nothing to do, and the column switch is the chat head's alone. -->
+      <div :if="columns === 2" class="acts">
+        <!-- The swap, whose icon is the column it goes to. -->
+        <button
+          type="button"
+          class="swap"
+          title="Show the chat instead"
+          @click="showChatPane()"><svg class="ic"><use href="#i-chat"/></svg></button>
+        <!-- The column switch, while it is on: two columns chosen from the
+             chat's head have to be undoable from the content, which is the
+             column on screen half the time. -->
+        <button
+          :if="canNarrow && ui.twoColumns"
+          type="button"
+          class="columns"
+          :class.on="ui.twoColumns"
+          :aria-pressed="ui.twoColumns ? 'true' : 'false'"
+          :title="ui.twoColumns ? 'Three columns: the content beside the chat' : 'Two columns: the content or the chat'"
+          @click="toggleColumns()"><svg class="ic"><use href="#i-dock"/></svg></button>
+      </div>
     </header>
 
+    <!-- The file's changes, and the way into the diff: under the head, in the
+         flow, so the file moves down rather than being covered. -->
+    <DiffStrip :if="changedHere" />
     <div class="col-main"><ContentViewer /></div>
 
     <!-- Between the file and the foot: hiding it leaves the shell running. -->
@@ -717,12 +795,25 @@
                 @click="openStarter()"><svg class="ic"><use href="#i-plus"/></svg></button>
         <button type="button" title="Earlier sessions"
                 @click="ui.history ? closeHistory() : openHistory()"><svg class="ic"><use href="#i-clock"/></svg></button>
+        <button type="button" class="copy-chat" :disabled="!state.messages.length"
+                :title="copiedChat ? 'Copied' : 'Copy the conversation'"
+                :aria-label="copiedChat ? 'Copied' : 'Copy the conversation'"
+                @click="copyChat()"><svg class="ic"><use :href="copiedChat ? '#i-check' : '#i-copy'"/></svg></button>
         <button
           :if="columns === 2"
           type="button"
           class="swap"
           title="Show the content instead"
           @click="setPane('content')"><svg class="ic"><use href="#i-file"/></svg></button>
+        <!-- Last, at the far right: three columns or two, for now. -->
+        <button
+          :if="canNarrow"
+          type="button"
+          class="columns"
+          :class.on="ui.twoColumns"
+          :aria-pressed="ui.twoColumns ? 'true' : 'false'"
+          :title="ui.twoColumns ? 'Three columns: the content beside the chat' : 'Two columns: the content or the chat'"
+          @click="toggleColumns()"><svg class="ic"><use href="#i-dock"/></svg></button>
       </div>
 
       <!-- The old tab strip, as a popover. Switching and deleting, which are
@@ -766,7 +857,10 @@
         <button type="button" class="save" @click="openSettingsAt('models')">Configure models</button>
       </div>
 
-      <div :if="!noProviders" class="transcript">
+      <!-- Follows the end while it is at the end: a reply streaming in stays on
+           screen, and a person who scrolled up to read is left where they are. -->
+      <Scrollable :if="!noProviders" :y="true" :fill="true" autoscroll="bottom">
+      <div class="transcript">
         <div :each="entry in entries" :key="entry.id">
           <article :if="entry.kind === 'message'" :class="entry.message.role" :class.evicted="entry.message.evicted">
             <!-- No speaker label: the user's text is in the accent colour and an
@@ -799,6 +893,12 @@
                 <figure :if="part.kind === 'code'" class="snippet">
                   <figcaption>
                     <span class="lang">{{ part.lang || "code" }}</span>
+                    <!-- HTML, opened as the page it is, in a sandboxed frame. -->
+                    <button :if="previewable(part.lang)" type="button" class="open"
+                            title="Open as a page" aria-label="Open as a page"
+                            @click="previewSnippet(part.text)">
+                      <svg class="ic"><use href="#i-eye"/></svg>
+                    </button>
                     <button type="button" class="copy" :class.done="snippet.copied[`${entry.id}:${part.i}`]"
                             :title="snippet.copied[`${entry.id}:${part.i}`] ? 'Copied' : 'Copy the code'"
                             :aria-label="snippet.copied[`${entry.id}:${part.i}`] ? 'Copied' : 'Copy the code'"
@@ -895,6 +995,7 @@
           Nothing yet. Send a prompt.
         </p>
       </div>
+      </Scrollable>
 
       <!-- Between the transcript and the composer, and outside the scroll: a
            gate that scrolled away from the conversation it stopped is one
@@ -1142,6 +1243,7 @@
 <TurnInspect :if="ui.inspecting != null" />
 <ContextModal :if="ui.contextOpen" />
 <DiffModal :if="ui.diff" />
+<SnippetPreview :if="snippet.preview !== null" />
 
 <!-- The shell's own styles, and nothing else's. `scoped` rewrites every
      selector below to also match `[data-jq79="…"]`, the attribute jq79 stamps
@@ -1236,6 +1338,33 @@
   /* The chat's ground is `.col.chat` in `app.css`, shared with modal feet. */
   .app[data-columns="2"] .content { border-right: 0; }
 
+  /* ---- a phone: three slides, the chat first ---------------------------- */
+  /* One row a screen wide per column, scrolled sideways and snapping to one
+     — CSS scroll snap, no script in the swipe. The order is the chat, the
+     inspector, the content: set here with `order` rather than in the markup,
+     which keeps the desktop's left-to-right. */
+  .app[data-columns="slides"] {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .app[data-columns="slides"]::-webkit-scrollbar { display: none; }
+  .app[data-columns="slides"] > .col {
+    flex: 0 0 100%;
+    width: 100%;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    border-right: 0;
+  }
+  .app[data-columns="slides"] > .chat { order: 0; }
+  .app[data-columns="slides"] > .inspector { order: 1; }
+  .app[data-columns="slides"] > .content { order: 2; }
+  /* Widths are swiped, not dragged. */
+  .app[data-columns="slides"] .resize { display: none; }
+
   /* ---- the inspector's head: the logo, then the panels ------------------ */
   .logo {
     background: none;
@@ -1316,32 +1445,7 @@
   .tabs.files .tab .close:focus-visible { opacity: .7; }
   .tabs.files .tab .close:hover { opacity: 1; background: var(--bg); }
   .tabs.files .tab .close .ic { width: 12px; height: 12px; }
-  /* Between the name and the close, and always there: it says the file
-     changed before anyone hovers. */
-  .tabs.files .tab .diff {
-    display: flex;
-    background: none;
-    border: 0;
-    border-radius: 4px;
-    color: var(--warn);
-    padding: .1rem;
-    cursor: pointer;
-  }
-  .tabs.files .tab .diff:hover { background: var(--bg); }
-  .tabs.files .tab .diff .ic { width: 12px; height: 12px; }
 
-  .swap {
-    flex: none;
-    background: none;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    color: var(--dim);
-    display: flex;
-    align-items: center;
-    padding: .25rem;
-    cursor: pointer;
-  }
-  .swap:hover { color: var(--fg); border-color: var(--accent); }
 
   /* ---- the content column's foot: the open thing's own facts ------------ */
   .which { display: flex; gap: .2rem; margin-left: auto; }
@@ -1460,6 +1564,9 @@
   }
   .acts button:hover { color: var(--fg); background: var(--bg); }
   .acts .swap { border: 1px solid var(--line); margin-left: .2rem; }
+  .acts button:disabled { opacity: .4; cursor: default; background: none; }
+  /* Two columns chosen here: lit, so the head says the page is narrowed. */
+  .acts .columns.on { color: var(--accent); }
 
   /* The old tab strip, as a popover under the clock. */
   .history {
@@ -1516,7 +1623,7 @@
 
   /* ---- the chat's body ------------------------------------------------- */
   .chat-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .transcript { flex: 1; overflow-y: auto; padding: 1rem; min-height: 0; }
+  .transcript { padding: 1rem; }
   .chat-pinned { flex: none; }
 
   .nothing {
@@ -1572,7 +1679,7 @@
     font-family: ui-monospace, monospace;
   }
   .snippet .lang { flex: 1; }
-  .snippet .copy {
+  .snippet :is(.copy, .open) {
     display: flex;
     background: none;
     border: 0;
@@ -1581,9 +1688,9 @@
     padding: .2rem;
     cursor: pointer;
   }
-  .snippet .copy:hover { color: var(--fg); background: var(--bg); }
+  .snippet :is(.copy, .open):hover { color: var(--fg); background: var(--bg); }
   .snippet .copy.done { color: var(--ok); }
-  .snippet .copy .ic { width: 13px; height: 13px; }
+  .snippet :is(.copy, .open) .ic { width: 13px; height: 13px; }
   /* In the code theme's ink, on its ground — Monokai's colours are made for a
      dark one. The Scrollable around it carries the ground and the scroll. */
   .snippet pre {

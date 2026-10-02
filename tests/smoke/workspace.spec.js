@@ -175,14 +175,22 @@ test("the tab shows a changed file's diff in a modal", async ({ page }) => {
   await expect(tab.locator(".pick")).toHaveAttribute("title", "src/foot.txt")
   // The tree's shape, before the name: this server names no icon theme.
   await expect(tab.locator('svg.kind use[href="#i-file"]')).toHaveCount(1)
-  // In the tab, between its name and its close.
-  const button = tab.locator('button[title="Show the changes (git diff)"]')
-  // Committed and untouched: nothing to show, so no button.
-  await expect(button).toHaveCount(0)
+  // A strip under the content's head, not an icon on the tab: how much each
+  // side of git changed, and the way into the diff.
+  const strip = page.locator(".content .strip")
+  await expect(tab.locator("button.diff")).toHaveCount(0)
+  // Committed and untouched: nothing to show, so no strip.
+  await expect(strip).toHaveCount(0)
 
   writeFileSync(join(work, "src/foot.txt"), "one\nTWO\nthree\n")
-  await expect(button).toHaveCount(1)
-  await button.click()
+  await expect(strip).toContainText("working tree")
+  await expect(strip.locator(".add")).toHaveText("+1")
+  await expect(strip.locator(".del")).toHaveText("−1")
+  // In the flow: the file starts under it, not under the head.
+  const stripBottom = await strip.evaluate(el => el.getBoundingClientRect().bottom)
+  const fileTop = await page.locator(".content .col-main").evaluate(el => el.getBoundingClientRect().top)
+  expect(Math.abs(fileTop - stripBottom)).toBeLessThan(2)
+  await strip.click()
   const modal = page.locator("dialog.modal")
   await expect(modal.locator(".modal-head strong")).toHaveText("src/foot.txt")
   await expect(modal.locator(".line.add")).toContainText("TWO")

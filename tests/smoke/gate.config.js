@@ -17,7 +17,7 @@ export default defineConfig({
   // `config.toml` from the browser, and the panels following the disk. Each
   // spawns its own server on its own port and its own state directory, so they
   // run side by side.
-  testMatch: /(gate|settings|workspace|terminal)\.spec\.js$/,
+  testMatch: /(gate|settings|workspace|terminal|snippet)\.spec\.js$/,
   // A whole job — plan, approval, tool call, fold — over a mock with no delay.
   timeout: 120_000,
   // A smoke test that passes on the second attempt is a smoke test that failed.

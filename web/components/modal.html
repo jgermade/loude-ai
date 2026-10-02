@@ -23,11 +23,16 @@
   // head of its own, a sheet that comes down out of the parent's head, and an
   // overlay over the parent's body only — the parent's head stays lit, so it
   // is still clear whose form this is. The provider and engine forms over
-  // Settings are the case. It is still a `showModal()` dialog, so ESC, the
-  // focus trap and the inert parent are the platform's; only where it is
-  // drawn changes. The overlay is its `::backdrop`, fitted to the parent's
-  // body, and a click on it is a click on the dialog, so it dismisses the
-  // child like any backdrop.
+  // Settings are the case.
+  //
+  // **And the parent's head still works**: its close button closes both. So
+  // a child is opened with `show()`, not `showModal()` — a second modal would
+  // make everything under it inert, the parent's head included. The parent
+  // stays the modal, and what the child takes over is done here instead: the
+  // rest of the parent's content is made `inert` (all of it but the head and
+  // the child), the overlay is an element of its own over the parent's body,
+  // and ESC is caught before it reaches the parent, so it closes the child
+  // alone.
 
   // How long it takes to leave; `modal-out` below is the same.
   const CLOSE_MS = 140
@@ -37,21 +42,35 @@
   // body in the viewport's pixels — where the sheet and its overlay go.
   let parent = null
   let room = null
+  // What `veil` made inert, to give back.
+  let veiled = []
+  // A child's ESC, on the window; see `show`.
+  let escape = () => {}
+
+  // Everything in the parent but its head and the way down to this one:
+  // at each level on the way up, the siblings that are not on it.
+  const veil = (dialog, cover) => {
+    for (let at = dialog; at && at !== parent; at = at.parentElement) {
+      for (const sibling of at.parentElement?.children || []) {
+        if (sibling === at || sibling === cover || sibling.inert) continue
+        if (at.parentElement === parent && sibling.matches(".modal-head")) continue
+        sibling.inert = true
+        veiled.push(sibling)
+      }
+    }
+  }
+  const unveil = () => {
+    for (const element of veiled) element.inert = false
+    veiled = []
+  }
 
   const fitted = (room, width) =>
     `--top:${room.top}px;--left:${room.left}px;--w:${room.width}px;--h:${room.height}px;` +
     `--box:min(${width || "34rem"}, ${room.width}px - 2rem)`
   $: box = parent && room ? fitted(room, width) : width ? `width:min(${width}, calc(100vw - 2rem))` : ""
 
-  // There is no unmount here to stop listening on, so the first measurement
-  // after this dialog has left the document stops it instead.
   let watching = null
   const fit = () => {
-    if (!$self("dialog")?.isConnected) {
-      watching?.disconnect()
-      window.removeEventListener("resize", fit)
-      return
-    }
     if (!parent?.open) return
     const outer = parent.getBoundingClientRect()
     const head = parent.querySelector(":scope > .modal-head")?.getBoundingClientRect()
@@ -66,6 +85,7 @@
 
   const close = () => {
     if (leaving || locked) return
+    unveil()
     const dialog = $self("dialog")
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches
     if (!dialog?.open || still) return $emit("close")
@@ -94,6 +114,14 @@
       watching = new ResizeObserver(fit)
       watching.observe(parent)
       window.addEventListener("resize", fit)
+      $destroyed(() => {
+        watching.disconnect()
+        window.removeEventListener("resize", fit)
+        window.removeEventListener("keydown", escape, true)
+        // However the child went — closed, or unmounted by its owner without
+        // a close — the parent is given back.
+        unveil()
+      })
     }
 
     // `target` is checked because `close` is also the name this component
@@ -115,10 +143,24 @@
       if (locked) return dialog.showModal()
       close()
     })
-    // A frame later for a child, so the box above is drawn — headless and
-    // in its place — before it is on screen.
-    if (parent) requestAnimationFrame(() => dialog.isConnected && !dialog.open && dialog.showModal())
-    else dialog.showModal()
+    if (!parent) return dialog.showModal()
+
+    // ESC is the parent's `cancel` while the parent is the modal, so it is
+    // taken first, on the way down, and spent on the child.
+    escape = event => {
+      if (event.key !== "Escape" || !dialog.open || leaving) return
+      event.preventDefault()
+      event.stopPropagation()
+      close()
+    }
+    window.addEventListener("keydown", escape, true)
+    // A frame later, so the box above is drawn — headless and in its place —
+    // before it is on screen.
+    requestAnimationFrame(() => {
+      if (!dialog.isConnected || dialog.open) return
+      veil(dialog, $self(".veil"))
+      dialog.show()
+    })
   }
   show()
 </script>
@@ -126,6 +168,8 @@
 <!-- `@click.self` is the backdrop: a click that lands on the dialog itself
      rather than on anything inside it is a click outside the box, because the
      dialog has no padding of its own for a click to land in. -->
+<!-- A child's overlay, over the parent's body and not its head. -->
+<div :if="parent" class="veil" :class.closing="leaving" :style="box" @click="close()"></div>
 <dialog class="modal" :class.closing="leaving" :class.child="!!parent" :style="box"
         :aria-label="title" @click.self="close()">
   <header :if="!parent" class="modal-head">
@@ -174,6 +218,10 @@
 
   /* ---- a child: a sheet out of the parent's head, over the parent's body */
   dialog.child {
+    /* Not in the top layer — it is not modal — so placed by hand, over the
+       parent's content and its pinned foot. */
+    position: fixed;
+    z-index: 11;
     inset: auto;
     top: var(--top);
     left: calc(var(--left) + (var(--w) - var(--box)) / 2);
@@ -186,15 +234,18 @@
     border-radius: 0 0 6px 6px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
   }
-  dialog.child::backdrop {
-    inset: auto;
+  .veil {
+    position: fixed;
+    z-index: 10;
     top: var(--top);
     left: var(--left);
     width: var(--w);
     height: var(--h);
     background: rgba(0, 0, 0, .45);
     border-radius: 0 0 5px 5px;
+    animation: backdrop-in .2s ease-out;
   }
+  .veil.closing { animation: backdrop-out .14s ease-in forwards; }
   dialog.child[open] { animation: sheet-in .26s cubic-bezier(.32, .72, 0, 1); }
   dialog.child.closing { animation: sheet-out .14s ease-in forwards; }
   /* Down out of the head's bottom edge: the part still above it is clipped, so
@@ -210,7 +261,7 @@
     to { transform: translateY(-100%); clip-path: inset(100% -2rem -2rem -2rem); }
   }
   @media (prefers-reduced-motion: reduce) {
-    dialog.child[open], dialog.child.closing { animation: none; }
+    dialog.child[open], dialog.child.closing, .veil, .veil.closing { animation: none; }
   }
 
   .modal-head {
