@@ -214,6 +214,13 @@ pub enum Authority {
     /// panel about something false. See
     /// `RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`.
     Draft(Option<JobId>),
+    /// A person, for one call a draft's floor refused: *allow once*. The
+    /// policy file's sandbox runs it, and this is what that run is stamped
+    /// with, so a recording does not say the policy file allowed a write in a
+    /// draft. Carries the draft the way [`Authority::Draft`] does, and `None`
+    /// for the same reason. See
+    /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    Person(Option<JobId>),
 }
 
 impl std::fmt::Display for Authority {
@@ -225,6 +232,8 @@ impl std::fmt::Display for Authority {
                 write!(f, "the floor for draft {job}, which grants no writes")
             }
             Self::Draft(None) => write!(f, "the draft's floor, which grants no writes"),
+            Self::Person(Some(job)) => write!(f, "a person, for this call only, in draft {job}"),
+            Self::Person(None) => write!(f, "a person, for this call only"),
         }
     }
 }
@@ -705,7 +714,9 @@ impl Sandbox {
             // the two *set* the value — see
             // `RECORD/2026-09-06.enforcement-per-job.completed.md`.
             return Err(Verdict::deny(match self.authority {
-                Authority::Policy => format!(
+                // A person allowing one call widens it to the policy file, and
+                // no further: what the policy cannot hold, a click cannot.
+                Authority::Policy | Authority::Person(_) => format!(
                     "the kernel cannot hold this child ({missing}); \
                      grant it anyway with enforcement = \"best-effort\""
                 ),
@@ -1010,6 +1021,8 @@ mod tests {
             Authority::Plan(12),
             Authority::Draft(None),
             Authority::Draft(Some(3)),
+            Authority::Person(None),
+            Authority::Person(Some(3)),
         ] {
             let text = serde_json::to_string(&authority).unwrap();
             assert_eq!(

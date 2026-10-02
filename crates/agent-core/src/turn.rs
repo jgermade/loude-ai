@@ -75,6 +75,16 @@ pub enum TurnEvent {
         step: u32,
         call: ToolCall,
     },
+    /// The floor refused this call, the policy file would allow it, and a
+    /// person is being asked. Sent by whoever asks — an
+    /// [`crate::agent::Asker`] — on the turn's own channel, so it can never
+    /// overtake the `ToolCall` it is about. See
+    /// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+    CallHeld {
+        step: u32,
+        call: crate::tools::ToolCall,
+        refused: String,
+    },
     /// What it did, including the verdict and who enforced it.
     ToolResult {
         step: u32,

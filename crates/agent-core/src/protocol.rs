@@ -91,7 +91,14 @@ use crate::turn::{EndReason, TurnEvent};
 /// exactly as an unknown `type` is. The first bump taken for a field rather
 /// than for a line. See
 /// `RECORD/2026-09-21.the-alternation-on-the-page.completed.md`.
-pub const VERSION: u32 = 8;
+///
+/// **9 is a person answering one call**: [`ServerMessage::CallHeld`] when the
+/// floor refused a write the policy file would allow, and
+/// [`ClientMessage::AnswerCall`] for *allow once* or *deny*. New variants of
+/// both tagged enums, the rule 2 named; and `Authority` gains `person`, which a
+/// reader of a verdict's stamp meets as a new value. `tool_result.asked` is
+/// additive. See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+pub const VERSION: u32 = 9;
 
 /// Turns are numbered per session, in order, starting at 1.
 pub type TurnId = u64;
@@ -105,6 +112,9 @@ pub enum Refusal {
     Busy,
     /// A proposal is waiting on a person. Nothing runs behind the gate.
     Pending,
+    /// No call is held at the turn and step an [`ClientMessage::AnswerCall`]
+    /// named: it was answered already, or its turn ended first.
+    Call,
     /// The job named is not in a state where the ask applies — approved
     /// twice, closed while nothing was open, reopened when it was never closed.
     #[serde(alias = "task")]
@@ -219,6 +229,16 @@ pub enum ClientMessage {
     /// in. Names no job for [`Self::ApprovePlan`]'s reason.
     #[serde(alias = "reject_task", alias = "reject_job")]
     DeclinePlan,
+    /// The answer to a [`ServerMessage::CallHeld`]: `allow` runs that call once
+    /// under the policy file, and only that call; otherwise the model is told a
+    /// person refused it. `turn` and `step` name the call, so an answer that
+    /// raced the end of its turn is refused rather than applied to the next
+    /// held call.
+    AnswerCall {
+        turn: TurnId,
+        step: u32,
+        allow: bool,
+    },
     /// Close it: from here its turns are sent as their summary.
     #[serde(alias = "close_task")]
     CloseJob {
@@ -484,6 +504,19 @@ pub enum ServerMessage {
         name: String,
         arguments: serde_json::Value,
     },
+    /// The call `step` was refused by a draft's floor and the policy file would
+    /// allow it, so the turn is waiting on a person rather than handing the
+    /// refusal to the model. `refused` is the floor's rule, so the page can say
+    /// what it is being asked to override. Answered by
+    /// [`ClientMessage::AnswerCall`]; the `tool_result` that follows carries
+    /// the answer in `asked`.
+    CallHeld {
+        turn: TurnId,
+        step: u32,
+        name: String,
+        arguments: serde_json::Value,
+        refused: String,
+    },
     /// What it did. The verdict travels with the result because "the agent ran
     /// a command" and "the kernel held the command it ran" are different facts
     /// and only one of them is worth trusting.
@@ -505,6 +538,11 @@ pub enum ServerMessage {
         /// ignores a field it does not know, and this variant is not new.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command: Option<crate::tools::CommandResult>,
+        /// A person's answer, when the floor refused this call and somebody was
+        /// asked: `true` allowed it once, `false` refused it. Absent when
+        /// nobody was asked.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asked: Option<bool>,
     },
 }
 
@@ -533,11 +571,23 @@ impl ServerMessage {
                 name: call.name,
                 arguments: call.arguments,
             },
+            TurnEvent::CallHeld {
+                step,
+                call,
+                refused,
+            } => Self::CallHeld {
+                turn,
+                step,
+                name: call.name,
+                arguments: call.arguments,
+                refused,
+            },
             TurnEvent::ToolResult { step, outcome } => {
                 let ToolStep {
                     call,
                     outcome,
                     duration_ms,
+                    asked,
                     ..
                 } = *outcome;
                 Self::ToolResult {
@@ -550,6 +600,7 @@ impl ServerMessage {
                     truncated: outcome.truncated,
                     duration_ms,
                     command: outcome.command,
+                    asked,
                 }
             }
         })
@@ -564,6 +615,7 @@ impl ServerMessage {
             | Self::Ended { turn, .. }
             | Self::Failed { turn, .. }
             | Self::ToolCall { turn, .. }
+            | Self::CallHeld { turn, .. }
             | Self::ToolResult { turn, .. }
             // The turn that cut, not the turns that left: this is a thing the
             // selection for `turn` did.

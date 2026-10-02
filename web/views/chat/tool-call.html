@@ -10,6 +10,7 @@
   // `RECORD/2026-09-29.a-switch-that-does-not-wait.completed.md`.
 
   const Scrollable = await import("@web/components/scrollable.html")
+  const { answerCall } = await import("@web/lib/store.js")
 
   let open = false
 
@@ -23,19 +24,41 @@
     : typeof args.path === "string"
       ? args.path
       : Object.values(args).find(v => typeof v === "string") || ""
+  // A call the floor refused and a person is being asked about. The question
+  // is drawn open and not behind the caret: the turn is waiting on it.
+  $: held = call?.held || null
+  // What it would write, which is the thing being allowed: the whole content
+  // for `write_file`, the two sides for `edit_file`.
+  $: writes = typeof args.content === "string" ? args.content : null
+  $: replaces = typeof args.old_string === "string"
+    ? { old: args.old_string, new: typeof args.new_string === "string" ? args.new_string : "" }
+    : null
+  // Which question this card already answered, so a second click cannot send
+  // a second answer while the first is on its way. Keyed by the call rather
+  // than a flag, so a later question on the same card is not born answered.
+  let sent = ""
+  $: key = held ? `${held.turn}:${call?.step}` : ""
+  $: answered = !!key && sent === key
+  const answer = allow => {
+    if (!held || answered) return
+    sent = key
+    answerCall(held.turn, call.step, allow)
+  }
   $: status = part?.pending
     ? { word: "writing the call…", kind: "busy" }
+    : held
+      ? { word: "waiting for you", kind: "ask" }
     : !call
       ? { word: live ? "waiting…" : "not run", kind: live ? "busy" : "dim" }
       : !call.verdict
         ? { word: "running…", kind: "busy" }
         : !call.verdict.allowed
-          ? { word: "denied", kind: "bad" }
+          ? { word: call.asked === false ? "you denied it" : "denied", kind: "bad" }
           : call.error
             ? { word: "failed", kind: "bad" }
             : call.command && call.command.exit_code !== 0
               ? { word: call.command.exit_code === null ? "killed" : `exit ${call.command.exit_code}`, kind: "bad" }
-              : { word: "done", kind: "ok" }
+              : { word: call.asked ? "allowed once" : "done", kind: "ok" }
   $: took = call?.duration_ms != null ? `${call.duration_ms} ms` : ""
   $: detailed = !part?.pending && (call || part?.raw)
   $: pretty = JSON.stringify(args, null, 2)
@@ -52,9 +75,24 @@
     <span :if="took" class="took">{{ took }}</span>
   </button>
 
+  <div :if="held" class="question">
+    <p class="why">The draft may not write this. Allow it once?
+      <span class="dim">— {{ held.refused }}</span></p>
+    <div :if="writes !== null" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="16rem"><pre>{{ writes }}</pre></Scrollable></div>
+    <div :if="replaces" class="label">replaces</div>
+    <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="10rem"><pre class="bad">{{ replaces.old }}</pre></Scrollable></div>
+    <div :if="replaces" class="label">with</div>
+    <div :if="replaces" class="out"><Scrollable :y="true" frame="well" background="var(--bg, #f4f5f8)" max="10rem"><pre class="ok">{{ replaces.new }}</pre></Scrollable></div>
+    <div class="answers">
+      <button type="button" class="primary" :disabled="answered" @click="answer(true)">Allow once</button>
+      <button type="button" :disabled="answered" @click="answer(false)">Deny</button>
+    </div>
+  </div>
+
   <div :if="open" class="body">
     <div :if="call?.verdict" class="line">
       <span :class="call.verdict.allowed ? 'ok' : 'bad'">{{ call.verdict.allowed ? "allowed" : "denied" }}</span>
+      <span :if="call.asked != null" class="dim">by you, for this call</span>
       <span class="dim">— {{ call.verdict.rule }}</span>
     </div>
     <div :if="call?.error" class="line bad">{{ call.error }}</div>
@@ -102,6 +140,7 @@
   .dot.ok { background: var(--b-history, #4c8a2e); }
   .dot.bad { background: var(--bad, #c43d55); }
   .dot.busy { background: var(--accent, #2f5bbd); animation: pulse 1s ease-in-out infinite; }
+  .dot.ask { background: var(--warn, #b7791f); animation: pulse 1s ease-in-out infinite; }
   .name { color: var(--accent, #2f5bbd); font-weight: 600; flex: none; }
   .subject {
     flex: 1;
@@ -114,6 +153,22 @@
   }
   .status { flex: none; color: var(--dim, #5b6472); }
   .status.ok { color: var(--b-history, #4c8a2e); }
+  .status.ask { color: var(--warn, #b7791f); font-weight: 600; }
+  .question { padding: .1rem .6rem .55rem; border-top: 1px solid var(--line, #c8c8c8); }
+  .why { margin: .4rem 0 .2rem; overflow-wrap: anywhere; }
+  .answers { display: flex; gap: .4rem; margin-top: .5rem; }
+  .answers button {
+    padding: .25rem .7rem;
+    border: 1px solid var(--line, #c8c8c8);
+    border-radius: 5px;
+    background: var(--bg, #fff);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .answers button.primary { background: var(--accent, #2f5bbd); border-color: var(--accent, #2f5bbd); color: #fff; }
+  .answers button:disabled { opacity: .5; cursor: default; }
+  pre.ok { color: var(--b-history, #4c8a2e); }
   .status.bad, .bad { color: var(--bad, #c43d55); }
   .warn { color: var(--warn, #b7791f); }
   .dim, .took { color: var(--dim, #5b6472); }
@@ -130,5 +185,5 @@
     font-size: 11.5px;
   }
   @keyframes pulse { 50% { opacity: .35; } }
-  @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .dot.busy, .dot.ask { animation: none; } }
 </style>

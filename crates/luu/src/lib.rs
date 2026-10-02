@@ -3209,6 +3209,9 @@ pub async fn run() -> Result<()> {
                         // Handled above, before the protocol conversion: it is
                         // not a protocol message and it is not printed.
                         TurnEvent::ModelCall { .. } => {}
+                        // `chat` passes no asker, so the loop never holds a
+                        // call here.
+                        TurnEvent::CallHeld { .. } => {}
                         // Loud, the way a known-incompatible backend's caveat
                         // is at startup — on stderr rather than into the
                         // transcript `out` carries, so a run compared against
@@ -3232,6 +3235,9 @@ pub async fn run() -> Result<()> {
             sandbox.as_ref(),
             agency.limits,
             schema_retry.as_ref(),
+            // `chat` has no floor and no gate: the policy file is its
+            // standing approval, so there is nothing a person could add.
+            None,
             tx,
             cancel,
         )

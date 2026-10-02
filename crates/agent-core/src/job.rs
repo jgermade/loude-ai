@@ -897,6 +897,7 @@ mod tests {
                 command: None,
             },
             duration_ms: 0,
+            asked: None,
         }
     }
 

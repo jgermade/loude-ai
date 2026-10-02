@@ -189,7 +189,12 @@ use crate::trace::TraceMessage;
 /// message. Absent means fenced, in this format and in every one before it,
 /// which is what every earlier stream was. See
 /// `RECORD/2026-09-30.native-tool-calls.completed.md`.
-pub const FORMAT: u32 = 19;
+///
+/// **20 carries `call_held`**, a new line on the protocol channel — the floor
+/// refused a write the policy file allows and a person was asked — and the
+/// `person` authority on a verdict's stamp. `tool_result.asked` is additive.
+/// See `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+pub const FORMAT: u32 = 20;
 
 /// The posture a session ran under, as a recording names it.
 ///

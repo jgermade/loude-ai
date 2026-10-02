@@ -139,6 +139,30 @@ the wire: the floor grants none by construction, so it is a sentence rather than
 an always-empty list. See
 [`RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md`](RECORD/2026-09-21.what-an-unapproved-turn-may-reach.completed.md).
 
+**A write the floor refuses is asked about, once, where the policy file would
+allow it.** Refused and nothing else, a draft asked to create a file ended with a
+7B inventing workarounds and nobody asked anything: the person's door to the gate
+is a button nobody presses after a refusal scrolls by, and the model's needs a
+```` ```plan ```` format only `request_plan` ever teaches it. So `run_agent_turn`
+takes an `Ask` — a person (`Asker`) and the policy file's sandbox stamped
+`Authority::Person` — and when the turn's sandbox refuses a `write_file` or
+`edit_file` that the policy would allow (`tools::writes_one_path`), it holds the
+call and asks: `call_held` out, `answer_call` back. *Allow once* runs the same
+call again under the policy file, which is sound because the file tools check
+before they touch; *deny* tells the model a person refused, not the floor, so a
+small model reads *no* rather than *try another door*. `tool_result.asked`
+records the answer, and that field — not the verdict, whose allow rule names no
+authority — is what says a person let it through. Only in a draft (inside a job,
+the plan is what was approved), never for `run_command` (the floor refuses its
+writes at a syscall, with no call left to pause), never past the policy file, and
+not where `[approvals] required` — an unsigned click would be the one widening
+that skips the signature. The question travels on the turn's own event channel,
+behind the `tool_call` it is about: published directly, it overtook it and the
+page had no call to hang it on. `protocol::VERSION` 9 and `record::FORMAT` 20
+carry it, and the gate's floor sentence says *writes nothing without asking you,
+one call at a time* where `floor.asks` is true. See
+[`RECORD/2026-10-02.a-refused-write-asks.completed.md`](RECORD/2026-10-02.a-refused-write-asks.completed.md).
+
 It is only as strong as `enforcement`: under `best-effort` there is no Landlock,
 so a subprocess started by a draft turn can write anyway — true of every path
 grant here, and worth saying because the floor is the first one whose entire
@@ -197,7 +221,10 @@ One boundary does three jobs, which is the argument for it:
   turns and summary are each written once and never edited.
 - **Permission gets its scope**: the approved plan named the files and commands, so
   it *is* the `SandboxPolicy` for that task. One informed approval beats a prompt
-  per tool call, which is what trains people to click yes without reading.
+  per tool call, which is what trains people to click yes without reading. The
+  one exception is a draft's dead end — a write the floor refuses and the policy
+  file allows — which is asked about once rather than refused; see the floor
+  above.
 - **The transcript gets its grouping**: a closed task collapses to its summary in the
   UI — the view collapses exactly what the context collapses.
 

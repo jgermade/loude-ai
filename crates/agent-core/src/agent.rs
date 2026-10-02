@@ -22,8 +22,10 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 use crate::backend::{Backend, CompletionRequest, Constraint, Message, Usage};
-use crate::sandbox::Sandbox;
-use crate::tools::{CallVerdict, ToolStep, parse_call, score_call};
+use crate::sandbox::{Sandbox, Verdict};
+use crate::tools::{
+    CallVerdict, ToolCall, ToolOutcome, ToolStep, parse_call, score_call, writes_one_path,
+};
 use crate::turn::{EndReason, TurnEvent, TurnOutcome, run_turn};
 use crate::worker::Executor;
 
@@ -41,6 +43,39 @@ pub struct SchemaRetry {
     pub schema: serde_json::Value,
     pub tool_names: Vec<&'static str>,
 }
+
+/// Somebody who can answer for one call the floor refused.
+///
+/// `ask` resolves when they have: `true` is *allow once*, `false` is *deny*.
+/// What carries the question there — a socket, a pipe, a test's script — is the
+/// caller's business, the way where a tool runs is [`Executor`]'s.
+pub trait Asker: Send + Sync {
+    fn ask<'a>(
+        &'a self,
+        step: u32,
+        call: &'a ToolCall,
+        refused: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>>;
+}
+
+/// What a draft's turn may escalate to: a person, and the sandbox their *allow
+/// once* runs the call under.
+///
+/// `wider` is the policy file's sandbox, stamped
+/// [`crate::sandbox::Authority::Person`] by the caller. A call is put to the
+/// person only when the turn's sandbox refuses its write and `wider` would allow
+/// it — so a click never reaches past what the policy file grants. See
+/// `RECORD/2026-10-02.a-refused-write-asks.completed.md`.
+#[derive(Clone, Copy)]
+pub struct Ask<'a> {
+    pub wider: &'a Sandbox,
+    pub person: &'a dyn Asker,
+}
+
+/// What the model is told when a person was asked and said no. Not the floor's
+/// text: a small model that reads *the floor grants no writes* tries another
+/// door, and one that reads that a person refused has been answered.
+pub const PERSON_REFUSED: &str = "a person was asked and refused this call";
 
 /// How many tool calls one turn may make before it has to answer.
 ///
@@ -146,6 +181,7 @@ pub async fn run_agent_turn(
     sandbox: &Sandbox,
     limits: Limits,
     schema_retry: Option<&SchemaRetry>,
+    ask: Option<Ask<'_>>,
     events: mpsc::Sender<TurnEvent>,
     cancel: watch::Receiver<bool>,
 ) -> AgentOutcome {
@@ -323,32 +359,78 @@ pub async fn run_agent_turn(
             })
             .await;
 
-        let started = std::time::Instant::now();
-        // The one clock over every tool call, wherever the call runs. A tool
-        // that never answers used to hang the turn, the job and the session —
-        // in a container it hung on a pipe, and under `Runtime::Host` it hung
-        // on a syscall, which is the half that had nothing watching it at all.
-        let deadline = limits.deadline(&call);
-        let result = match tokio::time::timeout(deadline, tools.call(&call, sandbox)).await {
-            Ok(result) => result,
-            Err(_) => {
-                // Dropping the future is what abandons the call; this is what
-                // tells the executor to deal with what it left behind — a
-                // worker process to kill, or nothing at all in this process.
-                tools.abandon().await;
-                let said = format!(
-                    "`{}` did not answer in {} ms and was abandoned",
-                    call.name,
-                    deadline.as_millis(),
-                );
-                crate::tools::ToolOutcome::failed(crate::sandbox::Verdict::deny(said.clone()), said)
+        let mut started = std::time::Instant::now();
+        let mut result = run_call(tools, &call, sandbox, &limits).await;
+
+        // **The one question a draft may put to a person**: the floor refused
+        // a write the policy file would allow. Asked before the model sees the
+        // refusal, so a yes runs the same call — which did nothing the first
+        // time, because the file tools check before they touch — and a no is
+        // the model's answer. Neither `writes_one_path` reaches past the
+        // policy: a path it does not grant is refused without asking.
+        let mut asked = None;
+        if let Some(ask) = ask
+            && !result.verdict.allowed
+            && !writes_one_path(&call, sandbox)
+            && writes_one_path(&call, ask.wider)
+        {
+            let mut cancelled = cancel.clone();
+            let answer = tokio::select! {
+                answer = ask.person.ask(step, &call, &result.verdict.rule) => Some(answer),
+                _ = cancelled.wait_for(|cancelled| *cancelled) => None,
+            };
+            match answer {
+                Some(true) => {
+                    // The clock is the call's, not the wait's: a person who
+                    // took a minute to read it did not make the tool slow.
+                    started = std::time::Instant::now();
+                    result = run_call(tools, &call, ask.wider, &limits).await;
+                    asked = Some(true);
+                }
+                Some(false) => {
+                    result = ToolOutcome::denied(Verdict::deny(PERSON_REFUSED));
+                    asked = Some(false);
+                }
+                // Cancelled while it waited: the refusal stands as the floor
+                // gave it, and the turn ends where a cancel ends any turn.
+                None => {
+                    let taken = ToolStep {
+                        text: outcome.text.clone(),
+                        call,
+                        outcome: result,
+                        duration_ms: started.elapsed().as_millis() as u64,
+                        asked: None,
+                    };
+                    let _ = events
+                        .send(TurnEvent::ToolResult {
+                            step,
+                            outcome: Box::new(taken.clone()),
+                        })
+                        .await;
+                    steps.push(taken);
+                    let _ = events
+                        .send(TurnEvent::Ended {
+                            reason: EndReason::Cancelled,
+                            usage: None,
+                        })
+                        .await;
+                    return AgentOutcome {
+                        text: outcome.text.clone(),
+                        steps,
+                        reason: EndReason::Cancelled,
+                        usage,
+                        error: None,
+                    };
+                }
             }
-        };
+        }
+
         let taken = ToolStep {
             text: outcome.text.clone(),
             call,
             outcome: result,
             duration_ms: started.elapsed().as_millis() as u64,
+            asked,
         };
 
         let _ = events
@@ -381,6 +463,35 @@ pub async fn run_agent_turn(
         reason: EndReason::ToolLimit,
         usage,
         error: None,
+    }
+}
+
+/// Runs one call under `sandbox`, on the one clock over every tool call.
+async fn run_call(
+    tools: &dyn Executor,
+    call: &ToolCall,
+    sandbox: &Sandbox,
+    limits: &Limits,
+) -> ToolOutcome {
+    // The one clock over every tool call, wherever the call runs. A tool
+    // that never answers used to hang the turn, the job and the session —
+    // in a container it hung on a pipe, and under `Runtime::Host` it hung
+    // on a syscall, which is the half that had nothing watching it at all.
+    let deadline = limits.deadline(call);
+    match tokio::time::timeout(deadline, tools.call(call, sandbox)).await {
+        Ok(result) => result,
+        Err(_) => {
+            // Dropping the future is what abandons the call; this is what
+            // tells the executor to deal with what it left behind — a
+            // worker process to kill, or nothing at all in this process.
+            tools.abandon().await;
+            let said = format!(
+                "`{}` did not answer in {} ms and was abandoned",
+                call.name,
+                deadline.as_millis(),
+            );
+            ToolOutcome::failed(Verdict::deny(said.clone()), said)
+        }
     }
 }
 
@@ -561,6 +672,7 @@ mod tests {
             &fixture.sandbox,
             Limits::default().with_max_steps(max_steps),
             schema_retry,
+            None,
             tx,
             cancel,
         )
@@ -619,6 +731,7 @@ mod tests {
             &tools,
             &fixture.sandbox,
             Limits::default().with_tool_timeout(Duration::from_millis(300)),
+            None,
             None,
             tx,
             cancel,
@@ -898,6 +1011,7 @@ mod tests {
             &fixture.sandbox,
             Limits::default(),
             Some(&retry),
+            None,
             tx,
             cancel,
         )
@@ -1002,5 +1116,219 @@ mod tests {
         .await;
         assert!(outcome.steps[0].text.contains("read_file"));
         assert!(outcome.steps[0].result_text().starts_with("[read_file] ok"));
+    }
+
+    /// A person who answers every question the same way, and remembers what
+    /// they were asked.
+    struct Says {
+        answer: bool,
+        asked: std::sync::Mutex<Vec<(u32, String, String)>>,
+    }
+
+    impl Says {
+        fn new(answer: bool) -> Self {
+            Self {
+                answer,
+                asked: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl Asker for Says {
+        fn ask<'a>(
+            &'a self,
+            step: u32,
+            call: &'a ToolCall,
+            refused: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((step, call.name.clone(), refused.to_string()));
+            let answer = self.answer;
+            Box::pin(async move { answer })
+        }
+    }
+
+    /// Somebody who never answers.
+    struct Away;
+
+    impl Asker for Away {
+        fn ask<'a>(
+            &'a self,
+            _step: u32,
+            _call: &'a ToolCall,
+            _refused: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// A drafting turn: the fixture's floor holds it, and the fixture's policy
+    /// — stamped as a person's — is what *allow once* runs under.
+    async fn draft(
+        fixture: &Fixture,
+        replies: &[&str],
+        person: &dyn Asker,
+        cancel: watch::Receiver<bool>,
+    ) -> (Vec<TurnEvent>, AgentOutcome) {
+        let backend = Scripted::new(replies);
+        let tools = crate::tools::Tools::standard();
+        let floor = fixture.sandbox.read_only();
+        let wider = fixture
+            .sandbox
+            .clone()
+            .under(crate::sandbox::Authority::Person(None));
+        let (tx, mut rx) = mpsc::channel(256);
+        let drain = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            while let Some(event) = rx.recv().await {
+                seen.push(event);
+            }
+            seen
+        });
+        let outcome = run_agent_turn(
+            &backend,
+            CompletionRequest {
+                tools: Vec::new(),
+                model: "scripted".into(),
+                messages: vec![Message::user("create example.html")],
+                context_limit: None,
+                temperature: None,
+                seed: None,
+                constraint: None,
+            },
+            &tools,
+            &floor,
+            Limits::default(),
+            None,
+            Some(Ask {
+                wider: &wider,
+                person,
+            }),
+            tx,
+            cancel,
+        )
+        .await;
+        (drain.await.unwrap(), outcome)
+    }
+
+    const WRITES_EXAMPLE: &str = "```tool\n{\"name\":\"write_file\",\"arguments\":\
+        {\"path\":\"example.html\",\"content\":\"<h1>hi</h1>\"}}\n```";
+
+    #[tokio::test]
+    async fn a_write_the_floor_refuses_is_asked_and_a_yes_runs_it_once() {
+        // The dead end this exists for: a draft asked to create a file, the
+        // floor refusing it, and nobody asked. Now a person is, and their yes
+        // is the same call run again under the policy file.
+        let fixture = Fixture::new("ask-yes");
+        let person = Says::new(true);
+        let (_stop, cancel) = watch::channel(false);
+        let (_, outcome) = draft(&fixture, &[WRITES_EXAMPLE, "done"], &person, cancel).await;
+
+        let asked = person.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1, "one refused write, one question");
+        assert_eq!(asked[0].0, 1);
+        assert_eq!(asked[0].1, "write_file");
+        assert!(
+            asked[0].2.contains("grants no writes"),
+            "the question carries the floor's own rule: {}",
+            asked[0].2
+        );
+        let step = &outcome.steps[0];
+        assert_eq!(step.asked, Some(true));
+        assert!(step.outcome.verdict.allowed, "{:?}", step.outcome);
+        assert_eq!(
+            std::fs::read_to_string(fixture.root.join("example.html")).unwrap(),
+            "<h1>hi</h1>"
+        );
+        assert!(step.result_text().starts_with("[write_file] ok"));
+    }
+
+    #[tokio::test]
+    async fn a_no_tells_the_model_a_person_refused_and_writes_nothing() {
+        let fixture = Fixture::new("ask-no");
+        let person = Says::new(false);
+        let (_stop, cancel) = watch::channel(false);
+        let (_, outcome) = draft(&fixture, &[WRITES_EXAMPLE, "done"], &person, cancel).await;
+
+        let step = &outcome.steps[0];
+        assert_eq!(step.asked, Some(false));
+        assert!(!step.outcome.verdict.allowed);
+        assert!(!fixture.root.join("example.html").exists());
+        // Not the floor's text: a small model that reads *grants no writes*
+        // goes looking for another door.
+        assert_eq!(
+            step.result_text(),
+            format!("[write_file] denied: {PERSON_REFUSED}")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_path_the_policy_does_not_grant_is_refused_without_asking() {
+        // A click never reaches past the policy file: what it does not grant,
+        // nobody is asked about.
+        let fixture = Fixture::new("ask-outside");
+        let outside = fixture.root.parent().unwrap().join("luu-agent-outside.txt");
+        let reply = format!(
+            "```tool\n{{\"name\":\"write_file\",\"arguments\":\
+             {{\"path\":{},\"content\":\"x\"}}}}\n```",
+            serde_json::to_string(&outside.display().to_string()).unwrap()
+        );
+        let person = Says::new(true);
+        let (_stop, cancel) = watch::channel(false);
+        let (_, outcome) = draft(&fixture, &[&reply, "done"], &person, cancel).await;
+
+        assert!(person.asked.lock().unwrap().is_empty());
+        assert_eq!(outcome.steps[0].asked, None);
+        assert!(!outcome.steps[0].outcome.verdict.allowed);
+        assert!(!outside.exists());
+    }
+
+    #[tokio::test]
+    async fn what_the_floor_already_allows_is_never_asked() {
+        let fixture = Fixture::new("ask-read");
+        let person = Says::new(false);
+        let (_stop, cancel) = watch::channel(false);
+        let (_, outcome) = draft(
+            &fixture,
+            &[
+                "```tool\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"notes.txt\"}}\n```",
+                "42.",
+            ],
+            &person,
+            cancel,
+        )
+        .await;
+
+        assert!(person.asked.lock().unwrap().is_empty());
+        assert_eq!(outcome.steps[0].asked, None);
+        assert!(outcome.steps[0].outcome.verdict.allowed);
+    }
+
+    #[tokio::test]
+    async fn a_cancel_while_a_person_is_away_ends_the_turn_with_the_refusal_standing() {
+        let fixture = Fixture::new("ask-cancel");
+        let (stop, cancel) = watch::channel(false);
+        let cancelling = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = stop.send(true);
+            stop
+        });
+        let (events, outcome) = draft(&fixture, &[WRITES_EXAMPLE, "done"], &Away, cancel).await;
+        drop(cancelling.await.unwrap());
+
+        assert_eq!(outcome.reason, EndReason::Cancelled);
+        assert_eq!(outcome.steps.len(), 1);
+        assert_eq!(outcome.steps[0].asked, None);
+        assert!(!outcome.steps[0].outcome.verdict.allowed);
+        assert!(!fixture.root.join("example.html").exists());
+        assert!(matches!(
+            events.last(),
+            Some(TurnEvent::Ended {
+                reason: EndReason::Cancelled,
+                ..
+            })
+        ));
     }
 }
