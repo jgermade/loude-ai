@@ -13,7 +13,7 @@ agent-core = { path = "crates/agent-core" }
 anyhow = "1"
 async-stream = "0.3"
 axum = { version = "0.8", features = ["ws", "multipart"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 # Signed approvals. The one thing here not to hand-roll: the randomness for a new
 # key is read from /dev/urandom and the hex is written by hand, because those two
 # are small enough that a dependency costs more than the code. See

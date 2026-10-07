@@ -1157,6 +1157,12 @@ pub struct ServeOptions {
     /// `None` on a loopback address means no auth; `None` on any other
     /// address means [`bind`] refuses.
     pub auth_token_file: Option<PathBuf>,
+    /// `[server] exposure` or `--exposure`, when something said it. See
+    /// [`crate::auth::resolve`].
+    pub exposure: Option<crate::provider::Exposure>,
+    /// What a browser types to reach this server, when a proxy stands in
+    /// front: accepted as an `Origin` beside the request's own `Host`.
+    pub origin: Option<String>,
     /// Where sessions are cached between restarts. `None` keeps the session in
     /// memory for the life of the process, which is what `serve` did before the
     /// store existed.
@@ -1257,6 +1263,8 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
         select_weights,
         constrain,
         auth_token_file,
+        exposure,
+        origin,
         store,
         approvers,
         icons,
@@ -1264,7 +1272,11 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
     // Before anything else, and before the listener exists: a port that would
     // publish task approval to the network is not a port this binds and then
     // warns about.
-    let auth = Arc::new(crate::auth::resolve(&address, auth_token_file.as_deref())?);
+    let auth = Arc::new(crate::auth::resolve(
+        &address,
+        auth_token_file.as_deref(),
+        exposure,
+    )?);
     let starts = crate::engines::for_run(&provider);
 
     let app = App::create(StdioOptions {
@@ -1465,6 +1477,7 @@ pub async fn bind(options: ServeOptions) -> Result<Serving> {
             // session ends — a larger authority than approving one job, and
             // not one a bearer token should carry.
             providers_editable: address.ip().is_loopback(),
+            origin: origin.clone(),
         })
         // Outermost, so it sees every request — the guarded half, the page's
         // own files, and a request the token check refused — and the time it
@@ -1498,6 +1511,9 @@ struct AppRouterState {
     /// middleware does: a port a network can reach is held to more than one a
     /// person's own browser can.
     auth: Arc<Auth>,
+    /// `[server] origin`: the address a browser uses when a proxy stands in
+    /// front, and so an `Origin` this server's own page may send.
+    origin: Option<String>,
 }
 
 async fn asset_handler(uri: Uri) -> Response {
@@ -1728,7 +1744,8 @@ fn terminal_allowed(
     let from = origin
         .strip_prefix("http://")
         .or_else(|| origin.strip_prefix("https://"));
-    if host.is_empty() || from != Some(host) {
+    let declared = state.origin.as_deref() == Some(origin);
+    if !declared && (host.is_empty() || from != Some(host)) {
         return Err(refuse(format!(
             "Origin `{origin}` is not this server (`{host}`), and only this server's page opens a terminal"
         )));

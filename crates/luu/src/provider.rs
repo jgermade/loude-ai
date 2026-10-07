@@ -241,9 +241,67 @@ struct File {
     /// `[engine.<name>]`: model servers luu may start. See [`Engine`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     engine: BTreeMap<String, Engine>,
+    /// `[server]`: how `luu serve` is reached. See [`Server`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    server: Option<Server>,
     /// `[host.<name>]`: another `luu serve` this one forwards to. See [`Host`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     host: BTreeMap<String, Host>,
+}
+
+/// `[server]`: how `luu serve` is reached, written down rather than typed on
+/// every start — a container is configured by its files and its environment,
+/// not by somebody at a prompt. Every key is optional, and a flag or a
+/// `LUU_*` variable overrides it for one run. See
+/// `RECORD/2026-10-07.a-public-luu.WIP.md`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Server {
+    /// Who may reach it. Absent, the address decides, as it always has:
+    /// loopback asks nobody, and anything else needs a token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure: Option<Exposure>,
+    /// Where it listens: `0.0.0.0:7878` in a container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<std::net::SocketAddr>,
+    /// The bearer token's file, for `private`. `luu token <path>` makes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<PathBuf>,
+    /// What a browser types to reach it, when that is not what it binds:
+    /// `https://luu.example.com` behind a proxy that terminates TLS. Accepted
+    /// as an `Origin` beside the request's own `Host`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+}
+
+/// Who may reach a `luu serve`. `public` — identities with passkeys — is the
+/// next step of the record, and is not a value until it exists.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum Exposure {
+    /// This machine only: bound to loopback, and asks nothing. A bind
+    /// anywhere else is refused.
+    Loopback,
+    /// Anyone who holds the bearer token, on any address.
+    Private,
+}
+
+impl Exposure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::Private => "private",
+        }
+    }
+}
+
+/// Whether `origin` is a scheme and an authority and nothing else — what a
+/// browser sends as `Origin`, so what it can be compared with.
+pub fn is_origin(origin: &str) -> bool {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    matches!(scheme, "http" | "https") && !rest.is_empty() && !rest.contains(['/', '?', '#', ' '])
 }
 
 /// `[host.<name>]`: another machine's `luu serve`, reached through this one.
@@ -471,6 +529,7 @@ pub struct Config {
     authority: Option<AuthorityNotes>,
     engines: BTreeMap<String, Engine>,
     hosts: BTreeMap<String, Host>,
+    server: Option<Server>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -528,6 +587,8 @@ pub enum ConfigError {
         profile: String,
         engine: String,
     },
+    #[error("{path}: [server]: {problem}")]
+    BadServer { path: String, problem: String },
     #[error("{path}: [host.{name}]: {problem}")]
     BadHost {
         path: String,
@@ -580,10 +641,12 @@ impl Config {
             authority: file.authority,
             engines: file.engine,
             hosts: file.host,
+            server: file.server,
         };
         config.check_default(path)?;
         config.check_engines(path)?;
         config.check_hosts(path)?;
+        config.check_server(path)?;
         Ok(config)
     }
 
@@ -601,6 +664,21 @@ impl Config {
                     engine: engine.clone(),
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// An `origin` is one a browser could send.
+    fn check_server(&self, path: &str) -> Result<(), ConfigError> {
+        if let Some(origin) = self.server.as_ref().and_then(|s| s.origin.as_deref())
+            && !is_origin(origin)
+        {
+            return Err(ConfigError::BadServer {
+                path: path.to_string(),
+                problem: format!(
+                    "origin = \"{origin}\" is not a scheme and a host, as `https://luu.example.com`"
+                ),
+            });
         }
         Ok(())
     }
@@ -726,6 +804,7 @@ impl Config {
             authority: self.authority.clone(),
             engine: self.engines.clone(),
             host: self.hosts.clone(),
+            server: self.server.clone(),
         })
         .map_err(|error| ConfigError::Render {
             message: error.to_string(),
@@ -781,6 +860,7 @@ impl Config {
             authority: self.authority.clone(),
             engines: self.engines.clone(),
             hosts: self.hosts.clone(),
+            server: self.server.clone(),
         }
     }
 
@@ -852,6 +932,11 @@ impl Config {
             hosts,
             ..self.clone()
         }
+    }
+
+    /// `[server]`, or every key absent.
+    pub fn server(&self) -> Server {
+        self.server.clone().unwrap_or_default()
     }
 
     /// Every host the file names.
