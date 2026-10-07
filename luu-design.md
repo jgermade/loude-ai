@@ -1176,7 +1176,11 @@ that codepoint, so none of them lined up with the 16px box a theme's file icons 
 exception is prose: the `→` in `use →` is a word, not a control, and stays a character.
 
 The panels are fed by four plain `GET`s — `/api/workspace/{tree,file,git-status,git-diff}` —
-plus a stream that says when to ask again, and all of them are **not** behind the job gate on purpose: a person clicking a directory is not a model
+plus a stream that says when to ask again. `git-status` answers `{ repository, files }`, and a
+base outside any repository is `repository: false` with a 200 — an answer the Git panel says in a
+sentence, not a failure: see
+[`RECORD/2026-10-07.not-a-repository-is-an-answer.completed.md`](RECORD/2026-10-07.not-a-repository-is-an-answer.completed.md).
+All of them are **not** behind the job gate on purpose: a person clicking a directory is not a model
 proposing a tool call, and routing it through approval would mean either rubber-stamping a job
 nobody asked for or building a second, unaudited read path. Every path still resolves through
 `Sandbox::check_path`, so the panels reach exactly what the session's policy grants and nothing

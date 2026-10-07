@@ -64,7 +64,15 @@
   </li>
 </ul>
 
-<p :if="!changes.length && !workspace.gitError" class="dim">
+<!-- Not a repository is a fact about the folder, not a failure of the panel:
+     said plainly, with the command that changes it. -->
+<p :if="workspace.repository === false && !workspace.gitError" class="dim">
+  <code>{{ workspace.base.split("/").pop() || "This folder" }}</code> is not a git
+  repository, so there are no changes to show. <code>git init</code> in it, or
+  clone one into it, and this panel follows.
+</p>
+
+<p :if="workspace.repository !== false && !changes.length && !workspace.gitError" class="dim">
   Nothing changed — the working tree matches <code>HEAD</code>.
 </p>
 

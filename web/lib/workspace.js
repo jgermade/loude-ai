@@ -63,6 +63,10 @@ export const workspace = $reactive({
   /// way, and a second parameter would be a second thing to keep consistent
   /// with the prefix.
   status: {},
+  /// Whether the base is in a git repository at all: `false` for a folder
+  /// nobody ran `git init` in, which is an answer and not an error. `null`
+  /// until git has been asked.
+  repository: null,
   /// Why git could not be asked, when it could not. A workspace that is not a
   /// git repository is an ordinary case and lands here as a plain sentence.
   gitError: null,
@@ -292,7 +296,9 @@ export async function refresh() {
 
 export async function loadStatus() {
   try {
-    workspace.status = await ask("./api/workspace/git-status")
+    const answer = await ask("./api/workspace/git-status")
+    workspace.status = answer.files || {}
+    workspace.repository = answer.repository
     workspace.gitError = null
   } catch (e) {
     workspace.status = {}
