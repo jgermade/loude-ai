@@ -1292,6 +1292,20 @@ browser cannot request with a header. `Authorization: Bearer <token>` everywhere
 `/ws` alone, because the browser's `WebSocket` constructor cannot set a header. See
 [`RECORD/2026-09-01.what-the-audit-left.completed.md`](RECORD/2026-09-01.what-the-audit-left.completed.md).
 
+**How a server is reached is written down, too**: `[server]` in `config.toml` —
+`exposure` (`loopback` or `private`), `bind`, `token-file`, `origin` — under
+`--exposure`, `--bind`, `--auth-token-file`, `--origin` and their `LUU_*`
+variables, because a container is configured by its files and its environment.
+Absent, the address decides as above. Present, `exposure` is a promise the address
+and the token keep, and a run that breaks it (`loopback` on `0.0.0.0`, `private`
+with no token) is refused. `luu token <PATH>` makes a token in a file created
+`0600`. `origin` is what a browser types when a proxy stands in front, accepted as
+an `Origin` beside the request's `Host`. `deploy/` is that server in a container
+(`deploy/Containerfile`, whose tools run in the container itself, as user `luu`,
+under `deploy/luu.toml`) and behind Caddy (`deploy/compose.yaml`); the first start
+writes `[server]` and the token into the state volume. See
+[`RECORD/2026-10-07.a-public-luu.WIP.md`](RECORD/2026-10-07.a-public-luu.WIP.md).
+
 The page lives in `web/` at the root of the repository, beside the crates rather than inside `luu`, and
 is embedded in the binary with `rust-embed`, so there is one command, one URL, and no node
 process in the loop.

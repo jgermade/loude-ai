@@ -1,0 +1,47 @@
+# `luu serve` in a container: the server, and the place its tools run.
+#
+# Not the worker image (`/Containerfile`), whose PID 1 is `luu worker` and
+# which a session starts per job. Here the container *is* the sandbox: the
+# policy runs tools on the host side of nothing (`runtime = "host"`), as the
+# user `luu`, inside whatever the container runtime grants — and Landlock still
+# runs inside, where the kernel has it. See
+# RECORD/2026-10-07.a-public-luu.WIP.md.
+#
+#   docker build -t luu -f deploy/Containerfile .
+#   docker run -p 7878:7878 -v luu-state:/state -v luu-work:/work luu
+#   docker exec <container> cat /state/token
+#
+# Then `http://localhost:7878/?token=…`. `deploy/compose.yaml` puts Caddy in
+# front for TLS.
+
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release --bin luu
+
+# The rust image again, and not a slim one, on purpose: the agent's tools are
+# what the policy's `commands` names — cargo, git, rg — and a container that
+# lacks them is a policy that says `absent`. A deployment for another language
+# swaps this base and that list together.
+FROM rust:1-bookworm
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ripgrep \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --uid 10001 --create-home --home-dir /state --shell /bin/bash luu \
+ && mkdir -p /work /etc/luu \
+ && chown luu:luu /state /work
+COPY --from=build /src/target/release/luu /usr/local/bin/luu
+COPY deploy/luu.toml /etc/luu/luu.toml
+COPY deploy/entrypoint.sh /usr/local/bin/luu-entrypoint
+
+# The state directory (config.toml, sessions.db, the token) and the tree the
+# agent works in. Both volumes: neither belongs to the image.
+ENV LUU_HOME=/state \
+    HOME=/state \
+    CARGO_HOME=/state/cargo
+VOLUME ["/state", "/work"]
+WORKDIR /work
+USER luu
+EXPOSE 7878
+
+ENTRYPOINT ["luu-entrypoint"]

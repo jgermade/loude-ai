@@ -1,0 +1,44 @@
+# One luu, public, behind Caddy for TLS. One identity: whoever holds the token.
+#
+#   LUU_DOMAIN=luu.example.com docker compose -f deploy/compose.yaml up -d
+#   docker compose -f deploy/compose.yaml exec luu cat /state/token
+#
+# then open https://luu.example.com/?token=…  The DNS name has to point here
+# for Caddy to get its certificate; `LUU_DOMAIN=localhost` gets one from
+# Caddy's own CA instead, for trying it on this machine.
+#
+# How the server is reached is /state/config.toml's `[server]`, written on
+# the first start and yours to edit. See RECORD/2026-10-07.a-public-luu.WIP.md.
+
+services:
+  luu:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    image: luu:local
+    restart: unless-stopped
+    environment:
+      # What a browser types; checked as an Origin behind the proxy.
+      LUU_ORIGIN: https://${LUU_DOMAIN:?set LUU_DOMAIN to the name this is served at}
+    volumes:
+      - state:/state
+      - work:/work
+    # The container is the sandbox: nothing it does not need.
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${LUU_DOMAIN} --to luu:7878
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - caddy:/data
+    depends_on: [luu]
+
+volumes:
+  state: {}
+  work: {}
+  caddy: {}

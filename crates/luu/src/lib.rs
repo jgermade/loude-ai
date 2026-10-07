@@ -143,6 +143,23 @@ enum Command {
         action: KeyAction,
     },
 
+    /// Make a bearer token for `serve`, in a file only its owner can read.
+    ///
+    /// What `--auth-token-file` and `[server] token-file` name. Made here
+    /// rather than with `openssl rand` and a `chmod`, because the mode is what
+    /// `serve` checks and a token written first and narrowed second was
+    /// readable in between. A container makes its own on first start with
+    /// `--if-missing`. See `RECORD/2026-10-07.a-public-luu.WIP.md`.
+    Token {
+        /// Where to write it. Never overwritten: a token in use is replaced by
+        /// deleting it, which is a decision and not a side effect.
+        path: std::path::PathBuf,
+
+        /// Succeed quietly when the file is already there.
+        #[arg(long)]
+        if_missing: bool,
+    },
+
     /// Print the repository map that a budget resolves to, and what it cost.
     ///
     /// The map is the last block of the cached prefix, so being able to look at
@@ -234,15 +251,30 @@ enum Command {
         #[command(flatten)]
         sandbox_args: SandboxArgs,
 
-        #[arg(long, default_value = "127.0.0.1:7878")]
-        bind: std::net::SocketAddr,
+        /// Where to listen. Overrides `[server] bind`; `127.0.0.1:7878`
+        /// when neither says.
+        #[arg(long, env = "LUU_BIND")]
+        bind: Option<std::net::SocketAddr>,
 
         /// A file holding the bearer token every `/ws` and `/api/*` request
         /// must carry. Required to bind anything but a loopback address:
         /// `/ws` approves plans, and off loopback that is one request away
-        /// from anyone who can reach the port.
-        #[arg(long, value_name = "PATH")]
+        /// from anyone who can reach the port. Overrides `[server] token-file`;
+        /// `luu token <PATH>` makes one.
+        #[arg(long, value_name = "PATH", env = "LUU_AUTH_TOKEN_FILE")]
         auth_token_file: Option<std::path::PathBuf>,
+
+        /// Who may reach it: `loopback` (this machine, no token) or `private`
+        /// (anyone with the token). Overrides `[server] exposure`; without
+        /// either, the address decides. A bind or a token that contradicts it
+        /// is refused.
+        #[arg(long, value_enum, env = "LUU_EXPOSURE")]
+        exposure: Option<crate::provider::Exposure>,
+
+        /// What a browser types to reach this server, when a proxy stands in
+        /// front of it: `https://luu.example.com`. Overrides `[server] origin`.
+        #[arg(long, value_name = "URL", env = "LUU_ORIGIN")]
+        origin: Option<String>,
 
         /// Where sessions are cached between restarts, as SQLite. Defaults to
         /// `sessions.db` in the state directory the first run chose
@@ -1038,6 +1070,40 @@ fn write_private(path: &std::path::Path, text: &str) -> Result<()> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("setting the mode of {}", path.display()))?;
     }
+    Ok(())
+}
+
+/// `luu token`: 32 bytes from the kernel, as hex, in a file created `0600` —
+/// created with that mode, so there is no moment it is anything else.
+fn run_token(path: &std::path::Path, if_missing: bool) -> Result<()> {
+    use std::io::{Read, Write};
+
+    if if_missing && path.exists() {
+        return Ok(());
+    }
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .context("reading /dev/urandom")?;
+    let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).with_context(|| match path.exists() {
+        true => format!(
+            "{} is already there, and a token in use is not replaced by accident. \
+             Delete it first, or pass --if-missing to keep it.",
+            path.display()
+        ),
+        false => format!("creating {}", path.display()),
+    })?;
+    file.write_all(format!("{token}\n").as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    eprintln!("wrote {} (mode 0600)", path.display());
     Ok(())
 }
 
@@ -2118,6 +2184,10 @@ pub async fn run() -> Result<()> {
         return run_key(action);
     }
 
+    if let Command::Token { path, if_missing } = &command {
+        return run_token(path, *if_missing);
+    }
+
     if let Command::Tools { sandbox } = &command {
         let agency = sandbox.resolve().await?;
         print!("{}", agency.describe());
@@ -2231,6 +2301,8 @@ pub async fn run() -> Result<()> {
     if let Command::Serve {
         bind,
         auth_token_file,
+        exposure,
+        origin,
         store,
         no_store,
         no_log,
@@ -2313,15 +2385,40 @@ pub async fn run() -> Result<()> {
         // same file. A config that will not load is not a reason to refuse to
         // serve: it is already reported where the providers are, and a machine
         // with none simply offers none.
-        let (postures, postures_path, ui, resend) = match crate::provider::Config::load() {
+        let (postures, postures_path, ui, resend, server) = match crate::provider::Config::load() {
             Ok((config, path)) => (
                 config.postures().clone(),
                 path.map(|path| path.display().to_string()),
                 config.ui().cloned(),
                 config.resend().unwrap_or_default(),
+                config.server(),
             ),
-            Err(_) => (Default::default(), None, None, Default::default()),
+            Err(_) => (
+                Default::default(),
+                None,
+                None,
+                Default::default(),
+                Default::default(),
+            ),
         };
+        // `[server]`, under the flags and the `LUU_*` variables. A file that
+        // did not load says nothing here, and the address decides as it
+        // always has — the stricter reading, not a guess.
+        let bind = bind
+            .or(server.bind)
+            .unwrap_or_else(|| "127.0.0.1:7878".parse().expect("a literal address"));
+        let auth_token_file = auth_token_file
+            .or(server.token_file)
+            .map(|path| crate::provider::expand_home(&path));
+        let exposure = exposure.or(server.exposure);
+        let origin = origin.or(server.origin);
+        if let Some(origin) = &origin
+            && !crate::provider::is_origin(origin)
+        {
+            anyhow::bail!(
+                "origin {origin} is not a scheme and a host, as `https://luu.example.com`"
+            );
+        }
         // Read once, here, so a theme that will not load says so beside the
         // other startup lines rather than as a silent absence of icons in the
         // page. A failure is not fatal: the tree draws its own shapes.
@@ -2443,6 +2540,8 @@ pub async fn run() -> Result<()> {
             select_weights: weights_of(select_docs, select_graph),
             constrain,
             auth_token_file,
+            exposure,
+            origin,
             approvers,
         })
         .await;

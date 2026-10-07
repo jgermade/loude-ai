@@ -1,0 +1,32 @@
+# The policy `luu serve` runs under in its container: /work, read and write,
+# and the commands the image carries. The container is the outer wall; this is
+# the inner one, and `enforcement = "kernel"` asks Landlock to hold it.
+#
+# Mount another file at /etc/luu/luu.toml to change it — a deployment's policy
+# is the deployment's, not the image's.
+
+[sandbox]
+enforcement = "kernel"
+network = false
+commands = ["cargo", "rustc", "git", "rg", "ls"]
+
+[sandbox.limits]
+cpu-seconds = 300
+file-size-mb = 1024
+
+[[sandbox.paths]]
+path = "/work"
+access = "read-write"
+
+# The toolchain, where the image keeps it.
+[[sandbox.paths]]
+path = "/usr/local/cargo"
+access = "execute"
+
+[[sandbox.paths]]
+path = "/usr/local/rustup"
+access = "execute"
+
+[[sandbox.paths]]
+path = "/state/cargo"
+access = "read-write"
