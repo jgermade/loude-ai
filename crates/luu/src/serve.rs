@@ -3797,8 +3797,14 @@ async fn post_highlight(Json(request): Json<HighlightRequest>) -> Response {
 
 async fn get_workspace_git_status(State(state): State<AppRouterState>) -> Response {
     let sandbox = workspace_sandbox(&state).await;
+    // `repository: false` is an answer, with a 200: a folder nobody ran
+    // `git init` in is ordinary, and a 500 for it was a red line in the panel
+    // and an error in the browser's console on every visit.
     match workspace::git_status(sandbox.base()).await {
-        Ok(map) => Json(map).into_response(),
+        Ok(Some(files)) => {
+            Json(serde_json::json!({ "repository": true, "files": files })).into_response()
+        }
+        Ok(None) => Json(serde_json::json!({ "repository": false, "files": {} })).into_response(),
         Err(error) => workspace_error(error),
     }
 }

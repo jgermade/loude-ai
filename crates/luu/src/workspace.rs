@@ -277,7 +277,7 @@ pub async fn tree(sandbox: &Sandbox, relative: &str) -> Result<Tree, Error> {
     // so git failing is a note on the answer rather than an error instead of
     // one: nothing is marked, and the panel says why.
     let (statuses, git_error) = match git_status(sandbox.base()).await {
-        Ok(map) => (map, None),
+        Ok(map) => (map.unwrap_or_default(), None),
         Err(error) => (BTreeMap::new(), Some(error.to_string())),
     };
 
@@ -358,8 +358,18 @@ fn not_ignored(dir: &Path) -> std::collections::HashSet<String> {
 /// and `--porcelain`'s default output escapes those in a format that then has
 /// to be un-escaped. The NUL-separated form is the one that needs no parsing
 /// of quoting rules.
-pub async fn git_status(base: &Path) -> Result<BTreeMap<String, String>, Error> {
-    let out = git(base, &["status", "--porcelain=v1", "-z"]).await?;
+///
+/// **`None` is "not a repository"**, which is an answer and not a failure: a
+/// container's empty `/work`, or `serve` started in a folder nobody ran
+/// `git init` in. Told apart from a git that failed *after* the fact, by
+/// looking for a `.git` above the base, so the common case costs nothing extra
+/// and no message has to be parsed in whatever language git speaks.
+pub async fn git_status(base: &Path) -> Result<Option<BTreeMap<String, String>>, Error> {
+    let out = match git(base, &["status", "--porcelain=v1", "-z"]).await {
+        Ok(out) => out,
+        Err(_) if !in_a_repository(base) => return Ok(None),
+        Err(error) => return Err(error),
+    };
     let mut map = BTreeMap::new();
     let mut fields = out.split('\0').filter(|part| !part.is_empty());
     while let Some(record) = fields.next() {
@@ -380,7 +390,15 @@ pub async fn git_status(base: &Path) -> Result<BTreeMap<String, String>, Error> 
         }
         map.insert(path, code);
     }
-    Ok(map)
+    Ok(Some(map))
+}
+
+/// Whether `base` or a directory above it has a `.git` — a directory, or the
+/// file a worktree or a submodule leaves. What git's own discovery looks for,
+/// without git.
+fn in_a_repository(base: &Path) -> bool {
+    base.ancestors()
+        .any(|dir| std::fs::symlink_metadata(dir.join(".git")).is_ok())
 }
 
 /// A file, for the middle column.
@@ -725,6 +743,33 @@ mod tests {
         assert!(repo("worktree"));
         assert!(!repo("plain"));
         assert!(!repo("file.txt"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A folder outside any repository is said to be one, not failed on; a
+    /// repository with nothing changed is an empty map, not `None`.
+    #[tokio::test]
+    async fn a_folder_that_is_no_repository_is_an_answer_and_not_an_error() {
+        let root = std::env::temp_dir().join(format!("luu-norepo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("plain")).unwrap();
+        // Only meaningful where the temporary directory is not itself inside a
+        // repository, which is every machine this runs on; said rather than
+        // assumed.
+        if in_a_repository(&root) {
+            return;
+        }
+        assert_eq!(git_status(&root.join("plain")).await.unwrap(), None);
+
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status();
+        if init.is_ok_and(|status| status.success()) {
+            assert_eq!(git_status(&repo).await.unwrap(), Some(BTreeMap::new()));
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
