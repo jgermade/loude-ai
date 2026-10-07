@@ -66,6 +66,12 @@ fn client() -> &'static reqwest::Client {
             // A host is a name somebody wrote down; a redirect would be the
             // host naming somewhere else, with the token attached.
             .redirect(reqwest::redirect::Policy::none())
+            // Straight there, as the socket half goes: `tokio-tungstenite`
+            // does not read `HTTPS_PROXY`, and a host whose API went through a
+            // corporate proxy while its sockets did not would be one host
+            // reached two ways — on a LAN, one of them a way that cannot
+            // reach it at all.
+            .no_proxy()
             .build()
             .expect("an HTTP client with no TLS configuration to fail")
     })
