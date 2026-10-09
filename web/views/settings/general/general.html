@@ -10,6 +10,7 @@
     await import("@web/lib/workspace.js")
   const Segmented = await import("@web/components/segmented.html")
   const SaveButton = await import("@web/components/save-button.html")
+  const TextInput = await import("@web/components/text-input.html")
 
   // The icon theme: the server's view of it, what is typed into the path, and
   // the last refusal, in the loader's own words.
@@ -79,7 +80,55 @@
   ]
 </script>
 
+<div class="general-pane">
+<div class="ds-hero">
+  <div class="ds-hero-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="3" width="20" height="14" rx="2"/>
+      <line x1="8" y1="21" x2="16" y2="21"/>
+      <line x1="12" y1="17" x2="12" y2="21"/>
+      <path d="M7 8l3 3-3 3"/>
+      <line x1="13" y1="14" x2="17" y2="14"/>
+    </svg>
+  </div>
+  <div class="ds-hero-body">
+    <h4 class="ds-hero-title">Editor y apariencia</h4>
+    <p class="ds-hero-desc">Personaliza la visualización de código, paleta de colores y el comportamiento de las columnas.</p>
+  </div>
+</div>
+
 <h3>Editor</h3>
+<div class="ds-card-grid tone-preview-grid">
+  <div class="ds-preview-card" :class.active="prefs.editorTone === 'dark'" @click="setEditorTone('dark')">
+    <div class="ds-preview-thumb dark-thumb">
+      <span class="preview-dot" style="background:#f92672"></span>
+      <span class="preview-dot" style="background:#a6e22e"></span>
+      <span class="preview-dot" style="background:#66d9ef"></span>
+      <span class="preview-dot" style="background:#e6db74"></span>
+      <span class="preview-sample">fn main() { ... }</span>
+    </div>
+    <div class="ds-preview-label">
+      <span>Oscuro (Monokai)</span>
+      <span :if="prefs.editorTone === 'dark'" class="ds-badge ds-badge-accent">Activo</span>
+    </div>
+    <span class="ds-preview-caption">Fondo neutral profundo (#111111) con alto contraste.</span>
+  </div>
+  <div class="ds-preview-card" :class.active="prefs.editorTone === 'light'" @click="setEditorTone('light')">
+    <div class="ds-preview-thumb light-thumb">
+      <span class="preview-dot" style="background:#dc0653"></span>
+      <span class="preview-dot" style="background:#577a11"></span>
+      <span class="preview-dot" style="background:#075a6b"></span>
+      <span class="preview-dot" style="background:#7a7016"></span>
+      <span class="preview-sample light">fn main() { ... }</span>
+    </div>
+    <div class="ds-preview-label">
+      <span>Claro (Monokai)</span>
+      <span :if="prefs.editorTone === 'light'" class="ds-badge ds-badge-accent">Activo</span>
+    </div>
+    <span class="ds-preview-caption">Tonos calibrados a 5:1 legibles sobre fondo claro.</span>
+  </div>
+</div>
+
 <dl class="settings">
   <dt>Files are drawn by</dt>
   <dd>
@@ -114,6 +163,32 @@
 </dl>
 
 <h3>Layout</h3>
+<div class="ds-card-grid layout-preview-grid">
+  <div class="ds-preview-card" :class.active="prefs.layout === 'responsive'" @click="setLayout('responsive')">
+    <div class="ds-preview-thumb cols-thumb">
+      <div class="col-wire c-insp"></div>
+      <div class="col-wire c-cont"></div>
+      <div class="col-wire c-chat"></div>
+    </div>
+    <div class="ds-preview-label">
+      <span>Adaptable (3 columnas)</span>
+      <span :if="prefs.layout === 'responsive'" class="ds-badge ds-badge-accent">Activo</span>
+    </div>
+    <span class="ds-preview-caption">3 columnas en pantallas &gt;1260px, 2 con alternador en menores.</span>
+  </div>
+  <div class="ds-preview-card" :class.active="prefs.layout === 'two'" @click="setLayout('two')">
+    <div class="ds-preview-thumb cols-thumb">
+      <div class="col-wire c-insp"></div>
+      <div class="col-wire c-wide"></div>
+    </div>
+    <div class="ds-preview-label">
+      <span>Fijar a 2 columnas</span>
+      <span :if="prefs.layout === 'two'" class="ds-badge ds-badge-accent">Activo</span>
+    </div>
+    <span class="ds-preview-caption">Siempre 2 columnas fijas, ideal para pantallas panorámicas.</span>
+  </div>
+</div>
+
 <dl class="settings">
   <dt>Columns</dt>
   <dd>
@@ -182,9 +257,9 @@
 
   <dt>Path</dt>
   <dd class="row">
-    <input class="grow" :value="typedPath" :disabled="!iconView?.editable"
-           placeholder="~/.vscode/extensions/…, or a theme JSON"
-           @input="typedPath = $event.target.value">
+    <TextInput class="grow" :model="typedPath" :disabled="!iconView?.editable"
+               placeholder="~/.vscode/extensions/…, or a theme JSON"
+               @input="typedPath = $event" />
     <SaveButton label="Use" :action="usePath" :changes="pathChanges"
                 :disabled="!iconView?.editable" />
   </dd>
@@ -224,8 +299,13 @@
     reach — the sandbox already decided that.
   </dd>
 </dl>
+</div>
 
 <style scoped>
+  .general-pane {
+    display: block;
+    min-height: 100%;
+  }
   h3:first-child { margin-top: 0; }
   .path {
     font-family: ui-monospace, monospace;
@@ -233,17 +313,29 @@
     overflow-wrap: anywhere;
   }
   .note b, .caveat b { color: var(--fg); font-weight: 600; }
-  .themes { list-style: none; margin: 0; padding: 0; }
+  .themes {
+    list-style: none;
+    margin: .4rem 0 0;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel, #ffffff);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
+    overflow: hidden;
+  }
   .themes li {
     display: flex;
-    align-items: baseline;
-    gap: .5rem;
-    padding: .2rem 0;
-    border-bottom: 1px solid var(--line);
+    align-items: center;
+    gap: .6rem;
+    padding: .65rem .85rem;
     font-size: 13px;
+    transition: background .12s ease;
   }
-  .themes li:last-child { border-bottom: 0; }
-  .themes .name { font-weight: 500; }
+  .themes li:hover {
+    background: var(--sunken, rgba(0, 0, 0, .02));
+  }
+  .themes li + li { border-top: 1px solid var(--line); }
+  .themes .name { font-weight: 600; color: var(--fg); }
   .grow { flex: 1; min-width: 0; }
   .row { display: flex; align-items: center; gap: .5rem; }
   .pick {
@@ -258,4 +350,49 @@
   }
   .pick:hover { border-color: var(--accent); }
   .pick.off { opacity: .5; cursor: default; pointer-events: none; }
+  .tone-preview-grid, .layout-preview-grid { margin-bottom: 1rem; }
+  .dark-thumb {
+    background: #111111;
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    padding: 0 .75rem;
+  }
+  .light-thumb {
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    padding: 0 .75rem;
+  }
+  .preview-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    flex: none;
+  }
+  .preview-sample {
+    margin-left: auto;
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #e6db74;
+  }
+  .preview-sample.light {
+    color: #7a7016;
+  }
+  .cols-thumb {
+    background: var(--sunken);
+    padding: .35rem;
+    gap: .35rem;
+  }
+  .col-wire {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    height: 100%;
+  }
+  .c-insp { width: 25%; }
+  .c-cont { flex: 1; }
+  .c-chat { width: 35%; }
+  .c-wide { flex: 1; }
 </style>

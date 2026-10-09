@@ -1,0 +1,141 @@
+<script :setup="{
+  model = undefined,
+  checked = false,
+  disabled = false,
+  label = '',
+  description = '',
+  size = ''
+}">
+  // A sliding switch control for boolean options.
+  //
+  // **Self-contained**, like everything in `components/`: imports nothing.
+  //
+  //   <Toggle :model="enabled" label="Enable feature" />
+
+  $: isOn = (model !== undefined && model !== null) ? !!model : !!checked
+
+  const toggle = () => {
+    if (disabled) return
+    const next = !isOn
+    $updateModel(next)
+    $emit("change", next)
+  }
+
+  const onKey = event => {
+    if (disabled) return
+    if (event.key === " " || event.key === "Enter") {
+      event.preventDefault()
+      toggle()
+    }
+  }
+</script>
+
+<label class="toggle-root"
+       :class.disabled="disabled"
+       :class.on="isOn"
+       :class.small="size === 'small'">
+  <button
+    type="button"
+    role="switch"
+    class="track"
+    :aria-checked="String(isOn)"
+    :disabled="disabled"
+    @click="toggle()"
+    @keydown="onKey($event)">
+    <span class="thumb" aria-hidden="true"></span>
+  </button>
+  <span class="text" :if="label || description" @click="toggle()">
+    <span :if="label" class="label">{{ label }}</span>
+    <slot></slot>
+    <span :if="description" class="desc">{{ description }}</span>
+  </span>
+  <span :if="!label && !description" class="text" @click="toggle()">
+    <slot></slot>
+  </span>
+</label>
+
+<style scoped>
+  .toggle-root {
+    display: inline-flex;
+    align-items: center;
+    gap: .6rem;
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--fg, #1a1d23);
+  }
+  .toggle-root.disabled {
+    opacity: .5;
+    cursor: default;
+  }
+
+  .track {
+    position: relative;
+    width: 34px;
+    height: 18px;
+    box-sizing: border-box;
+    padding: 0;
+    border: 1px solid var(--line, #c8c8c8);
+    border-radius: 999px;
+    background: var(--sunken, #eaedf2);
+    cursor: pointer;
+    transition: background-color .2s ease, border-color .2s ease;
+    flex: none;
+  }
+  .track:disabled {
+    cursor: default;
+  }
+  .track:focus-visible {
+    outline: 2px solid var(--accent, #2f5bbd);
+    outline-offset: 2px;
+  }
+  .toggle-root.on .track {
+    background: var(--accent, #2f5bbd);
+    border-color: var(--accent, #2f5bbd);
+  }
+
+  .thumb {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--on-accent, #ffffff);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+    transition: transform .24s cubic-bezier(.32, .72, 0, 1);
+  }
+  .toggle-root.on .thumb {
+    transform: translateX(16px);
+  }
+
+  .small .track {
+    width: 28px;
+    height: 16px;
+  }
+  .small .thumb {
+    width: 12px;
+    height: 12px;
+  }
+  .small.on .thumb {
+    transform: translateX(12px);
+  }
+
+  .text {
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+  }
+  .label {
+    font-weight: 500;
+  }
+  .desc {
+    font-size: 11px;
+    color: var(--dim, #5b6472);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .thumb, .track { transition: none; }
+  }
+</style>

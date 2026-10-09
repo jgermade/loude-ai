@@ -18,6 +18,7 @@
   const { state, loadResend, saveResend } = await import("@web/lib/store.js")
   const Segmented = await import("@web/components/segmented.html")
   const SaveButton = await import("@web/components/save-button.html")
+  const PathText = await import("@web/components/path-text.html")
 
   // `""` is drawn as the word it means here.
   const UNSET = { value: "", label: "unset" }
@@ -71,9 +72,25 @@
 
 <h3>What this session is rendering under</h3>
 <p class="dim small">
-  The prompt is rebuilt whole every turn, so the entire history block is a
-  resend. These three decide how much of it is sent again.
+  El prompt se reconstruye íntegramente en cada turno. Estas tres reglas determinan cuánto del historial se reenvía y cuánto se poda para ahorrar tokens.
 </p>
+
+<div class="ds-diagram">
+  <div class="ds-diagram-node">
+    <div style="font-weight:600;color:var(--b-system);">Prefijo de sistema</div>
+    <div style="font-size:10px;color:var(--dim);">Definiciones y herramientas</div>
+  </div>
+  <div class="ds-diagram-arrow">➔</div>
+  <div class="ds-diagram-node">
+    <div style="font-weight:600;color:var(--b-history);">Historial (Resend)</div>
+    <div style="font-size:10px;color:var(--dim);">Turnos pasados podados</div>
+  </div>
+  <div class="ds-diagram-arrow">➔</div>
+  <div class="ds-diagram-node">
+    <div style="font-weight:600;color:var(--accent);">Turno activo</div>
+    <div style="font-size:10px;color:var(--dim);">Prompt y respuesta viva</div>
+  </div>
+</div>
 
 <dl class="settings" :if="state.resend">
   <dt>Repeat</dt>
@@ -103,7 +120,7 @@
 
 <h3>This machine's default</h3>
 <p class="dim small" :if="state.resend?.path">
-  <span class="path">{{ state.resend.path }}</span>
+  <span class="path"><PathText :path="state.resend.path" :home="state.settings?.home" /></span>
   · what a session starts on unless it asks for something else
 </p>
 <p class="dim small">
@@ -122,6 +139,10 @@
     <Segmented label="Repeat" :options="REPEAT" :model="draft.repeat" :disabled="!editable" />
   </dd>
   <dd class="note">
+    <div class="rule-visual-pills">
+      <span class="rule-pill accent"><strong>once</strong> · −17.5% code tokens (recomendado)</span>
+      <span class="rule-pill dim"><strong>always</strong> · reemite span en cada turno</span>
+    </div>
     <b>once</b> renders a span in the <b>oldest</b> turn of the window that
     carries it and skips it in every turn after, the turn being asked included.
     The one of the three that has been through a model: across 20 grounded
@@ -137,6 +158,10 @@
     <Segmented label="Prune" :options="PRUNE" :model="draft.prune" :disabled="!editable" />
   </dd>
   <dd class="note">
+    <div class="rule-visual-pills">
+      <span class="rule-pill accent"><strong>behind</strong> · retiene diálogo, comprime código</span>
+      <span class="rule-pill dim"><strong>never</strong> · retiene todo hasta expulsión</span>
+    </div>
     <b>behind</b> makes the oldest turns give up their code and keep their
     exchange: the span becomes the line that cites it, the question and the
     answer stay. What it buys is not tokens — on the same 20 turns the prompt
@@ -149,6 +174,11 @@
     <Segmented label="Results" :options="RESULTS" :model="draft.results" :disabled="!editable" />
   </dd>
   <dd class="note">
+    <div class="rule-visual-pills">
+      <span class="rule-pill accent"><strong>cited_reads</strong> · poda lecturas de ficheros (−32k tokens)</span>
+      <span class="rule-pill warn"><strong>cited</strong> · poda también salida de comandos</span>
+      <span class="rule-pill dim"><strong>kept</strong> · conserva todas las respuestas de tools</span>
+    </div>
     Both replace a tool result behind the prune line with the line that cites
     it, and both are <b>inert without prune</b>. What they differ on is which
     results: <b>cited_reads</b> gives up what could be asked for again — a
@@ -182,13 +212,17 @@
   <ul><li :each="line in waiting">{{ line }}</li></ul>
 </div>
 
-<div class="modal-foot">
-  <div class="modal-actions" :if="state.resend">
-    <SaveButton :action="save" :changes="changes" :disabled="!editable" />
-  </div>
+<div class="section-actions" :if="state.resend">
+  <SaveButton :action="save" :changes="changes" :disabled="!editable" />
 </div>
 
 <style scoped>
+  .section-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 1rem;
+    padding-top: .4rem;
+  }
   h3:first-child { margin-top: 0; }
   .path { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
   .note b, .caveat b { color: var(--fg); font-weight: 600; }
@@ -201,6 +235,38 @@
     padding: .6rem .8rem;
     margin-top: 1rem;
     font-size: 13px;
+  }
+  .rule-visual-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+    margin-bottom: .45rem;
+  }
+  .rule-pill {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    padding: .15rem .5rem;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--sunken, rgba(0, 0, 0, .04));
+    color: var(--dim);
+  }
+  .rule-pill strong {
+    color: var(--fg);
+    margin-right: .2rem;
+  }
+  .rule-pill.accent {
+    border-color: var(--accent);
+    background: var(--selected, rgba(47, 91, 189, .08));
+    color: var(--fg);
+  }
+  .rule-pill.accent strong {
+    color: var(--accent);
+  }
+  .rule-pill.warn {
+    border-color: var(--warn);
+    background: var(--warn-bg, rgba(138, 93, 18, .08));
   }
   .waiting ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--dim); }
   .waiting li + li { margin-top: .3rem; }

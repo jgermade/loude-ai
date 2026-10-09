@@ -1,4 +1,4 @@
-<script :setup="{ x = false, y = false, background = '', max = '', frame = '', fill = false, autoscroll = '' }">
+<script :setup="{ x = false, y = false, background = '', max = '', frame = '', fill = false, autoscroll = '', overscroll = 'contain' }">
   // Something that scrolls, on a ground that does not.
   //
   //     <Scrollable :y="true" frame="well" max="16rem"><pre>…</pre></Scrollable>
@@ -23,6 +23,11 @@
   // screen. Scrolled up to read something, it stays where it was put, and
   // scrolling back down to the end picks the following up again. It starts
   // at the bottom.
+  //
+  // `overscroll` — `overscroll-behavior` on the scroller, `contain` unless
+  // told otherwise: a wheel that reaches this one's end stops here instead of
+  // scrolling the modal or the page behind it. `auto` gives the chaining back,
+  // `none` also drops the bounce.
   //
   // What goes inside is the caller's, and so are its styles — except that a
   // `pre` in here stops being a scroller of its own (`app.css`), since this is.
@@ -87,7 +92,7 @@
 <div class="ground" :class="frame" :class.fill="fill"
      :style="background ? `background: ${background}` : ''">
   <div class="scroller" data-scrollable :class.x="x" :class.y="y"
-       :style="max ? `max-height: ${max}` : ''"><slot /></div>
+       :style="`overscroll-behavior: ${overscroll || 'contain'};${max ? ` max-height: ${max};` : ''}`"><slot /></div>
 </div>
 
 <style scoped>

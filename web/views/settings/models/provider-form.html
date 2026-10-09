@@ -12,6 +12,9 @@
   // what was written.
   const { state, saveProviders } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
+  const TextInput = await import("@web/components/text-input.html")
+  const SelectInput = await import("@web/components/select-input.html")
+  const Checkbox = await import("@web/components/checkbox.html")
 
   // False once it should leave: `Modal` plays the exit, then `close` unmounts.
   let open = true
@@ -129,23 +132,22 @@
     <dl class="settings form">
       <dt>Name</dt>
       <dd>
-        <input :value="name" placeholder="local" autofocus
-               @input="name = $event.target.value, declaration = null">
+        <TextInput :model="name" placeholder="local" autofocus :warn="clash"
+                   @input="declaration = null" />
         <span :if="clash" class="warn">already a provider of that name</span>
       </dd>
       <dd class="note">What a session and <code>-p</code> call it.</dd>
 
       <dt>Backend</dt>
       <dd>
-        <select class="backend" :value="backend" @change="backend = $event.target.value, declaration = null">
-          <option :each="b in BACKENDS" :key="b.value" :value="b.value">{{ b.label }}</option>
-        </select>
+        <SelectInput class="backend" :select-class="'backend'" :options="BACKENDS" :model="backend"
+                     @change="declaration = null" />
       </dd>
 
       <dt :if="backend !== 'mock'">URL</dt>
       <dd :if="backend !== 'mock'">
-        <input :value="url" :placeholder="chosen.url"
-               @input="url = $event.target.value, declaration = null">
+        <TextInput :model="url" :placeholder="chosen.url"
+                   @input="declaration = null" />
       </dd>
       <dd :if="backend !== 'mock'" class="note">
         Empty is {{ chosen.url }}. Anything that is not this machine has to be
@@ -154,23 +156,21 @@
 
       <dt :if="backend !== 'mock'">Model</dt>
       <dd :if="backend !== 'mock'">
-        <input :value="model" placeholder="qwen2.5-coder:7b"
-               @input="model = $event.target.value">
+        <TextInput :model="model" placeholder="qwen2.5-coder:7b" />
       </dd>
 
       <dt :if="backend !== 'mock'">Window</dt>
       <dd :if="backend !== 'mock'">
-        <input class="w-num" :value="contextLimit" placeholder="—" inputmode="numeric"
-               @input="contextLimit = $event.target.value">
+        <TextInput size="num" :model="contextLimit" placeholder="—" inputmode="numeric" />
         <span class="dim">tokens, the context the server was started with</span>
       </dd>
 
       <dt :if="backend !== 'mock'">Tool calls</dt>
       <dd :if="backend !== 'mock'">
-        <select class="tool-calls" :value="toolCalls" @change="toolCalls = $event.target.value">
+        <SelectInput class="tool-calls" :select-class="'tool-calls'" :model="toolCalls">
           <option value="">fenced — the tools as text in our prompt</option>
           <option value="native">native — the server's tools field and its own tool prompt</option>
-        </select>
+        </SelectInput>
       </dd>
       <dd :if="backend !== 'mock'" class="note">
         Native needs a server that takes <code>tools</code>: llama-server with
@@ -180,8 +180,7 @@
 
       <dt :if="backend === 'openai'">Key file</dt>
       <dd :if="backend === 'openai'">
-        <input :value="keyFile" placeholder="~/.luu/that.key"
-               @input="keyFile = $event.target.value">
+        <TextInput :model="keyFile" placeholder="~/.luu/that.key" />
       </dd>
       <dd :if="backend === 'openai'" class="note">
         A path, never the key itself: a key in <code>config.toml</code> is a key
@@ -190,11 +189,9 @@
 
       <dt>Default</dt>
       <dd>
-        <label>
-          <input type="checkbox" :checked="makeDefault"
-                 @change="makeDefault = $event.target.checked, declaration = null">
-          what every run that names no provider sends to
-        </label>
+        <Checkbox :model="makeDefault"
+                  label="what every run that names no provider sends to"
+                  @change="declaration = null" />
       </dd>
     </dl>
 
@@ -207,8 +204,7 @@
           <strong>{{ declaration.host }}</strong>, which is not this machine, and
           it would become the default. Type the host to confirm.
         </p>
-        <input :value="typed" :placeholder="declaration.host"
-               @input="typed = $event.target.value">
+        <TextInput :model="typed" :placeholder="declaration.host" />
       </div>
       <div class="modal-actions">
         <!-- Removing, from the profile's own form rather than from the list:

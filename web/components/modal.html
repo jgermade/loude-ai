@@ -1,4 +1,4 @@
-<script :setup="{ title = '', width = '', open = true, locked = false }">
+<script :setup="{ title = '', width = '', open = true, locked = false, variant = '', animation = '', height = '' }">
   // A modal, as the element the platform already has: a `<dialog>` opened
   // with `showModal()` brings ESC, a focus trap, everything behind it made
   // inert, and a `::backdrop`. What it does *not* bring is the page's own
@@ -34,8 +34,8 @@
   // and ESC is caught before it reaches the parent, so it closes the child
   // alone.
 
-  // How long it takes to leave; `modal-out` below is the same.
-  const CLOSE_MS = 140
+  // How long it takes to leave; `folio-up` below is the same.
+  const CLOSE_MS = 150
   let leaving = false
 
   // The parent dialog, when this one opened inside one, and the parent's
@@ -67,19 +67,32 @@
   const fitted = (room, width) =>
     `--top:${room.top}px;--left:${room.left}px;--w:${room.width}px;--h:${room.height}px;` +
     `--box:min(${width || "34rem"}, ${room.width}px - 2rem)`
-  $: box = parent && room ? fitted(room, width) : width ? `width:min(${width}, calc(100vw - 2rem))` : ""
+  $: isFolio = variant === "folio" || animation === "folio"
+  $: explicitHeight = height || (isFolio ? "calc(100dvh - 4.5rem)" : "")
+  $: box = parent && room
+    ? fitted(room, width)
+    : [
+        width ? `width:min(${width}, calc(100vw - 2rem))` : "",
+        explicitHeight ? `height:${explicitHeight};max-height:${explicitHeight}` : "",
+      ].filter(Boolean).join(";")
 
   let watching = null
   const fit = () => {
     if (!parent?.open) return
     const outer = parent.getBoundingClientRect()
     const head = parent.querySelector(":scope > .modal-head")?.getBoundingClientRect()
-    const top = head ? head.bottom : outer.top
+    const cs = window.getComputedStyle(parent)
+    const isContained = cs.transform !== "none" || cs.perspective !== "none" || cs.filter !== "none"
+    const top = isContained
+      ? (head ? head.bottom - outer.top : 0)
+      : (head ? head.bottom : outer.top)
+    const left = isContained ? 0 : (outer.left + parent.clientLeft)
+    const borderB = outer.height - parent.clientHeight - parent.clientTop
     room = {
       top,
-      left: outer.left + parent.clientLeft,
+      left,
       width: parent.clientWidth,
-      height: outer.bottom - parent.clientTop - top,
+      height: outer.bottom - borderB - (head ? head.bottom : outer.top),
     }
   }
 
@@ -114,10 +127,12 @@
       watching = new ResizeObserver(fit)
       watching.observe(parent)
       window.addEventListener("resize", fit)
+      parent.addEventListener("animationend", fit)
       $destroyed(() => {
         watching.disconnect()
         window.removeEventListener("resize", fit)
         window.removeEventListener("keydown", escape, true)
+        parent?.removeEventListener("animationend", fit)
         // However the child went — closed, or unmounted by its owner without
         // a close — the parent is given back.
         unveil()
@@ -170,7 +185,7 @@
      dialog has no padding of its own for a click to land in. -->
 <!-- A child's overlay, over the parent's body and not its head. -->
 <div :if="parent" class="veil" :class.closing="leaving" :style="box" @click="close()"></div>
-<dialog class="modal" :class.closing="leaving" :class.child="!!parent" :style="box"
+<dialog class="modal" :class.closing="leaving" :class.child="!!parent" :class.folio="isFolio" :style="box"
         :aria-label="title" @click.self="close()">
   <header :if="!parent" class="modal-head">
     <strong>{{ title }}</strong>
@@ -180,6 +195,15 @@
       <svg class="ic"><use href="#i-close"/></svg><span class="unseen">close</span>
     </button>
   </header>
+  <div :if="parent && title" class="child-head">
+    <div class="child-title-wrap">
+      <span class="child-bullet"></span>
+      <strong class="child-title">{{ title }}</strong>
+    </div>
+    <button :if="!locked" type="button" class="close" title="Close" @click="close()">
+      <svg class="ic"><use href="#i-close"/></svg><span class="unseen">close</span>
+    </button>
+  </div>
   <slot />
 </dialog>
 
@@ -200,18 +224,51 @@
     margin: 3rem auto;
     max-height: calc(100vh - 6rem);
     flex-direction: column;
+    overflow: hidden;
   }
   /* `display: none` until it is open: a `display: flex` that applied before
-     `showModal()` would put the box on screen, unmodal, for a frame. */
-  dialog[open] { display: flex; animation: modal-in .2s cubic-bezier(.2, .8, .2, 1); }
+     `showModal()` would put the box on screen, unmodal, for a frame.
+
+     Every modal comes in as a folio: a sheet tipped away at the bottom that
+     swings upright, on a pivot a fifth of the way down so the top barely moves
+     and the foot travels. One motion for every dialog, so they read as one
+     kind; `folio` as a variant is now only the full height. A child's sheet
+     is the exception below — it comes out of a head, not out of nowhere. */
+  dialog { transform-origin: 50% 22%; }
+  dialog[open] { display: flex; animation: folio-down .36s cubic-bezier(.16, 1, .3, 1); }
   dialog::backdrop { background: rgba(0, 0, 0, .55); }
   dialog[open]::backdrop { animation: backdrop-in .2s ease-out; }
-  dialog.closing { animation: modal-out .14s ease-in forwards; }
-  dialog.closing::backdrop { animation: backdrop-out .14s ease-in forwards; }
-  @keyframes modal-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
-  @keyframes modal-out { to { opacity: 0; transform: translateY(6px) scale(.985); } }
+  dialog.closing { animation: folio-up .15s cubic-bezier(.4, 0, 1, 1) forwards; }
+  dialog.closing::backdrop { animation: backdrop-out .15s ease-in forwards; }
   @keyframes backdrop-in { from { opacity: 0; } }
   @keyframes backdrop-out { to { opacity: 0; } }
+
+  /* Folio: the page as tall as the window allows. */
+  dialog.folio {
+    margin: 2.25rem auto;
+    height: calc(100dvh - 4.5rem);
+    max-height: calc(100dvh - 4.5rem);
+  }
+  @keyframes folio-down {
+    0% {
+      opacity: 0;
+      transform: perspective(1200px) rotateX(36deg) translateY(-14px) scale(.97);
+    }
+    100% {
+      opacity: 1;
+      transform: perspective(1200px) rotateX(0deg) translateY(0) scale(1);
+    }
+  }
+  @keyframes folio-up {
+    0% {
+      opacity: 1;
+      transform: perspective(1200px) rotateX(0deg) translateY(0) scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: perspective(1200px) rotateX(24deg) translateY(-10px) scale(.98);
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     dialog[open], dialog[open]::backdrop, dialog.closing, dialog.closing::backdrop { animation: none; }
   }
@@ -221,18 +278,48 @@
     /* Not in the top layer — it is not modal — so placed by hand, over the
        parent's content and its pinned foot. */
     position: fixed;
-    z-index: 11;
+    z-index: 15;
     inset: auto;
     top: var(--top);
     left: calc(var(--left) + (var(--w) - var(--box)) / 2);
     width: var(--box);
     max-width: none;
     margin: 0;
-    max-height: calc(var(--h) - 2rem);
+    max-height: calc(var(--h) - 1.5rem);
+    background: var(--panel, #ffffff);
     /* Fastened to the head it comes out of: no top edge, square top corners. */
+    border: 1px solid var(--divider, var(--line, #3a3a3a));
     border-top: 0;
-    border-radius: 0 0 6px 6px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+    border-radius: 0 0 8px 8px;
+    box-shadow: 0 24px 48px -6px rgba(0, 0, 0, .45), 0 8px 16px -4px rgba(0, 0, 0, .25);
+  }
+  .child-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .6rem;
+    padding: .65rem 1.15rem;
+    border-bottom: 1px solid var(--line, #c8c8c8);
+    background: var(--panel);
+    color: var(--fg);
+  }
+  .child-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+  .child-bullet {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: inline-block;
+  }
+  .child-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--fg);
+    letter-spacing: -0.01em;
   }
   .veil {
     position: fixed;
@@ -241,30 +328,50 @@
     left: var(--left);
     width: var(--w);
     height: var(--h);
-    background: rgba(0, 0, 0, .45);
-    border-radius: 0 0 5px 5px;
-    animation: backdrop-in .2s ease-out;
+    background: rgba(0, 0, 0, .48);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border-radius: 0 0 6px 6px;
+    animation: veil-in .2s ease-out;
   }
-  .veil.closing { animation: backdrop-out .14s ease-in forwards; }
-  dialog.child[open] { animation: sheet-in .26s cubic-bezier(.32, .72, 0, 1); }
-  dialog.child.closing { animation: sheet-out .14s ease-in forwards; }
-  /* Down out of the head's bottom edge: the part still above it is clipped, so
-     it reads as coming from behind the head rather than over it. Both ends are
-     an `inset()`, because one to `none` does not interpolate and snaps
-     halfway; the negative sides leave the shadow out of the clip. */
+  .veil.closing { animation: veil-out .14s ease-in forwards; }
+  dialog.child[open] { animation: sheet-in .24s cubic-bezier(.16, 1, .3, 1); }
+  dialog.child.closing { animation: sheet-out .14s cubic-bezier(.4, 0, 1, 1) forwards; }
   @keyframes sheet-in {
-    from { transform: translateY(-100%); clip-path: inset(100% -2rem -2rem -2rem); }
-    to { transform: none; clip-path: inset(0 -2rem -2rem -2rem); }
+    from {
+      opacity: 0;
+      transform: translateY(-36px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
   @keyframes sheet-out {
-    from { transform: none; clip-path: inset(0 -2rem -2rem -2rem); }
-    to { transform: translateY(-100%); clip-path: inset(100% -2rem -2rem -2rem); }
+    from {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(-24px);
+    }
+  }
+  @keyframes veil-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes veil-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
     dialog.child[open], dialog.child.closing, .veil, .veil.closing { animation: none; }
   }
 
   .modal-head {
+    position: relative;
+    z-index: 20;
     display: flex;
     align-items: center;
     gap: .5rem;

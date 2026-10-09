@@ -1,0 +1,200 @@
+<script :setup="{
+  model = undefined,
+  value = '',
+  type = 'text',
+  placeholder = '',
+  disabled = false,
+  readonly = false,
+  autofocus = false,
+  inputmode = '',
+  size = '',
+  width = '',
+  warn = false,
+  invalid = false,
+  clearable = false,
+  prefix = '',
+  suffix = '',
+  id = '',
+  name = '',
+  list = ''
+}">
+  // A text input: single-line text, number, url, search or password with
+  // unified borders, focus ring, affix labels and optional clear action.
+  //
+  // **Self-contained**, like everything in `components/`: imports nothing,
+  // and tokens have fallbacks so it draws consistently anywhere.
+  //
+  //   <TextInput :model="name" placeholder="local" autofocus />
+  //   <TextInput :model="port" size="num" placeholder="8080" />
+  //
+  // Two-way binding works through `:model` via `$updateModel`, or via `:value`
+  // and `@input` / `@change`.
+
+  $: val = (model !== undefined && model !== null) ? model : value
+
+  const onInput = event => {
+    const v = event.target.value
+    $updateModel(v)
+    $emit("input", v)
+  }
+
+  const onChange = event => {
+    const v = event.target.value
+    $emit("change", v)
+  }
+
+  const clear = () => {
+    if (disabled || readonly) return
+    $updateModel("")
+    $emit("input", "")
+    $emit("change", "")
+    $self("input")?.focus()
+  }
+</script>
+
+<div class="input-wrap"
+     :class.small="size === 'small'"
+     :class.num="size === 'num'"
+     :class.has-warn="warn"
+     :class.invalid="invalid"
+     :class.disabled="disabled"
+     :class.readonly="readonly"
+     :style="width ? `width:${width}` : ''">
+  <span :if="prefix" class="affix prefix">{{ prefix }}</span>
+  <input
+    :type="type"
+    :value="val"
+    :placeholder="placeholder"
+    :disabled="disabled"
+    :readonly="readonly"
+    :autofocus="autofocus"
+    :inputmode="inputmode || null"
+    :id="id || null"
+    :name="name || null"
+    :list="list || null"
+    @input="onInput($event)"
+    @change="onChange($event)"
+    @keydown="$emit('keydown', $event)"
+    @focus="$emit('focus', $event)"
+    @blur="$emit('blur', $event)">
+  <button :if="clearable && val && !disabled && !readonly"
+          type="button"
+          class="clear-btn"
+          tabindex="-1"
+          title="Clear"
+          @click="clear()">
+    <svg class="clear-ic" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
+  </button>
+  <span :if="suffix" class="affix suffix">{{ suffix }}</span>
+</div>
+
+<style scoped>
+  .input-wrap {
+    display: inline-flex;
+    align-items: center;
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--line, #c8c8c8);
+    border-radius: 6px;
+    background: var(--panel, #ffffff);
+    color: var(--fg, #1a1d23);
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .input-wrap:hover:not(.disabled) {
+    border-color: color-mix(in srgb, var(--accent, #2f5bbd) 40%, var(--line, #c8c8c8));
+  }
+  .input-wrap:focus-within {
+    border-color: var(--accent, #2f5bbd);
+    box-shadow: 0 0 0 1px var(--accent, #2f5bbd);
+  }
+  .input-wrap.has-warn {
+    border-color: var(--warn, #e0af68);
+  }
+  .input-wrap.has-warn:focus-within {
+    box-shadow: 0 0 0 1px var(--warn, #e0af68);
+  }
+  .input-wrap.invalid {
+    border-color: var(--bad, #f7768e);
+  }
+  .input-wrap.invalid:focus-within {
+    box-shadow: 0 0 0 1px var(--bad, #f7768e);
+  }
+  .input-wrap.disabled {
+    opacity: .55;
+    cursor: default;
+  }
+  .input-wrap.num {
+    width: 7.5rem;
+    flex: none;
+  }
+  .input-wrap.small {
+    font-size: 11px;
+  }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: .35rem .65rem;
+    outline: none;
+    box-sizing: border-box;
+  }
+  .small input {
+    padding: .2rem .5rem;
+    font-size: 11px;
+  }
+  input:disabled {
+    cursor: default;
+  }
+  input::placeholder {
+    color: var(--dim, #5b6472);
+    opacity: .75;
+  }
+
+  .affix {
+    color: var(--dim, #5b6472);
+    font-size: 11px;
+    padding: 0 .5rem;
+    user-select: none;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+  }
+  .prefix { border-right: 1px solid var(--line, #c8c8c8); }
+  .suffix { border-left: 1px solid var(--line, #c8c8c8); }
+
+  .clear-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 .4rem;
+    background: none;
+    border: 0;
+    color: var(--dim, #5b6472);
+    cursor: pointer;
+    opacity: .6;
+    transition: opacity .15s ease;
+  }
+  .clear-btn:hover {
+    opacity: 1;
+    color: var(--fg, #1a1d23);
+  }
+  .clear-ic {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+</style>

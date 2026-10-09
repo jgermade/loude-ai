@@ -9,6 +9,9 @@
   const { saveEngines, profileFor, defaultPort, loadCatalog, modelLabel } = await import("@web/lib/engines.js")
   const { state, loadProviders, saveProviders } = await import("@web/lib/store.js")
   const Modal = await import("@web/components/modal.html")
+  const TextInput = await import("@web/components/text-input.html")
+  const SelectInput = await import("@web/components/select-input.html")
+  const Checkbox = await import("@web/components/checkbox.html")
 
   // False once it should leave: `Modal` plays the exit, then `close` unmounts.
   let open = true
@@ -136,34 +139,32 @@
     <dl class="settings form">
       <dt>Name</dt>
       <dd>
-        <input :value="name" placeholder="gemma" :disabled="!!editing"
-               @input="name = $event.target.value">
+        <TextInput :model="name" placeholder="gemma" :disabled="!!editing" :warn="badName || clash" />
         <span :if="badName" class="warn">letters, digits, <code>-</code> and <code>_</code></span>
         <span :if="clash" class="warn">already an engine of that name</span>
       </dd>
 
       <dt>Kind</dt>
       <dd>
-        <select :value="kind" :disabled="!!editing"
-                @change="kind = $event.target.value, binary = 'managed', path = '', variant = ''">
+        <SelectInput :model="kind" :disabled="!!editing"
+                     @change="binary = 'managed', path = '', variant = ''">
           <option value="llama">llama.cpp — llama-server, 12 MB, GGUF, one model per server</option>
           <option value="mlx">mlx — mlx-serve, Apple Silicon, MLX and GGUF</option>
           <option value="ollama">ollama — its own model store and its own MLX, 160 MB</option>
-        </select>
+        </SelectInput>
       </dd>
 
       <dt>Binary</dt>
       <dd>
-        <select :value="binary" @change="binary = $event.target.value">
+        <SelectInput :model="binary">
           <option value="managed">luu's own copy{{ haveCopy ? " — downloaded" : " — downloaded when you press download" }}</option>
           <option :each="p in found" :key="p" :value="p">{{ p }}</option>
           <option value="">whichever is found first on this machine</option>
           <option value="custom">a path…</option>
-        </select>
+        </SelectInput>
       </dd>
       <dd :if="binary === 'custom'">
-        <input :value="path" :placeholder="`/opt/homebrew/bin/${bin}`"
-               @input="path = $event.target.value">
+        <TextInput :model="path" :placeholder="`/opt/homebrew/bin/${bin}`" :warn="badPath" />
         <span :if="badPath" class="warn">must be a file named <code>{{ bin }}</code></span>
       </dd>
       <dd :if="binary === 'custom'" class="note">
@@ -176,27 +177,24 @@
 
       <dt :if="binary === 'managed'">Version</dt>
       <dd :if="binary === 'managed'">
-        <input class="w-num" :value="version" :placeholder="pinned"
-               @input="version = $event.target.value">
+        <TextInput size="num" :model="version" :placeholder="pinned" />
         <span class="dim">a release tag; empty is the one luu pins</span>
       </dd>
       <dt :if="binary === 'managed' && kind === 'llama'">Variant</dt>
       <dd :if="binary === 'managed' && kind === 'llama'">
-        <input class="w-num" :value="variant" placeholder="—"
-               @input="variant = $event.target.value">
+        <TextInput size="num" :model="variant" placeholder="—" />
         <span class="dim"><code>vulkan</code>, <code>cuda-12.8</code>, <code>rocm-10.0</code> on Linux; empty is CPU/Metal</span>
       </dd>
 
       <dt>Port</dt>
       <dd>
-        <input class="w-num" :value="port" :placeholder="String(defaultPort(kind))"
-               @input="port = $event.target.value">
+        <TextInput size="num" :model="port" :placeholder="String(defaultPort(kind))" :warn="badPort" />
         <span :if="badPort" class="warn">a port is 1–65535</span>
       </dd>
 
       <dt :if="kind !== 'ollama'">Model</dt>
       <dd :if="kind !== 'ollama'">
-        <select :value="model" @change="model = $event.target.value">
+        <SelectInput :model="model">
           <option value="">none — named in the arguments below</option>
           <option :if="model && !loadable.some(m => m.reference === model)" :value="model">
             {{ modelLabel(model) }} — not found on this machine
@@ -208,7 +206,7 @@
                   :title="m.cannot[kind]">
             ⚠ {{ m.label }}
           </option>
-        </select>
+        </SelectInput>
       </dd>
       <dd :if="kind !== 'ollama'" class="note">
         What this machine already has, where each tool keeps it — nothing is
@@ -227,9 +225,8 @@
 
       <dt>Arguments</dt>
       <dd>
-        <input :value="args"
-               :placeholder="kind === 'llama' ? '-hf ggml-org/gemma-3-1b-it-GGUF -c 8192' : ''"
-               @input="args = $event.target.value">
+        <TextInput :model="args"
+                   :placeholder="kind === 'llama' ? '-hf ggml-org/gemma-3-1b-it-GGUF -c 8192' : ''" />
       </dd>
       <dd :if="kind === 'llama'" class="note">
         After <code>--host 127.0.0.1 --port</code> and the model's
@@ -252,18 +249,16 @@
 
       <dt>Ready within</dt>
       <dd>
-        <input class="w-num" :value="readyTimeout" placeholder="120"
-               @input="readyTimeout = $event.target.value">
+        <TextInput size="num" :model="readyTimeout" placeholder="120"
+                   @input="readyTimeout = $event" />
         <span class="dim">seconds a session waits for it to answer</span>
       </dd>
 
       <dt :if="!editing">Provider</dt>
       <dd :if="!editing">
-        <label>
-          <input type="checkbox" :checked="withProvider"
-                 @change="withProvider = $event.target.checked">
+        <Checkbox :model="withProvider" @change="withProvider = $event">
           also add a provider <strong>{{ trimmed || "…" }}</strong> that starts it
-        </label>
+        </Checkbox>
       </dd>
     </dl>
 

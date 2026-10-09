@@ -1,0 +1,132 @@
+<script :setup="{
+  label = '',
+  note = '',
+  warn = '',
+  error = '',
+  required = false,
+  forId = '',
+  layout = 'stack'
+}">
+  // A form field wrapper providing consistent layout for labels, controls,
+  // notes, caveats and validation messages.
+  //
+  // **Self-contained**, like everything in `components/`: imports nothing.
+  //
+  //   <FormField label="Name" note="What a session calls it." :warn="clash ? 'taken' : ''">
+  //     <TextInput :model="name" />
+  //   </FormField>
+
+  $: hasMessage = !!warn || !!error
+</script>
+
+<div class="field"
+     :class.row="layout === 'row'"
+     :class.has-error="!!error"
+     :class.has-warn="!!warn">
+  <div :if="label" class="field-head">
+    <label class="field-label" :for="forId || null">
+      <span class="label-text">{{ label }}</span>
+      <span :if="required" class="req" aria-hidden="true">*</span>
+    </label>
+    <slot name="badge"></slot>
+  </div>
+
+  <div class="field-body">
+    <slot></slot>
+  </div>
+
+  <div :if="error" class="field-msg error" role="alert">
+    <svg class="msg-ic" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M12 8v4M12 16h.01"/>
+    </svg>
+    <span>{{ error }}</span>
+  </div>
+
+  <div :if="warn && !error" class="field-msg warn">
+    <svg class="msg-ic" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+      <path d="M12 9v4M12 17h.01"/>
+    </svg>
+    <span>{{ warn }}</span>
+  </div>
+
+  <div :if="note" class="field-note">
+    <slot name="note">{{ note }}</slot>
+  </div>
+</div>
+
+<style scoped>
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: .3rem;
+    margin-bottom: .65rem;
+    width: 100%;
+  }
+  .field:last-child {
+    margin-bottom: 0;
+  }
+
+  .field-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+  }
+  .field-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--dim, #5b6472);
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+  }
+  .req {
+    color: var(--bad, #f7768e);
+    font-weight: bold;
+  }
+
+  .field-body {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    width: 100%;
+  }
+
+  .field-msg {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .field-msg.error {
+    color: var(--bad, #f7768e);
+  }
+  .field-msg.warn {
+    color: var(--warn, #e0af68);
+  }
+  .msg-ic {
+    width: 13px;
+    height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex: none;
+  }
+
+  .field-note {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--dim, #5b6472);
+  }
+
+  .field.row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+</style>

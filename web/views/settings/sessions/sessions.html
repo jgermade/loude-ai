@@ -10,17 +10,39 @@
   const SettingsAuthority = await import("./authority.html")
 </script>
 
-<section class="part" id="sessions-resend">
-  <h2>Resend</h2>
-  <SettingsResend />
-</section>
+<div class="sessions-pane">
+  <div class="ds-hero">
+    <div class="ds-hero-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21.5 2v6h-6"/>
+        <path d="M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+      </svg>
+    </div>
+    <div class="ds-hero-body">
+      <h4 class="ds-hero-title">Sesiones y contexto</h4>
+      <p class="ds-hero-desc">Reglas de reenvío de historial (Resend) y directivas de autorización comunicadas al modelo (Authority).</p>
+    </div>
+  </div>
 
-<section class="part" id="sessions-authority">
-  <h2>Authority</h2>
-  <SettingsAuthority />
-</section>
+  <section class="part" id="sessions-resend">
+    <h2>Resend</h2>
+    <SettingsResend />
+  </section>
+
+  <section class="part" id="sessions-authority">
+    <h2>Authority</h2>
+    <SettingsAuthority />
+  </section>
+</div>
 
 <style scoped>
+  .sessions-pane {
+    display: block;
+    min-height: 100%;
+  }
+  #sessions-authority {
+    display: block;
+  }
   .part + .part {
     margin-top: 1.6rem;
     padding-top: 1.2rem;

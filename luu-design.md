@@ -1118,11 +1118,14 @@ backdrop, ESC, `:open` going false from a script that saved — plays the same e
 `close`, which the owner answers by clearing the flag. `locked` refuses all of them and hides the
 close button: the folder picker on a first visit, which has nothing behind it to go back to.
 **A modal opened inside another is its child** — the provider and engine forms over Settings: no
-head of its own, a sheet that comes down out of the parent's head, and an overlay (its own
-`::backdrop`, fitted to the parent's body) over the parent's body only, so the parent's head stays
+parent-level head, a sheet that comes down out of the parent's head with its own `.child-head`
+(title, accent bullet and close button), and an overlay (`.veil`, fitted to the parent's body
+with `backdrop-filter: blur(4px)`) over the parent's body only, so the parent's head stays
 lit and says whose form it is — and **live**: the child is opened with `show()`, not `showModal()`,
 so the parent stays the modal and its close button closes both; the rest of the parent is made
-`inert`, the overlay is an element of its own, and ESC is caught first and spent on the child. **No modal has an id.** The component finds its own `<dialog>` with `$self`, so the store's close
+`inert`, the overlay is an element of its own, and ESC is caught first and spent on the child.
+Opening plays a slide-down sheet animation (`sheet-in`) from under the parent head, and exit plays
+`sheet-out` sliding back up. **No modal has an id.** The component finds its own `<dialog>` with `$self`, so the store's close
 functions only clear state and nothing outside a modal names it. **ESC walks a ladder** — a modal
 cancels itself and the page does nothing else on that keypress, then the history popover, a rename
 in progress, an armed delete, and finally, with nothing left to cancel, **the chat**: a chat on
@@ -1131,11 +1134,18 @@ content and chat. Every way to the chat — the logo, the column's switch, ESC �
 composer focused. ESC inside the terminal or Monaco is theirs and never reaches the ladder. A
 running turn is deliberately not on it: it is the one cancellable thing whose undo costs work. See
 [`RECORD/2026-09-16.the-modals-are-dialogs.completed.md`](RECORD/2026-09-16.the-modals-are-dialogs.completed.md),
-[`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md)
-and [`RECORD/2026-10-02.a-modal-inside-a-modal.completed.md`](RECORD/2026-10-02.a-modal-inside-a-modal.completed.md).
+[`RECORD/2026-10-01.one-modal.completed.md`](RECORD/2026-10-01.one-modal.completed.md),
+[`RECORD/2026-10-02.a-modal-inside-a-modal.completed.md`](RECORD/2026-10-02.a-modal-inside-a-modal.completed.md),
+[`RECORD/2026-10-08.settings-design-system-and-folio.completed.md`](RECORD/2026-10-08.settings-design-system-and-folio.completed.md),
+and [`RECORD/2026-10-09.modal-folio-alias-and-scrollable.completed.md`](RECORD/2026-10-09.modal-folio-alias-and-scrollable.completed.md).
+Every modal uses the 3D folio perspective swing (`folio-down` pivoting at `50% 22%`), while nested child
+modals use the slide-down sheet (`sheet-in`). Paths under the state directory are rendered as `luu:/…`
+via `<PathText>` with the full host directory in hover title, and settings forms share a uniform
+`--dt-width: 9rem` label column.
 
-**Settings is sections down the side**, not one scroll, because the sections are not steps:
-*General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*
+**Settings is sections down the side**, not one scroll, because the sections are not steps.
+Settings uses the `folio` variant of `<Modal>`: pinned to maximum viewport height (`calc(100dvh - 4.5rem)`),
+and laid out with the Design System's visual heroes, preview cards, workflow diagrams, and status pills. *General* (theme, editor, layout, which icon theme drew the tree, which folder), *Models*
 (what this server resolved, then the providers file the next run reads — with the built-in mock
 as a row of its own, chosen when the file names no default, because a server that fell back to
 it used to show a table with nothing chosen; the providers are a **read-only list**, and each is
@@ -1315,7 +1325,7 @@ process in the loop.
 | folder | what goes there | the test |
 |---|---|---|
 | `views/` | the components the page is composed of, one folder per view (`views/inspector/tree/tree.html`), with the parts only that view uses beside it | it is a place on the screen |
-| `components/` | components any view may use (`segmented`, `rail`, `save-button`, `dropup`, `modal`) | it imports nothing from the page |
+| `components/` | components any view may use (`segmented`, `rail`, `save-button`, `dropup`, `modal`, `text-input`, `select-input`, `checkbox`, `toggle`, `textarea-input`, `form-field`) | it imports nothing from the page |
 | `lib/` | shared modules that keep state or reach outside themselves: the stores, the API, the DOM, `localStorage` | it remembers, or it asks |
 | `helpers/` | pure functions (`segments`, `timing`, `prompt-parts`) | it keeps nothing and imports only other helpers |
 

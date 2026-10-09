@@ -9,6 +9,8 @@
   } = await import("@web/lib/ui.js")
   const Modal = await import("@web/components/modal.html")
   const { placeOptions } = await import("@web/lib/places.js")
+  const TextInput = await import("@web/components/text-input.html")
+  const SelectInput = await import("@web/components/select-input.html")
 
   $: profileNames = Object.keys(state.providers?.providers || {})
   // Empty where nobody has written a posture down, and where a surface cannot
@@ -52,17 +54,17 @@
     <dl class="settings" :if="profileNames.length">
       <dt>Provider</dt>
       <dd>
-        <select :value="ui.starter?.provider" @change="loadModels($event.target.value)">
+        <SelectInput :model="ui.starter?.provider" @change="loadModels($event)">
           <option :each="name in profileNames" :key="name" :value="name">{{ name }}</option>
-        </select>
+        </SelectInput>
         <span :if="ui.starter?.provider === state.providers?.default" class="dim">· the file's default</span>
       </dd>
 
       <dt>Model</dt>
       <dd>
-        <input class="w-model" :value="ui.starter?.model" list="starter-models"
-               :placeholder="ui.starter?.loading ? 'asking the provider…' : 'a model name'"
-               @input="editStarter({ model: $event.target.value })">
+        <TextInput :model="ui.starter?.model" list="starter-models"
+                   :placeholder="ui.starter?.loading ? 'asking the provider…' : 'a model name'"
+                   @input="editStarter({ model: $event })" />
         <datalist id="starter-models">
           <option :each="name in ui.starter?.models || []" :key="name" :value="name"></option>
         </datalist>
@@ -78,11 +80,11 @@
            `config.toml`, and a page cannot add to them. -->
       <dt :if="places.length > 1">Runs</dt>
       <dd :if="places.length > 1">
-        <select class="place" :value="ui.starter?.place"
-                @change="editStarter({ place: $event.target.value })">
+        <SelectInput class="place" :model="ui.starter?.place"
+                     @change="editStarter({ place: $event })">
           <option :each="p in places" :key="p.value" :value="p.value" :disabled="p.disabled"
                   :title="p.title">{{ p.name }} — {{ p.label }}</option>
-        </select>
+        </SelectInput>
       </dd>
       <dd :if="places.length > 1 && chosenPosture" class="dim small">
         {{ state.postures?.postures[chosenPosture]?.policy }} — chosen now:

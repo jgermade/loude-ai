@@ -11,6 +11,8 @@
   const { state, loadAuthority, saveAuthority } = await import("@web/lib/store.js")
   const Segmented = await import("@web/components/segmented.html")
   const SaveButton = await import("@web/components/save-button.html")
+  const PathText = await import("@web/components/path-text.html")
+  const TextareaInput = await import("@web/components/textarea-input.html")
 
   const POSITIONS = [{ value: "", label: "system (default)" }, "prompt"]
 
@@ -74,6 +76,23 @@
   <code>Authority::Plan</code> once one is approved.
 </p>
 
+<div class="ds-diagram">
+  <div class="ds-diagram-node">
+    <div style="font-weight:600;color:var(--b-system);">1. Fase Draft</div>
+    <div style="font-size:10px;color:var(--dim);">Pre-aprobación · Sólo lectura</div>
+  </div>
+  <div class="ds-diagram-arrow">➔</div>
+  <div class="ds-diagram-node">
+    <div style="font-weight:600;color:var(--ok);">2. Gate de Control</div>
+    <div style="font-size:10px;color:var(--dim);">Plan aprobado por usuario</div>
+  </div>
+  <div class="ds-diagram-arrow">➔</div>
+  <div class="ds-diagram-node">
+    <div style="font-weight:600;color:var(--accent);">3. Fase Plan</div>
+    <div style="font-size:10px;color:var(--dim);">Permisos estrechados</div>
+  </div>
+</div>
+
 <dl class="settings" :if="state.authority">
   <dt>Draft</dt>
   <dd>
@@ -94,7 +113,7 @@
 
 <h3>This machine's default</h3>
 <p class="dim small" :if="state.authority?.path">
-  <span class="path">{{ state.authority.path }}</span>
+  <span class="path"><PathText :path="state.authority.path" :home="state.settings?.home" /></span>
   · what a session starts on unless it asks for something else
 </p>
 <p class="dim small">
@@ -108,14 +127,17 @@
 <dl class="settings" :if="state.authority">
   <dt>Draft</dt>
   <dd>
-    <textarea rows="2" :disabled="!editable" :value="draft.draftText"
-              placeholder="Nothing — a draft that tries to write discovers the floor by being refused."
-              @input="set('draftText', $event.target.value)"></textarea>
+    <TextareaInput :rows="2" :disabled="!editable" :model="draft.draftText"
+                   placeholder="Nothing — a draft that tries to write discovers the floor by being refused." />
   </dd>
   <dd>
     <Segmented label="Draft position" :options="POSITIONS" :model="draft.draftPosition" :disabled="!editable" />
   </dd>
   <dd class="note">
+    <div class="rule-visual-pills">
+      <span class="rule-pill accent"><strong>system</strong> · Añadido al prefijo (0 tokens extra)</span>
+      <span class="rule-pill dim"><strong>prompt</strong> · Reenviado en cada turno</span>
+    </div>
     <b>system</b> appends the note to the cached prefix once — free while the
     draft holds, since it never changes a turn already sent under it.
     <b>prompt</b> repeats it before every turn's own text instead: costs a few
@@ -125,12 +147,17 @@
 
   <dt>Plan</dt>
   <dd>
-    <textarea rows="2" :disabled="!editable" :value="draft.planText"
-              placeholder="Nothing — the ordinary case, since a plan already grants what it grants."
-              @input="set('planText', $event.target.value)"></textarea>
+    <TextareaInput :rows="2" :disabled="!editable" :model="draft.planText"
+                   placeholder="Nothing — the ordinary case, since a plan already grants what it grants." />
   </dd>
   <dd>
     <Segmented label="Plan position" :options="POSITIONS" :model="draft.planPosition" :disabled="!editable" />
+  </dd>
+  <dd class="note">
+    <div class="rule-visual-pills">
+      <span class="rule-pill accent"><strong>system</strong> · Añadido al prefijo cuando el plan está aprobado</span>
+      <span class="rule-pill dim"><strong>prompt</strong> · Reenviado en cada turno de la ejecución</span>
+    </div>
   </dd>
 
   <dd class="note caveat">
@@ -142,17 +169,53 @@
   </dd>
 </dl>
 
-<div class="modal-foot">
-  <div class="modal-actions" :if="state.authority">
-    <SaveButton :action="save" :changes="changes" :disabled="!editable" />
-  </div>
+<div class="section-actions" :if="state.authority">
+  <SaveButton :action="save" :changes="changes" :disabled="!editable" />
 </div>
 
 <style scoped>
+  .section-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 1rem;
+    padding-top: .4rem;
+  }
   h3:first-child { margin-top: 0; }
   .path { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
   .note b, .caveat b { color: var(--fg); font-weight: 600; }
   .note-text { max-width: 100%; overflow-wrap: anywhere; }
+  .rule-visual-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+    margin-bottom: .45rem;
+  }
+  .rule-pill {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    padding: .15rem .5rem;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--sunken, rgba(0, 0, 0, .04));
+    color: var(--dim);
+  }
+  .rule-pill strong {
+    color: var(--fg);
+    margin-right: .2rem;
+  }
+  .rule-pill.accent {
+    border-color: var(--accent);
+    background: var(--selected, rgba(47, 91, 189, .08));
+    color: var(--fg);
+  }
+  .rule-pill.accent strong {
+    color: var(--accent);
+  }
+  .rule-pill.warn {
+    border-color: var(--warn);
+    background: var(--warn-bg, rgba(138, 93, 18, .08));
+  }
   textarea {
     width: 100%;
     box-sizing: border-box;

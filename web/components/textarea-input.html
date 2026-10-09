@@ -1,0 +1,104 @@
+<script :setup="{
+  model = undefined,
+  value = '',
+  placeholder = '',
+  rows = 2,
+  disabled = false,
+  readonly = false,
+  resize = 'vertical',
+  warn = false,
+  invalid = false,
+  id = '',
+  name = ''
+}">
+  // A multiline text input with unified borders, focus ring, and resize options.
+  //
+  // **Self-contained**, like everything in `components/`: imports nothing.
+  //
+  //   <TextareaInput :model="draftText" rows="3" placeholder="Notes..." />
+
+  $: val = (model !== undefined && model !== null) ? model : value
+
+  const onInput = event => {
+    const v = event.target.value
+    $updateModel(v)
+    $emit("input", v)
+  }
+
+  const onChange = event => {
+    const v = event.target.value
+    $emit("change", v)
+  }
+</script>
+
+<div class="textarea-wrap"
+     :class.warn="warn"
+     :class.invalid="invalid"
+     :class.disabled="disabled"
+     :class.readonly="readonly">
+  <textarea
+    :rows="rows"
+    :placeholder="placeholder"
+    :disabled="disabled"
+    :readonly="readonly"
+    :style="resize ? `resize:${resize}` : ''"
+    :id="id || null"
+    :name="name || null"
+    :value="val"
+    @input="onInput($event)"
+    @change="onChange($event)"
+    @focus="$emit('focus', $event)"
+    @blur="$emit('blur', $event)"></textarea>
+</div>
+
+<style scoped>
+  .textarea-wrap {
+    display: flex;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--line, #c8c8c8);
+    border-radius: 6px;
+    background: var(--panel, #ffffff);
+    color: var(--fg, #1a1d23);
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .textarea-wrap:hover:not(.disabled) {
+    border-color: color-mix(in srgb, var(--accent, #2f5bbd) 40%, var(--line, #c8c8c8));
+  }
+  .textarea-wrap:focus-within {
+    border-color: var(--accent, #2f5bbd);
+    box-shadow: 0 0 0 1px var(--accent, #2f5bbd);
+  }
+  .textarea-wrap.warn {
+    border-color: var(--warn, #e0af68);
+  }
+  .textarea-wrap.invalid {
+    border-color: var(--bad, #f7768e);
+  }
+  .textarea-wrap.disabled {
+    opacity: .55;
+    cursor: default;
+  }
+
+  textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: .4rem .65rem;
+    outline: none;
+  }
+  textarea:disabled {
+    cursor: default;
+  }
+  textarea::placeholder {
+    color: var(--dim, #5b6472);
+    opacity: .75;
+  }
+</style>

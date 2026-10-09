@@ -156,7 +156,7 @@
           @click="toggle($event)">
     <span :if="state.settings?.profile" class="profile">{{ state.settings?.profile }}</span>
     <span :if="state.settings?.profile" class="sep">·</span>
-    <span class="model-name">{{ modelLabel(currentModel) || "—" }}</span>
+    <span class="model-name" :title="modelLabel(currentModel)">{{ modelLabel(currentModel) || "—" }}</span>
     <svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14.5 12 9.5l5 5"/></svg>
   </button>
 
@@ -169,11 +169,11 @@
     <span class="dot"></span>
     <!-- What is happening and for how long first, and what it replaced last:
          a chat column is narrow, and the end is what gets cut. -->
-    <span :if="ui.engine.state === 'stopping'">stopping {{ short(ui.engine.from) }}</span>
-    <span :if="ui.engine.state === 'downloading'">downloading {{ ui.engine.name }}</span>
-    <span :if="ui.engine.state === 'starting'">starting {{ short(ui.engine.model) || ui.engine.name }}</span>
-    <span :if="ui.engine.state === 'ready'">{{ short(ui.engine.model) || ui.engine.name }} ready<span :if="ui.engine.took"> in {{ ui.engine.took }}s</span></span>
-    <span :if="ui.engine.state === 'failed'">could not start {{ short(ui.engine.model) || ui.engine.name }}</span>
+    <span :if="ui.engine.state === 'stopping'" class="engine-msg">stopping {{ short(ui.engine.from) }}</span>
+    <span :if="ui.engine.state === 'downloading'" class="engine-msg">downloading {{ ui.engine.name }}</span>
+    <span :if="ui.engine.state === 'starting'" class="engine-msg">starting {{ short(ui.engine.model) || ui.engine.name }}</span>
+    <span :if="ui.engine.state === 'ready'" class="engine-msg">ready<span :if="ui.engine.took"> in {{ ui.engine.took }}s</span></span>
+    <span :if="ui.engine.state === 'failed'" class="engine-msg">could not start {{ short(ui.engine.model) || ui.engine.name }}</span>
     <span :if="ui.engine.state !== 'ready' && ui.engine.state !== 'failed'" class="secs">{{ ui.engine.secs }}s</span>
     <span :if="leaving && ui.engine.state === 'starting'" class="from">· {{ short(leaving) }} stopped</span>
   </span>
@@ -280,16 +280,28 @@
     cursor: pointer;
   }
   .face:hover, .face.open { border-color: var(--accent); }
-  .face .profile { color: var(--dim); flex: none; }
-  .face .sep { color: var(--dim); opacity: .6; }
-  .face .model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The button gives way before the feedback does — it shrinks three times
-     as fast, down to a floor that still says which model — because the model
-     is on the button's tooltip and the feedback is the thing happening now.
-     Not a percentage: the row sizes itself to its content, and a percentage
-     of that resolved to one letter. */
-  .face { flex: 0 3 auto; min-width: 6rem; }
-  .engine { flex: 0 1 auto; }
+  .face .profile {
+    color: var(--dim);
+    flex: 0 1 auto;
+    max-width: 8rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .face .sep { color: var(--dim); opacity: .6; flex: none; }
+  .face .model-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 3.5rem;
+    flex: 1 1 auto;
+  }
+  .face {
+    flex: 0 1 auto;
+    min-width: 7rem;
+    max-width: 20rem;
+  }
   .caret {
     width: 11px;
     height: 11px;
@@ -307,11 +319,18 @@
     align-items: center;
     gap: .35rem;
     min-width: 0;
+    max-width: 14rem;
     font-size: 11px;
     color: var(--dim);
     white-space: nowrap;
     overflow: hidden;
+    flex: 0 1 auto;
+  }
+  .engine .engine-msg {
+    min-width: 0;
+    overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .engine .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--accent); }
   .engine.stopping .dot { background: var(--warn); }

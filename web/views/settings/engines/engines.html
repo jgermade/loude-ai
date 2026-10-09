@@ -6,6 +6,8 @@
   const { loadEngines, saveEngines, startEngine, stopEngine, installEngine, modelLabel } =
     await import("@web/lib/engines.js")
   const Scrollable = await import("@web/components/scrollable.html")
+  const PathText = await import("@web/components/path-text.html")
+  const { state } = await import("@web/lib/store.js")
   const { openStarter } = await import("@web/lib/ui.js")
   const EngineForm = await import("./engine-form.html")
 
@@ -24,7 +26,7 @@
     }
     return result.ok
   }
-  took(await loadEngines())
+  loadEngines().then(took)
 
   // Polled while this section is on screen, and only then: the timer is
   // cleared when the section is destroyed (`$destroyed`, since jq79 0.7.4).
@@ -74,18 +76,67 @@
 </script>
 
 <div class="engines-pane">
-  <h3>Engines</h3>
-  <p class="dim small">
-    Model servers luu starts: <strong>llama-server</strong>,
-    <strong>mlx-serve</strong> or <strong>ollama</strong>. All of it is automatic — luu's own copy is
-    downloaded the first time a session needs it, the engine starts then, moves
-    to another model when the chat picks one, and stops when no session sends
-    to it or <code>luu serve</code> exits. <strong>start</strong> and
-    <strong>stop</strong> below are only for doing it by hand.
-    <span :if="view?.path">Written to {{ view.path }}.</span>
+  <div class="ds-hero">
+    <div class="ds-hero-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="3"/>
+        <rect x="9" y="9" width="6" height="6"/>
+        <line x1="9" y1="1" x2="9" y2="4"/>
+        <line x1="15" y1="1" x2="15" y2="4"/>
+        <line x1="9" y1="20" x2="9" y2="23"/>
+        <line x1="15" y1="20" x2="15" y2="23"/>
+        <line x1="20" y1="9" x2="23" y2="9"/>
+        <line x1="20" y1="14" x2="23" y2="14"/>
+        <line x1="1" y1="9" x2="4" y2="9"/>
+        <line x1="1" y1="14" x2="4" y2="14"/>
+      </svg>
+    </div>
+    <div class="ds-hero-body">
+      <h4 class="ds-hero-title">Motores de inferencia</h4>
+      <p class="ds-hero-desc">Servidores de modelos que luu inicia y supervisa localmente: llama-server, mlx y ollama.</p>
+    </div>
+  </div>
+
+  <div class="ds-flow">
+    <div class="ds-flow-step">
+      <span class="ds-flow-num">1</span>
+      <div class="ds-flow-body">
+        <div class="ds-flow-title">Bajo demanda</div>
+        <p class="ds-flow-desc">Se descarga la versión gestionada oficial la primera vez que se requiere.</p>
+      </div>
+    </div>
+    <div class="ds-flow-step">
+      <span class="ds-flow-num">2</span>
+      <div class="ds-flow-body">
+        <div class="ds-flow-title">Arranque automático</div>
+        <p class="ds-flow-desc">El motor se inicia al abrir una sesión y conmuta de modelo con el chat.</p>
+      </div>
+    </div>
+    <div class="ds-flow-step">
+      <span class="ds-flow-num">3</span>
+      <div class="ds-flow-body">
+        <div class="ds-flow-title">Sin fugas</div>
+        <p class="ds-flow-desc">Se detiene al cerrar la sesión o salir del servidor, liberando VRAM.</p>
+      </div>
+    </div>
+  </div>
+
+  <p class="dim small" :if="view?.path">
+    Configuración guardada en <PathText :path="view.path" :home="state.settings?.home" />. Los botones <strong>start</strong> y <strong>stop</strong> permiten control manual.
+  </p>
+  <p :if="!view && !error" class="dim small skeleton-pulse">
+    Cargando engines configurados…
   </p>
   <p :if="view && !view.editable" class="refused">{{ view.refused }}</p>
   <p :if="error" class="error">{{ error }}</p>
+
+  <div :if="!view && !error" class="engine-skeleton">
+    <header>
+      <span class="skeleton-bar" style="width: 7rem; height: 1.1rem;"></span>
+      <span class="skeleton-badge skeleton-pulse">comprobando…</span>
+    </header>
+    <div class="skeleton-bar" style="width: 15rem; margin-top: .4rem;"></div>
+  </div>
 
   <div :if="view && !names.length" class="refused">
     None yet. <strong>+ engine</strong> writes one, and a provider that
@@ -178,10 +229,8 @@
     unpacked.
   </p>
 
-  <div class="modal-foot">
-    <div class="modal-actions">
-      <button type="button" class="add" :disabled="!view?.editable" @click="editing = {}">+ engine</button>
-    </div>
+  <div class="section-actions">
+    <button type="button" class="add" :disabled="!view?.editable" @click="editing = {}">+ engine</button>
   </div>
 </div>
 
@@ -189,20 +238,50 @@
             :saved="next => { view = next }" :close="() => { editing = null }" />
 
 <style scoped>
+  .section-actions {
+    margin-top: 1rem;
+    display: flex;
+  }
+  .engines-pane {
+    display: block;
+    min-height: 100%;
+  }
   h3:first-child { margin-top: 0; }
   .engine {
+    background: var(--panel, #ffffff);
     border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: .6rem .8rem;
+    border-radius: 8px;
+    padding: .75rem 1rem;
     margin: .6rem 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
   }
-  .engine header { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .engine header { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+  .engine header strong { font-size: 14px; font-weight: 600; color: var(--fg); }
   .engine .grow { flex: 1; }
-  .engine .settings { margin-top: .5rem; }
-  .state { font-size: 12px; color: var(--dim); }
-  .state.running { color: var(--warn); }
-  .state.up { color: var(--ok, var(--accent)); }
-  .state.exited { color: var(--err, var(--warn)); }
+  .engine .settings { margin-top: .6rem; }
+  .state {
+    font-size: 11px;
+    padding: .15rem .45rem;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--sunken, rgba(0, 0, 0, .03));
+    color: var(--dim);
+  }
+  .state.running {
+    color: var(--warn);
+    border-color: var(--warn);
+    background: var(--warn-bg, rgba(138, 93, 18, .08));
+    font-weight: 500;
+  }
+  .state.up {
+    color: var(--ok);
+    border-color: var(--ok);
+    background: rgba(74, 122, 28, .08);
+    font-weight: 500;
+  }
+  .state.exited {
+    color: var(--dim);
+  }
   .log {
     margin: 0;
     font-size: 11px;
@@ -214,5 +293,21 @@
   }
   .download { display: flex; align-items: center; gap: .6rem; font-size: 12px; margin: .3rem 0; }
   .download progress { flex: 1; }
+  .engine-skeleton {
+    background: var(--panel, #ffffff);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: .75rem 1rem;
+    margin: .6rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+    opacity: .75;
+  }
+  .engine-skeleton header {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+  }
   code { overflow-wrap: anywhere; }
 </style>

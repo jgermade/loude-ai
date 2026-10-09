@@ -50,35 +50,17 @@
   let shown = ui.section
   let next = null
   let leaving = null
-  let height = null
   const FADE_MS = 240
 
   const mounted = name => name === shown || name === next || name === leaving
   const phase = name => name === shown ? "on" : name === leaving ? "leaving" : "prep"
-  const wrapper = name => $self(`.stage > [data-section="${name}"]`)
-  // The height a section settles at once it has loaded, polled per frame.
-  const settle = name => new Promise(resolve => {
-    const started = performance.now()
-    let last = -1
-    let quietSince = null
-    const check = now => {
-      const el = wrapper(name)
-      const h = el ? el.offsetHeight : 0
-      if (h > 0 && h === last) quietSince = quietSince ?? now
-      else quietSince = null
-      last = h
-      if ((quietSince !== null && now - quietSince >= 90) || now - started >= 700) return resolve(h)
-      requestAnimationFrame(check)
-    }
-    requestAnimationFrame(check)
-  })
 
   // A closure rather than store fields: the `$:` below must read `ui.section`
   // and nothing it writes, or writing it would run it again.
   const switchTo = (() => {
     let current = ui.section
     let token = 0
-    return async target => {
+    return target => {
       if (target === current) return
       current = target
       const mine = ++token
@@ -86,9 +68,6 @@
         next = null
         return
       }
-      next = target
-      await settle(target)
-      if (mine !== token) return
       leaving = shown
       shown = target
       next = null
@@ -98,26 +77,9 @@
     }
   })()
   $: switchTo(ui.section)
-
-  const measure = () => {
-    const stage = $self(".stage")
-    const pane = $self(".pane")
-    const head = $self(".modal-head")
-    if (!stage || !pane || !head) return
-    const style = getComputedStyle(pane)
-    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
-    // What `max-height: calc(100vh - 6rem)` leaves the pane under the head.
-    const room = window.innerHeight - 96 - head.offsetHeight - 2
-    height = Math.min(stage.offsetHeight + padding, room)
-  }
-
-  await $mounted()
-  new ResizeObserver(() => measure()).observe($self(".stage"))
-  window.addEventListener("resize", measure)
-  $: paneStyle = height === null ? "" : `height:${height}px`
 </script>
 
-<Modal title="Settings" width="76rem" @close="closeSettings()">
+<Modal title="Settings" width="76rem" variant="folio" animation="folio" @close="closeSettings()">
 
   <div class="sections">
     <!-- The rail. The third section is the one the shape was said to make
@@ -134,7 +96,7 @@
       </Rail>
     </div>
 
-    <section class="modal-body pane" :style="paneStyle">
+    <section class="modal-body pane">
       <div class="stage">
         <div :if="mounted('general')" class="section" data-section="general" :class="phase('general')"
              :aria-hidden="String(shown !== 'general')"><SettingsGeneral /></div>
@@ -156,7 +118,9 @@
     display: grid;
     grid-template-columns: 12rem minmax(0, 1fr);
     min-height: 0;
+    height: 100%;
     flex: 1;
+    overflow: hidden;
   }
   .rail-col {
     padding: .6rem .4rem;
@@ -164,16 +128,29 @@
     border-right: 1px solid var(--line);
     background: var(--chat-bg);
     overflow-y: auto;
+    height: 100%;
+    box-sizing: border-box;
   }
   .pane {
     min-width: 0;
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     box-sizing: border-box;
-    transition: height .26s cubic-bezier(.2, .8, .2, 1);
+    display: block;
+    padding: 1.25rem 1.75rem 2.5rem;
+    scroll-padding-bottom: 4rem;
   }
   /* One section in the flow, which is what the pane scrolls; the others laid
      out on top of it, invisible and inert, so each one's height is always
      known. The chosen one fades in as the one it replaces fades out. */
-  .stage { position: relative; }
+  .stage {
+    position: relative;
+    min-height: 100%;
+    box-sizing: border-box;
+    display: block;
+  }
   .section {
     position: absolute;
     top: 0;
@@ -196,6 +173,8 @@
     visibility: visible;
     pointer-events: auto;
     transition: opacity .22s ease-in .06s;
+    min-height: 100%;
+    display: block;
   }
   @media (prefers-reduced-motion: reduce) {
     .pane, .section, .section.on, .section.leaving { transition: none; }

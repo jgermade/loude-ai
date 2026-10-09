@@ -1,0 +1,35 @@
+<script :setup="{ path = '', home = '', alias = 'luu:' }">
+  // A path, with the machine's state directory written as `luu:`.
+  //
+  //   <PathText :path="state.settings?.store" :home="state.settings?.home" />
+  //   → luu:/sessions.db   (hover `luu:` for /Users/joshua/.config/luu)
+  //
+  // **Why**: every path luu shows of its own begins with the same thirty
+  // characters, and a narrow cell cut the part that differed — the file's
+  // name. The alias is the same on every line, so it says nothing to repeat,
+  // and the directory it stands for is one hover away. A path outside `home`,
+  // or no `home` at all, is shown whole.
+  //
+  // **Self-contained**, like everything in `components/`: `home` comes from
+  // the caller (`/api/settings`), never worked out here.
+
+  const trim = text => (text || "").replace(/\/+$/, "")
+  $: base = trim(home)
+  $: inside = !!base && !!path && (path === base || path.startsWith(base + "/"))
+  $: rest = inside ? path.slice(base.length) || "/" : path
+</script>
+
+<span class="path-text" :title="path || ''"><span :if="inside" class="alias" :title="base">{{ alias }}</span>{{ rest }}</span>
+
+<style scoped>
+  .path-text {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    overflow-wrap: anywhere;
+  }
+  .alias {
+    color: var(--accent, #2f5bbd);
+    cursor: help;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+</style>

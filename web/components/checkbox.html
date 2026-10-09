@@ -1,0 +1,139 @@
+<script :setup="{
+  model = undefined,
+  checked = false,
+  disabled = false,
+  label = '',
+  description = '',
+  name = '',
+  id = ''
+}">
+  // An accessible, styled checkbox with an animated SVG tick and slot support.
+  //
+  // **Self-contained**, like everything in `components/`: imports nothing.
+  //
+  //   <Checkbox :model="makeDefault" label="what every run sends to" />
+  //   <Checkbox :model="withProvider">
+  //     also add a provider <strong>{{ name }}</strong>
+  //   </Checkbox>
+
+  $: isOn = (model !== undefined && model !== null) ? !!model : !!checked
+
+  const onChange = event => {
+    const v = event.target.checked
+    $updateModel(v)
+    $emit("change", v)
+  }
+</script>
+
+<label class="check-root"
+       :class.disabled="disabled"
+       :class.checked="isOn">
+  <input
+    type="checkbox"
+    class="sr-input"
+    :checked="isOn"
+    :disabled="disabled"
+    :name="name || null"
+    :id="id || null"
+    @change="onChange($event)">
+  <span class="box" aria-hidden="true">
+    <svg class="tick" viewBox="0 0 24 24">
+      <path d="M4.5 12.5 9.5 17.5 19.5 6.5" />
+    </svg>
+  </span>
+  <span class="text" :if="label || description">
+    <span :if="label" class="label">{{ label }}</span>
+    <slot></slot>
+    <span :if="description" class="desc">{{ description }}</span>
+  </span>
+  <span :if="!label && !description" class="text">
+    <slot></slot>
+  </span>
+</label>
+
+<style scoped>
+  .check-root {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: .55rem;
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--fg, #1a1d23);
+  }
+  .check-root.disabled {
+    opacity: .5;
+    cursor: default;
+  }
+
+  .sr-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .box {
+    width: 16px;
+    height: 16px;
+    margin-top: .1rem;
+    flex: none;
+    border: 1px solid var(--line, #c8c8c8);
+    border-radius: 4px;
+    background: var(--panel, #ffffff);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
+  }
+  .check-root:hover:not(.disabled) .box {
+    border-color: color-mix(in srgb, var(--accent, #2f5bbd) 50%, var(--line, #c8c8c8));
+  }
+  .sr-input:focus-visible + .box {
+    outline: 2px solid var(--accent, #2f5bbd);
+    outline-offset: 2px;
+  }
+  .check-root.checked .box {
+    background: var(--accent, #2f5bbd);
+    border-color: var(--accent, #2f5bbd);
+  }
+
+  .tick {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: var(--on-accent, #ffffff);
+    stroke-width: 2.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 24;
+    stroke-dashoffset: 24;
+    transition: stroke-dashoffset .2s ease;
+  }
+  .check-root.checked .tick {
+    stroke-dashoffset: 0;
+  }
+
+  .text {
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+  }
+  .label {
+    font-weight: 500;
+  }
+  .desc {
+    font-size: 11px;
+    color: var(--dim, #5b6472);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tick { transition: none; }
+  }
+</style>

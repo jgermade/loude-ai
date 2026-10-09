@@ -5,6 +5,7 @@
   // page never reads. See `crate::hosts`.
   const { saveHosts, askHost } = await import("@web/lib/hosts.js")
   const Modal = await import("@web/components/modal.html")
+  const TextInput = await import("@web/components/text-input.html")
 
   // False once it should leave: `Modal` plays the exit, then `close` unmounts.
   let open = true
@@ -80,23 +81,23 @@
     <dl class="settings form">
       <dt>Name</dt>
       <dd>
-        <input :value="name" placeholder="workstation" :disabled="!!editing"
-               @input="name = $event.target.value">
+        <TextInput :model="name" placeholder="workstation" :disabled="!!editing" :warn="badName || taken"
+                   @input="name = $event" />
       </dd>
       <dd :if="badName" class="caveat">Letters, digits, <code>-</code> and <code>_</code>: it goes in the page's URL.</dd>
       <dd :if="taken" class="caveat">There is a host called {{ trimmed }} already.</dd>
 
       <dt>URL</dt>
       <dd>
-        <input :value="url" placeholder="http://ryzen.local:7878"
-               @input="url = $event.target.value">
+        <TextInput :model="url" placeholder="http://ryzen.local:7878" :warn="url.trim() && badUrl"
+                   @input="url = $event" />
       </dd>
       <dd :if="url.trim() && badUrl" class="caveat">An <code>http://</code> or <code>https://</code> address.</dd>
 
       <dt>Token file</dt>
       <dd>
-        <input :value="tokenFile" placeholder="~/.config/luu/workstation.token"
-               @input="tokenFile = $event.target.value">
+        <TextInput :model="tokenFile" placeholder="~/.config/luu/workstation.token"
+                   @input="tokenFile = $event" />
       </dd>
       <dd class="note">
         A path on <em>this</em> machine to a file holding the token the host

@@ -24,6 +24,8 @@
   const { currentHost, loadHosts, askHost, tellHost, goToHost } = await import("@web/lib/hosts.js")
   const Modal = await import("@web/components/modal.html")
   const HostForm = await import("./host-form.html")
+  const SelectInput = await import("@web/components/select-input.html")
+  const TextInput = await import("@web/components/text-input.html")
 
   // `[host.*]`, as this server answers it. A static copy of the page has no
   // `/api/hosts`, and then there is this machine alone.
@@ -282,11 +284,11 @@
       <!-- The session there: where its commands run, and where it sends. -->
       <section class="col run" aria-label="Runtime and model">
         <h3>Runtime</h3>
-        <select :if="places.length > 1" class="place" :value="place"
-                @change="place = $event.target.value">
+        <SelectInput :if="places.length > 1" class="place" :model="place"
+                     @change="place = $event">
           <option :each="p in places" :key="p.value" :value="p.value" :disabled="p.disabled"
                   :title="p.title">{{ p.name }} — {{ p.label }}</option>
-        </select>
+        </SelectInput>
         <p :if="places.length <= 1" class="dim small">
           {{ places[0] ? places[0].name + " — " + places[0].label : "the server's own policy" }}
         </p>
@@ -295,10 +297,10 @@
         <p :if="dest && !providerNames.length" class="dim small">
           {{ label(host) }} has no providers in its <code>config.toml</code> yet.
         </p>
-        <select :if="providerNames.length" :value="provider"
-                @change="loadModels(host, $event.target.value)">
+        <SelectInput :if="providerNames.length" :model="provider"
+                     @change="loadModels(host, $event)">
           <option :each="name in providerNames" :key="name" :value="name">{{ name }}</option>
-        </select>
+        </SelectInput>
         <ul :if="providerNames.length" class="models list" role="listbox">
           <li :if="shown?.loading" class="dim small pad">asking the provider…</li>
           <li :each="m in shown?.models || []" :key="m">
@@ -309,9 +311,9 @@
             </button>
           </li>
         </ul>
-        <input :if="providerNames.length && shown && !shown.loading && !shown.models?.length"
-               :value="model" placeholder="a model name — or empty for its own"
-               @input="model = $event.target.value">
+        <TextInput :if="providerNames.length && shown && !shown.loading && !shown.models?.length"
+                   :model="model" placeholder="a model name — or empty for its own"
+                   @input="model = $event" />
         <p :if="shown?.reason && !shown?.models?.length" class="dim small">{{ shown.reason }}</p>
       </section>
     </div>

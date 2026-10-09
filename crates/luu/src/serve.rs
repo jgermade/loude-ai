@@ -554,6 +554,14 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     floor: Option<Floor>,
     store: Option<String>,
+    /// The machine's state directory — where `config.toml`, `sessions.db` and
+    /// the logs live — or empty where none has been chosen. The page writes
+    /// every path under it as `luu:/…` with this on the alias's tooltip,
+    /// because the prefix is the same on every line and the part that differs
+    /// is the end, which is what a narrow cell cut. Filled at the route,
+    /// without asking: see [`state_home`].
+    #[serde(default)]
+    home: String,
     /// Nothing has said where this run sends — see
     /// [`crate::provider::DestinationFrom`]. The page opens on the providers
     /// editor when it is set, and **never works this out for itself**: a
@@ -845,6 +853,7 @@ impl App {
             base: String::new(),
             posture: None,
             floor: None,
+            home: String::new(),
             store: store.as_ref().map(|path| path.display().to_string()),
             unconfigured: provider.unconfigured(),
             follows_default: !provider.named,
@@ -3710,7 +3719,22 @@ async fn get_settings(State(state): State<AppRouterState>) -> Response {
     settings.base = agency.sandbox.base().display().to_string();
     settings.posture = Some(agency.posture(name));
     settings.floor = Some(Floor::of(agency.floor(), !app.approvers.required));
+    settings.home = state_home().await.unwrap_or_default();
     Json(settings).into_response()
+}
+
+/// The state directory, if one has been chosen — never asking, for the reason
+/// [`crate::provider::Config::path_for_writing`] gives: a prompt inside a
+/// handler is a hang with a socket attached.
+async fn state_home() -> Option<String> {
+    blocking(|| {
+        let env = crate::config::Env::from_process();
+        match crate::config::resolve(&env, |path| path.exists()) {
+            crate::config::Resolution::Decided(dir) => Some(dir.display().to_string()),
+            _ => None,
+        }
+    })
+    .await
 }
 
 /// The postures a session may be started on, as the page offers them.
@@ -7323,6 +7347,7 @@ mod tests {
                     base: String::new(),
                     posture: None,
                     floor: None,
+                    home: String::new(),
                     store: None,
                     unconfigured: true,
                     follows_default: true,
@@ -7472,6 +7497,7 @@ mod tests {
                 base: String::new(),
                 posture: None,
                 floor: None,
+                home: String::new(),
                 store: None,
                 unconfigured: false,
                 follows_default: false,
